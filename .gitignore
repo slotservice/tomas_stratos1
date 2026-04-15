@@ -1,0 +1,38 @@
+# Virtual environment
+venv/
+
+# Secrets - NEVER commit
+.env
+
+# Database
+*.db
+
+# Telegram session
+*.session
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.spec
+
+# PyInstaller
+*.manifest
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# pytest
+.pytest_cache/

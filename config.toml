@@ -1,0 +1,97 @@
+# ============================================================
+# Stratos1 Trading Bot - Configuration
+# All values are configurable. Nothing is hardcoded.
+# ============================================================
+
+[general]
+timezone = "Europe/Stockholm"
+log_level = "INFO"                # DEBUG, INFO, WARNING, ERROR
+log_file = "stratos1.log"
+db_path = "stratos1.db"
+
+[wallet]
+bot_wallet = 402.1                # Fixed internal theoretical wallet (USDT)
+risk_pct = 0.02                   # 2% risk per trade
+initial_margin = 20.0             # 20 USDT initial margin per trade
+
+[leverage]
+min_leverage = 6.0                # Below this -> set to this value
+neutral_zone_split = 6.75         # Below split -> min, above -> dynamic
+neutral_zone_upper = 7.5          # Dynamic starts here
+max_entry_leverage = 25.0         # Max dynamic leverage at entry
+scaling_leverage = 50.0           # Leverage after +2.4% scaling step
+
+[entry]
+order_type = "Market"             # Market orders for entry
+num_entry_orders = 2              # Two linked entry orders
+slippage_tolerance_pct = 0.5      # Max acceptable slippage %
+entry_timeout_seconds = 30        # Timeout for second entry order
+
+[breakeven]
+trigger_pct = 2.3                 # Move SL to BE at +2.3%
+buffer_pct = 0.15                 # BE + 0.15% buffer
+
+[scaling]
+# Step 1: at +2.4%, leverage to x50 + add 20 USDT
+# Step 2: at +4.0%, add 20 USDT
+# Step 3: at +6.0%, add 20 USDT
+# Step 4: at +8.0%, add 20 USDT
+enabled = true
+steps = [
+    { trigger_pct = 2.4, add_margin = 20.0, set_leverage = 50.0 },
+    { trigger_pct = 4.0, add_margin = 20.0 },
+    { trigger_pct = 6.0, add_margin = 20.0 },
+    { trigger_pct = 8.0, add_margin = 20.0 },
+]
+
+[trailing_stop]
+activation_pct = 6.1              # Activate at highest TP or 6.1% (whichever is lower)
+trailing_distance_pct = 2.5       # 2.5% trailing distance
+trigger_type = "MarkPrice"        # MarkPrice, LastPrice, or IndexPrice
+
+[hedge]
+enabled = true
+trigger_pct = -2.0                # Hedge activates at -2% from entry
+max_hedge_count = 1               # Only one hedge per signal
+# hedge SL = original signal entry
+# hedge TP = original signal stop loss
+
+[reentry]
+enabled = true
+max_reentries = 2                 # Max 2 re-entry attempts per signal
+# Re-entry waits for price to return to original signal entry
+
+[duplicate]
+threshold_pct = 5.0               # Block signals for same symbol within 5% entry diff
+lookback_hours = 24               # How far back to check for duplicates
+
+[stale_signal]
+max_age_seconds = 120             # Reject signals older than 2 minutes
+
+[timeout]
+unfilled_order_hours = 24         # Delete unfilled orders after 24 hours
+
+[capacity]
+max_active_trades = 500           # Max simultaneous open positions
+order_loop_window_seconds = 60    # Time window for order loop detection
+order_loop_max_count = 10         # Max orders in window before blocking
+
+[auto_sl]
+fallback_pct = 3.0                # Auto-SL at -3% from entry if SL missing
+fallback_leverage = 10.0          # Lock leverage to x10 when auto-SL
+
+[reporting]
+daily_report_hour = 23            # Hour (24h) to send daily report
+weekly_report_day = 0             # 0=Monday
+weekly_report_hour = 23           # Hour (24h) to send weekly report
+
+[tp_sl]
+trigger_type = "MarkPrice"        # Consistent trigger: MarkPrice, LastPrice, IndexPrice
+
+# ============================================================
+# Telegram Source Groups
+# Load from separate file or list here
+# Format: { id = -100xxx, name = "Group Name" }
+# ============================================================
+[telegram]
+source_groups_file = "telegram_groups.toml"

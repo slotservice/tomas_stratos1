@@ -1,0 +1,400 @@
+# ============================================================
+# Telegram Source Groups Configuration
+# Add groups here. Bot will listen to all of them.
+# id = Telegram chat ID (negative number)
+# name = Display name for reports (channel NAME, not number)
+# ============================================================
+
+[[groups]]
+id = -1002290339976
+name = "Crypto Raketen"
+
+[[groups]]
+id = -1002339729195
+name = "Smart Crypto"
+
+[[groups]]
+id = -1001731265095
+name = "DeFi Milion"
+
+[[groups]]
+id = -1003757289841
+name = "Goldsignals"
+
+[[groups]]
+id = -1003826100623
+name = "Zafir"
+
+[[groups]]
+id = -1003602777433
+name = "Crypto Trading Point"
+
+[[groups]]
+id = -1003728115480
+name = "Crypto Traders"
+
+[[groups]]
+id = -1003305709929
+name = "Hut8"
+
+[[groups]]
+id = -1002133313711
+name = "Crypto Musk"
+
+[[groups]]
+id = -1003835896474
+name = "MYC Signals"
+
+[[groups]]
+id = -1002554800063
+name = "Coin Rise"
+
+[[groups]]
+id = -1003576729853
+name = "Crypto World Signals"
+
+[[groups]]
+id = -1002320405797
+name = "Oscar Crypto"
+
+[[groups]]
+id = -1003555850775
+name = "Statsalksstocks"
+
+[[groups]]
+id = -1002283259889
+name = "Crypto Insight Hub"
+
+[[groups]]
+id = -1002359767632
+name = "Crypto Possibility"
+
+[[groups]]
+id = -1002651484818
+name = "Benjamin Cowen"
+
+[[groups]]
+id = -1002421044057
+name = "O Brians Crypto Family"
+
+[[groups]]
+id = -1002444167073
+name = "USA Bitcoin Army"
+
+[[groups]]
+id = -1002973994121
+name = "Crypto League"
+
+[[groups]]
+id = -1002183877022
+name = "Hassan Crypto"
+
+[[groups]]
+id = -1002603122769
+name = "WFR Analysis"
+
+[[groups]]
+id = -1002578925816
+name = "x1000 Signal"
+
+[[groups]]
+id = -1002590702399
+name = "Coin Bureau"
+
+[[groups]]
+id = -1003287883842
+name = "Crypto Mason"
+
+[[groups]]
+id = -1003572583873
+name = "Blockchain Bullhorn"
+
+[[groups]]
+id = -1003078829894
+name = "Wesslo Signals"
+
+[[groups]]
+id = -1003282714062
+name = "Alert Crypto"
+
+[[groups]]
+id = -1003525484155
+name = "Ash Crypto"
+
+[[groups]]
+id = -1003258455609
+name = "James Collins Trading"
+
+[[groups]]
+id = -1003614766733
+name = "Crypto PM"
+
+[[groups]]
+id = -1003251715348
+name = "Andreas M Antonopoulos"
+
+[[groups]]
+id = -1003472410719
+name = "Binance Free Signals"
+
+[[groups]]
+id = -1002234181057
+name = "Sweden Crypto"
+
+[[groups]]
+id = -1001393210905
+name = "Crypto Pasta"
+
+[[groups]]
+id = -1003451725295
+name = "Robert Croak"
+
+[[groups]]
+id = -1002417588257
+name = "Kriptoloop"
+
+[[groups]]
+id = -1002755345396
+name = "Core Crypto Club"
+
+[[groups]]
+id = -1001215365882
+name = "Crypto Crown"
+
+[[groups]]
+id = -1003158319001
+name = "Tahlili"
+
+[[groups]]
+id = -1001945142080
+name = "Binance Futures Signals"
+
+[[groups]]
+id = -1001596874344
+name = "Crypto Rank News"
+
+[[groups]]
+id = -1001752368371
+name = "Ramos Crypto"
+
+[[groups]]
+id = -1003762466339
+name = "N Trade"
+
+[[groups]]
+id = -1003865517293
+name = "Crypto Trade Signals"
+
+[[groups]]
+id = -1003826664397
+name = "Bull Trade"
+
+[[groups]]
+id = -1003530805185
+name = "Kelly Crypto Exchange"
+
+[[groups]]
+id = -1002874829814
+name = "Dad Trader"
+
+[[groups]]
+id = -1003892638816
+name = "Inside Club"
+
+[[groups]]
+id = -1003738532149
+name = "Zappy Tradezz"
+
+[[groups]]
+id = -1002767126169
+name = "Crypto Sarazz"
+
+[[groups]]
+id = -1002787842089
+name = "Crypto Futures"
+
+[[groups]]
+id = -1002444199983
+name = "Crypto Analyst"
+
+[[groups]]
+id = -1001982472141
+name = "Crypto Beast"
+
+[[groups]]
+id = -1003546072244
+name = "Bulls Crypto"
+
+[[groups]]
+id = -1003386959527
+name = "Whale Alert"
+
+[[groups]]
+id = -1002395107379
+name = "STM Academy"
+
+[[groups]]
+id = -1003496344392
+name = "XM Trading"
+
+[[groups]]
+id = -1003813492598
+name = "To The Moon 008"
+
+[[groups]]
+id = -1003645692223
+name = "BTC XRP ETH Pro"
+
+[[groups]]
+id = -1003459763837
+name = "Crypto Yapper"
+
+[[groups]]
+id = -1002433237720
+name = "T N J Trade"
+
+[[groups]]
+id = -1002643054369
+name = "Pro Zelda"
+
+[[groups]]
+id = -1003004472807
+name = "Coin School"
+
+[[groups]]
+id = -1003661307476
+name = "BB Trading"
+
+[[groups]]
+id = -1002113810715
+name = "AI Felix Crypto"
+
+# --- Added 2026-04-10 ---
+
+[[groups]]
+id = -1003858070664
+name = "Coin Pilot Calls"
+
+[[groups]]
+id = -1002052324477
+name = "BTCT"
+
+[[groups]]
+id = -1002423158121
+name = "CoinRise"
+
+[[groups]]
+id = -1001463871021
+name = "Crypto Master Vip"
+
+[[groups]]
+id = -1003712275337
+name = "Global Crypto"
+
+[[groups]]
+id = -1002658742703
+name = "Crypto Conquered"
+
+[[groups]]
+id = -1002325551440
+name = "AiphaMint Signals"
+
+[[groups]]
+id = -1001804798661
+name = "CRYPTO SIGNAL"
+
+[[groups]]
+id = -1003874500282
+name = "Mexc Future Signal"
+
+[[groups]]
+id = -1003874376178
+name = "Bitget Free Crypto"
+
+[[groups]]
+id = -1003557662995
+name = "CRYPTO BANANA BOT"
+
+[[groups]]
+id = -1003784444289
+name = "CRYPTO INSIGHTS"
+
+[[groups]]
+id = -1001783301467
+name = "Crypto Safe Calls"
+
+[[groups]]
+id = -1003615491164
+name = "American Crypto"
+
+[[groups]]
+id = -1003657180432
+name = "CoinAura"
+
+[[groups]]
+id = -1003375357819
+name = "QUICK PUMP PRO"
+
+[[groups]]
+id = -1002100186689
+name = "Crypto Futures 100x"
+
+[[groups]]
+id = -1003819247515
+name = "Crypto Matrix"
+
+[[groups]]
+id = -1001971948809
+name = "Master of Binance"
+
+[[groups]]
+id = -1003223421107
+name = "StockBroker Futures"
+
+[[groups]]
+id = -1003865559826
+name = "Crypto Bull Society"
+
+[[groups]]
+id = -1003747571857
+name = "Capo of Crypto"
+
+[[groups]]
+id = -1003552660991
+name = "ELON MUSK CRYPTO"
+
+[[groups]]
+id = -1002177619884
+name = "Whales of Investment"
+
+[[groups]]
+id = -1003173496680
+name = "Crypto Spider"
+
+[[groups]]
+id = -1002807997390
+name = "CAP CHAIN"
+
+[[groups]]
+id = -1002632362395
+name = "A.R.S. Crypto Calls"
+
+[[groups]]
+id = -1002565580953
+name = "Over 99% Wins"
+
+[[groups]]
+id = -1003846598358
+name = "OkxFreecryptosignal"
+
+[[groups]]
+id = -1003686000729
+name = "Crypto Navigations"
+
+[[groups]]
+id = -1002538074052
+name = "Crypto Heaven Official"
+
+[[groups]]
+id = -1002173116014
+name = "Crypto Alerts"
