@@ -180,14 +180,38 @@ class BybitAdapter:
 
         loop = asyncio.get_running_loop()
 
+        # --- Sync clock offset with Bybit server ---
+        # VPNs can cause system clock drift. We measure the offset and
+        # pass recv_window to pybit so authenticated requests don't fail
+        # with ErrCode 10002 (timestamp mismatch).
+        try:
+            import requests as _req, time as _time
+            base = DEMO_REST_URL if self._demo else LIVE_REST_URL
+            r = _req.get(f"{base}/v5/market/time", timeout=10)
+            server_ts = int(r.json()["result"]["timeSecond"])
+            local_ts = int(_time.time())
+            self._time_offset = server_ts - local_ts
+            self._log.info(
+                "clock_offset_detected",
+                offset_seconds=self._time_offset,
+            )
+        except Exception:
+            self._time_offset = 0
+            self._log.warning("clock_offset_check_failed")
+
+        # Use a large recv_window to tolerate clock drift.
+        recv_window = max(10000, abs(self._time_offset) * 1000 + 15000)
+
         # --- REST client ---
         self._rest = HTTP(
             api_key=self._api_key,
             api_secret=self._api_secret,
             demo=self._demo,
+            recv_window=recv_window,
         )
         self._log.info("rest_client_initialised",
-                       base_url=DEMO_REST_URL if self._demo else LIVE_REST_URL)
+                       base_url=DEMO_REST_URL if self._demo else LIVE_REST_URL,
+                       recv_window=recv_window)
 
         # --- Private WebSocket (order, position, execution streams) ---
         try:
