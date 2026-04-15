@@ -398,3 +398,8 @@ name = "Crypto Heaven Official"
 [[groups]]
 id = -1002173116014
 name = "Crypto Alerts"
+
+# --- TEST: Your own channel for fake signals ---
+[[groups]]
+id = -1003984507614
+name = "Stratos1 Test"

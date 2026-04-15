@@ -244,13 +244,56 @@ class PositionManager:
             )
 
         # ----------------------------------------------------------
-        # 6. Calculate order quantity.
+        # 6. Calculate order quantity (rounded to exchange precision).
         # ----------------------------------------------------------
         initial_margin = self._settings.wallet.initial_margin
-        quantity = round((initial_margin * leverage) / entry_price, 8)
+        raw_quantity = (initial_margin * leverage) / entry_price
 
-        # Split into 2 equal parts for 2 entry orders.
-        qty_per_order = round(quantity / 2.0, 8)
+        # Ensure instrument info is cached for this symbol.
+        try:
+            await self._bybit.get_instrument_info(symbol)
+        except Exception:
+            log.warning("signal.instrument_info_fetch_failed", symbol=symbol)
+
+        # Round to the symbol's precision using Bybit instrument info.
+        try:
+            quantity = self._bybit.calculate_order_qty(
+                margin=initial_margin,
+                leverage=leverage,
+                price=entry_price,
+                symbol=symbol,
+            )
+        except Exception:
+            # Fallback: round to 3 decimals (safe for most symbols)
+            quantity = round(raw_quantity, 3)
+            log.warning(
+                "signal.qty_precision_fallback",
+                symbol=symbol,
+                raw_qty=raw_quantity,
+                rounded_qty=quantity,
+            )
+
+        # Split into 2 equal parts for 2 entry orders,
+        # rounded down to exchange step size.
+        try:
+            qty_per_order = self._bybit.round_qty(quantity / 2.0, symbol)
+        except Exception:
+            qty_per_order = round(quantity / 2.0, 3)
+
+        # Ensure qty meets minimum order size.
+        try:
+            min_qty = await self._bybit.get_min_order_qty(symbol)
+            if qty_per_order < min_qty:
+                log.warning(
+                    "signal.qty_below_minimum",
+                    symbol=symbol,
+                    qty=qty_per_order,
+                    min_qty=min_qty,
+                )
+                qty_per_order = min_qty
+                quantity = min_qty * 2
+        except Exception:
+            pass
 
         if qty_per_order <= 0:
             log.error(
@@ -892,10 +935,9 @@ class PositionManager:
         order = OrderRecord(symbol=symbol, side=side, qty=qty)
 
         try:
-            result = await self._bybit.place_order(
+            result = await self._bybit.place_market_order(
                 symbol=symbol,
                 side=side,
-                order_type="Market",
                 qty=qty,
                 position_idx=position_idx,
             )
@@ -993,10 +1035,9 @@ class PositionManager:
             qty = round((trade.quantity or 0) / 2.0, 8)
 
             try:
-                await self._bybit.place_order(
+                await self._bybit.place_market_order(
                     symbol=symbol,
                     side=close_side,
-                    order_type="Market",
                     qty=qty,
                     position_idx=position_idx,
                     reduce_only=True,
@@ -1302,6 +1343,6 @@ class PositionManager:
     async def _safe_notify(self, message: str) -> None:
         """Send a Telegram notification, swallowing errors."""
         try:
-            await self._notifier.send(message)
+            await self._notifier._send_notify(message)
         except Exception:
             log.exception("position_manager.notify_error", message=message[:80])

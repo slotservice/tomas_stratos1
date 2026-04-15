@@ -23,11 +23,15 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
+from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # Project root (directory containing this file).
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Load .env into os.environ early so all components can read secrets.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 # ---------------------------------------------------------------------------
 # Structured logging setup

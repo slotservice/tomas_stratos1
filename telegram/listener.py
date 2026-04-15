@@ -175,33 +175,57 @@ class TelegramListener:
         # Save the session string for persistence
         self._session_string = self._client.session.save()
 
-        # Attempt to join configured groups (best-effort)
-        await self._join_groups()
+        # Load all dialogs into the session entity cache.
+        # This is CRITICAL: Telethon cannot resolve numeric channel IDs
+        # unless the entity has been "seen" via get_dialogs() first.
+        log.info("telegram_listener_loading_dialogs")
+        dialogs = await self._client.get_dialogs()
+        dialog_ids = set()
+        for d in dialogs:
+            if d.entity and hasattr(d.entity, "id"):
+                dialog_ids.add(d.entity.id)
+                # Also store with -100 prefix for matching
+                dialog_ids.add(-int(f"100{d.entity.id}"))
+        log.info(
+            "telegram_listener_dialogs_loaded",
+            total_dialogs=len(dialogs),
+            dialog_ids_count=len(dialog_ids),
+        )
 
-        # Collect resolved entity IDs for the event filter
-        chats = await self._resolve_group_entities()
+        # Check which configured groups are in our dialogs
+        matched = 0
+        for group in self._groups:
+            bare_id = group.id
+            if bare_id < -1_000_000_000_000:
+                bare = int(str(abs(bare_id))[3:])
+            else:
+                bare = abs(bare_id)
+            if bare in dialog_ids or bare_id in dialog_ids or group.id in dialog_ids:
+                self._resolved_ids.add(group.id)
+                matched += 1
 
-        # Register the new-message handler
-        if chats:
-            self._client.add_event_handler(
-                self._on_new_message,
-                events.NewMessage(chats=chats),
-            )
-            log.info(
-                "telegram_listener_handler_registered",
-                monitored_chats=len(chats),
-            )
-        else:
-            # Fallback: listen to ALL incoming messages and filter in
-            # the handler.  This works but is less efficient.
-            self._client.add_event_handler(
-                self._on_new_message,
-                events.NewMessage(),
-            )
-            log.warning(
-                "telegram_listener_no_resolved_chats",
-                fallback="listening_to_all_messages",
-            )
+        log.info(
+            "telegram_listener_groups_matched",
+            matched=matched,
+            total_configured=len(self._groups),
+        )
+
+        # Listen to ALL incoming AND outgoing messages and filter by chat
+        # ID in the handler. outgoing=True is needed to catch messages
+        # posted in channels where the user is an admin (the user's own
+        # posts appear as "outgoing" in Telethon).
+        self._client.add_event_handler(
+            self._on_new_message,
+            events.NewMessage(incoming=True),
+        )
+        self._client.add_event_handler(
+            self._on_new_message,
+            events.NewMessage(outgoing=True),
+        )
+        log.info(
+            "telegram_listener_handler_registered",
+            mode="all_messages_incoming_and_outgoing",
+        )
 
         log.info("telegram_listener_started")
 
@@ -339,30 +363,67 @@ class TelegramListener:
             if not message.text:
                 return
 
-            # Skip messages from bots
-            sender = await event.get_sender()
-            if sender and isinstance(sender, User) and sender.bot:
-                log.debug(
-                    "message_from_bot_skipped",
-                    chat_id=event.chat_id,
-                    bot_id=sender.id,
-                )
-                return
+            # Log every incoming message for debugging
+            log.info(
+                "message_incoming",
+                chat_id=event.chat_id,
+                text_preview=message.text[:80] if message.text else "",
+            )
 
-            # Resolve channel name from our group map
+            # Skip messages from bots (but NOT from channels - channels
+            # have no "sender" or sender is the channel itself)
+            try:
+                sender = await event.get_sender()
+                if sender and isinstance(sender, User) and sender.bot:
+                    log.debug(
+                        "message_from_bot_skipped",
+                        chat_id=event.chat_id,
+                        bot_id=sender.id,
+                    )
+                    return
+            except Exception:
+                # Channel posts may not have a sender - that's fine
+                pass
+
+            # Resolve channel name from our group map.
+            # Telethon may report chat_id in various forms:
+            #   - positive (e.g. 2290339976)
+            #   - negative (e.g. -2290339976)
+            #   - with -100 prefix (e.g. -1002290339976)
+            # We check all variants against our map.
             chat_id = event.chat_id
             channel_name = self._resolve_channel_name(chat_id)
 
+            if channel_name is None and chat_id:
+                # Try with -100 prefix
+                prefixed = -int(f"100{abs(chat_id)}")
+                channel_name = self._resolve_channel_name(prefixed)
+                if channel_name:
+                    chat_id = prefixed
+
+            if channel_name is None and chat_id:
+                # Try stripping -100 prefix
+                abs_id = abs(chat_id)
+                if abs_id > 1_000_000_000_000:
+                    bare = int(str(abs_id)[3:])
+                    channel_name = self._resolve_channel_name(bare)
+                    if not channel_name:
+                        channel_name = self._resolve_channel_name(-bare)
+
             if channel_name is None:
                 # Message from a chat we don't monitor -- skip
-                # (only happens in fallback "all messages" mode)
+                log.info(
+                    "message_unmonitored_chat",
+                    chat_id=event.chat_id,
+                    text_preview=(message.text or "")[:50],
+                )
                 return
 
             raw_text = message.text.strip()
             if not raw_text:
                 return
 
-            log.debug(
+            log.info(
                 "message_received",
                 chat_id=chat_id,
                 channel_name=channel_name,

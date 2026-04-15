@@ -199,7 +199,23 @@ class BybitAdapter:
             self._time_offset = 0
             self._log.warning("clock_offset_check_failed")
 
-        # Use a large recv_window to tolerate clock drift.
+        # Monkey-patch pybit's timestamp generator to use server time.
+        # This is the most reliable fix for clock drift caused by VPN.
+        if abs(self._time_offset) > 5:
+            import pybit._helpers as _pybit_helpers
+            _original_ts = _pybit_helpers.generate_timestamp
+            offset_ms = self._time_offset * 1000
+
+            def _patched_timestamp():
+                return _original_ts() + int(offset_ms)
+
+            _pybit_helpers.generate_timestamp = _patched_timestamp
+            self._log.info(
+                "clock_patched",
+                offset_ms=int(offset_ms),
+            )
+
+        # Use a generous recv_window as additional safety.
         recv_window = max(10000, abs(self._time_offset) * 1000 + 15000)
 
         # --- REST client ---
