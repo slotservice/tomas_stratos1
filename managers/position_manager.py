@@ -513,32 +513,70 @@ class PositionManager:
         # ----------------------------------------------------------
         # 14. Set TP and SL via set_trading_stop.
         # ----------------------------------------------------------
-        # Use the first TP as the initial take-profit target.
-        tp_price = tp_list[0] if tp_list else None
+        # Find a valid TP that hasn't been passed by the fill price.
+        # For LONG: TP must be above avg_entry
+        # For SHORT: TP must be below avg_entry
+        tp_price = None
+        for tp in tp_list:
+            if tp and tp > 0:
+                if direction == "LONG" and tp > avg_entry:
+                    tp_price = tp
+                    break
+                elif direction == "SHORT" and tp < avg_entry:
+                    tp_price = tp
+                    break
 
-        try:
-            await self._bybit.set_trading_stop(
-                symbol=symbol,
-                take_profit=tp_price,
-                stop_loss=sl_price,
-                position_idx=position_idx,
-            )
-            log.info(
-                "trade.tp_sl_set",
+        if tp_price is None and tp_list:
+            log.warning(
+                "trade.all_tps_already_passed",
                 trade_id=trade.id,
                 symbol=symbol,
-                tp=tp_price,
-                sl=sl_price,
+                avg_entry=avg_entry,
+                tps=tp_list,
             )
-        except Exception:
-            log.exception(
-                "trade.tp_sl_error",
+
+        # Also validate SL direction
+        valid_sl = sl_price
+        if valid_sl:
+            if direction == "LONG" and valid_sl >= avg_entry:
+                log.warning("trade.sl_above_entry_long", sl=valid_sl, entry=avg_entry)
+                valid_sl = None  # Skip invalid SL
+            elif direction == "SHORT" and valid_sl <= avg_entry:
+                log.warning("trade.sl_below_entry_short", sl=valid_sl, entry=avg_entry)
+                valid_sl = None  # Skip invalid SL
+
+        # Set TP and/or SL (only if we have valid values)
+        if tp_price or valid_sl:
+            try:
+                kwargs = {"symbol": symbol, "position_idx": position_idx}
+                if tp_price:
+                    kwargs["take_profit"] = tp_price
+                if valid_sl:
+                    kwargs["stop_loss"] = valid_sl
+
+                await self._bybit.set_trading_stop(**kwargs)
+                log.info(
+                    "trade.tp_sl_set",
+                    trade_id=trade.id,
+                    symbol=symbol,
+                    tp=tp_price,
+                    sl=valid_sl,
+                )
+            except Exception:
+                log.exception(
+                    "trade.tp_sl_error",
+                    trade_id=trade.id,
+                    symbol=symbol,
+                )
+                await self._safe_notify(
+                    f"[VARNING] {symbol}: TP/SL kunde inte sattas pa borsen. "
+                    f"Manuell atgard kan kravas."
+                )
+        else:
+            log.warning(
+                "trade.no_valid_tp_sl",
                 trade_id=trade.id,
                 symbol=symbol,
-            )
-            await self._safe_notify(
-                f"[VARNING] {symbol}: TP/SL kunde inte sattas pa borsen. "
-                f"Manuell atgard kan kravas."
             )
 
         # ----------------------------------------------------------
