@@ -521,16 +521,28 @@ class PositionManager:
         # ----------------------------------------------------------
         # 14. Set TP and SL via set_trading_stop.
         # ----------------------------------------------------------
-        # Find a valid TP that hasn't been passed by the fill price.
-        # For LONG: TP must be above avg_entry
-        # For SHORT: TP must be below avg_entry
+        # Get current market price to validate TPs against actual
+        # mark price (not just avg_entry).
+        current_mark = avg_entry
+        try:
+            ticker = await self._bybit.get_ticker(symbol)
+            if ticker:
+                mp = float(ticker.get("markPrice", 0) or 0)
+                if mp > 0:
+                    current_mark = mp
+        except Exception:
+            pass
+
+        # Find a valid TP that hasn't been passed by current mark price.
+        # For LONG: TP must be ABOVE current mark price
+        # For SHORT: TP must be BELOW current mark price
         tp_price = None
         for tp in tp_list:
             if tp and tp > 0:
-                if direction == "LONG" and tp > avg_entry:
+                if direction == "LONG" and tp > current_mark:
                     tp_price = tp
                     break
-                elif direction == "SHORT" and tp < avg_entry:
+                elif direction == "SHORT" and tp < current_mark:
                     tp_price = tp
                     break
 
@@ -540,18 +552,23 @@ class PositionManager:
                 trade_id=trade.id,
                 symbol=symbol,
                 avg_entry=avg_entry,
+                current_mark=current_mark,
                 tps=tp_list,
             )
 
-        # Also validate SL direction
+        # Validate SL direction against current mark price.
+        # For LONG: SL must be BELOW current mark
+        # For SHORT: SL must be ABOVE current mark
         valid_sl = sl_price
         if valid_sl:
-            if direction == "LONG" and valid_sl >= avg_entry:
-                log.warning("trade.sl_above_entry_long", sl=valid_sl, entry=avg_entry)
-                valid_sl = None  # Skip invalid SL
-            elif direction == "SHORT" and valid_sl <= avg_entry:
-                log.warning("trade.sl_below_entry_short", sl=valid_sl, entry=avg_entry)
-                valid_sl = None  # Skip invalid SL
+            if direction == "LONG" and valid_sl >= current_mark:
+                log.warning("trade.sl_above_mark_long",
+                            sl=valid_sl, mark=current_mark)
+                valid_sl = None
+            elif direction == "SHORT" and valid_sl <= current_mark:
+                log.warning("trade.sl_below_mark_short",
+                            sl=valid_sl, mark=current_mark)
+                valid_sl = None
 
         # Set TP and/or SL (only if we have valid values)
         if tp_price or valid_sl:
