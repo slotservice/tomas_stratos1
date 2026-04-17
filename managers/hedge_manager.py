@@ -144,10 +144,9 @@ class HedgeManager:
 
         # --- Place the hedge order ---
         try:
-            order_result = await self._bybit.place_order(
+            order_result = await self._bybit.place_market_order(
                 symbol=symbol,
                 side=hedge_side,
-                order_type="Market",
                 qty=hedge_qty,
                 position_idx=hedge_position_idx,
             )
@@ -180,10 +179,61 @@ class HedgeManager:
                 hedge_tp=hedge_tp,
                 hedge_sl=hedge_sl,
             )
-            # The hedge position is open but unprotected -- warn but continue.
             await self._safe_notify(
                 f"[HEDGE VARNING] {symbol}: hedge oppnad men TP/SL kunde "
                 f"inte sattas! Manuell atgard kravs."
+            )
+
+        # --- Move original trade's SL 2% closer to entry ---
+        # Client requirement: when hedge opens, the original trade's SL
+        # is moved 2% forward (toward entry). This means the original
+        # trade will close 2% before its original SL, locking in the
+        # -2% loss while the hedge runs.
+        try:
+            original_sl = trade.sl_price or 0
+            original_position_idx = 1 if direction == "LONG" else 2
+
+            if original_sl > 0 and avg_entry > 0:
+                sl_distance = abs(avg_entry - original_sl)
+                # Move SL 2% of entry price closer to entry
+                adjustment = avg_entry * 0.02
+
+                if direction == "LONG":
+                    # LONG: SL is below entry -> move it UP (closer to entry)
+                    new_original_sl = round(original_sl + adjustment, 8)
+                else:
+                    # SHORT: SL is above entry -> move it DOWN (closer to entry)
+                    new_original_sl = round(original_sl - adjustment, 8)
+
+                await self._bybit.set_trading_stop(
+                    symbol=symbol,
+                    stop_loss=new_original_sl,
+                    position_idx=original_position_idx,
+                )
+
+                # Update trade record
+                trade.sl_price = new_original_sl
+                try:
+                    await self._db.update_trade(
+                        int(trade.id),
+                        sl_price=new_original_sl,
+                    )
+                except Exception:
+                    pass
+
+                log.info(
+                    "hedge.original_sl_adjusted",
+                    trade_id=trade.id,
+                    symbol=symbol,
+                    old_sl=original_sl,
+                    new_sl=new_original_sl,
+                    adjustment=round(adjustment, 4),
+                )
+        except Exception:
+            log.exception(
+                "hedge.original_sl_adjust_error",
+                trade_id=trade.id,
+                symbol=symbol,
             )
 
         # --- Save hedge trade to DB ---
@@ -282,10 +332,9 @@ class HedgeManager:
         )
 
         try:
-            await self._bybit.place_order(
+            await self._bybit.place_market_order(
                 symbol=symbol,
                 side=close_side,
-                order_type="Market",
                 qty=trade.quantity or 0,
                 position_idx=hedge_position_idx,
                 reduce_only=True,
@@ -358,6 +407,6 @@ class HedgeManager:
     async def _safe_notify(self, message: str) -> None:
         """Send a Telegram notification, swallowing errors."""
         try:
-            await self._notifier.send(message)
+            await self._notifier._send_notify(message)
         except Exception:
             log.exception("hedge.notify_error", message=message[:80])

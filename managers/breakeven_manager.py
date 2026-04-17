@@ -197,6 +197,6 @@ class BreakevenManager:
     async def _safe_notify(self, message: str) -> None:
         """Send a Telegram notification, swallowing errors."""
         try:
-            await self._notifier.send(message)
+            await self._notifier._send_notify(message)
         except Exception:
             log.exception("breakeven.notify_error", message=message[:80])
