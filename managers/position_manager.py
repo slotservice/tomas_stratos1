@@ -154,8 +154,16 @@ class PositionManager:
                 # Within 5%: block entirely
                 log.info("signal.duplicate_blocked", symbol=symbol,
                          reason=dup_result.reason)
+                from core.time_utils import format_time, now_utc
+                channel_name = (
+                    getattr(signal, "channel_name", "")
+                    or getattr(signal, "source_channel_name", "")
+                    or "Unknown"
+                )
                 await self._safe_notify(
                     f"❌ SIGNAL BLOCKERAD (Dubblett ≤{self._settings.duplicate.threshold_pct}%) ❌\n"
+                    f"🕒 Time: {format_time(now_utc())}\n"
+                    f"📢 From channel: {channel_name}\n"
                     f"📊 Symbol: #{symbol}\n"
                     f"📈 Riktning: {direction}\n"
                     f"📍 {dup_result.reason}"
