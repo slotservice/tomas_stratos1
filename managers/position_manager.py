@@ -264,12 +264,23 @@ class PositionManager:
                 symbol=symbol,
             )
         except Exception:
-            # Fallback: round to 3 decimals (safe for most symbols)
-            quantity = round(raw_quantity, 3)
+            # Fallback: floor to 3 decimals for most symbols.
+            # For high-price assets like BTC, use smaller precision.
+            import math
+            if entry_price > 10000:
+                step = 0.001  # BTC-like
+            elif entry_price > 100:
+                step = 0.01   # ETH-like
+            elif entry_price > 1:
+                step = 0.1    # SOL-like
+            else:
+                step = 1.0    # Low-price tokens
+            quantity = math.floor(raw_quantity / step) * step
             log.warning(
                 "signal.qty_precision_fallback",
                 symbol=symbol,
                 raw_qty=raw_quantity,
+                step=step,
                 rounded_qty=quantity,
             )
 
@@ -278,7 +289,16 @@ class PositionManager:
         try:
             qty_per_order = self._bybit.round_qty(quantity / 2.0, symbol)
         except Exception:
-            qty_per_order = round(quantity / 2.0, 3)
+            import math
+            if entry_price > 10000:
+                step = 0.001
+            elif entry_price > 100:
+                step = 0.01
+            elif entry_price > 1:
+                step = 0.1
+            else:
+                step = 1.0
+            qty_per_order = math.floor((quantity / 2.0) / step) * step
 
         # Ensure qty meets minimum order size.
         try:
@@ -411,6 +431,7 @@ class PositionManager:
         fill1 = await self._wait_for_fill(
             order1_bybit_id,
             timeout=self._settings.entry.entry_timeout_seconds,
+            order_result=order1_result,
         )
         if fill1 is None:
             log.warning(
@@ -457,6 +478,7 @@ class PositionManager:
         fill2 = await self._wait_for_fill(
             order2_bybit_id,
             timeout=self._settings.entry.entry_timeout_seconds,
+            order_result=order2_result,
         )
         if fill2 is None:
             log.warning(
@@ -591,10 +613,13 @@ class PositionManager:
         except Exception:
             log.exception("ws.order_update_db_error", order_id=order_id)
 
-        # Signal fill event if this order is being waited on.
-        if status == "Filled" and order_id in self._fill_events:
+        # Always store fill data for filled orders so _wait_for_fill
+        # can find it even if the WS event arrives before the wait starts.
+        if status == "Filled":
             self._fill_data[order_id] = data
-            self._fill_events[order_id].set()
+            # Signal the event if someone is already waiting.
+            if order_id in self._fill_events:
+                self._fill_events[order_id].set()
 
     async def on_position_update(self, data: dict) -> None:
         """Handle a WebSocket position update.
@@ -643,9 +668,10 @@ class PositionManager:
             symbol=symbol,
         )
 
-        if exec_type == "Trade" and order_id in self._fill_events:
+        if exec_type == "Trade":
             self._fill_data[order_id] = data
-            self._fill_events[order_id].set()
+            if order_id in self._fill_events:
+                self._fill_events[order_id].set()
 
     # ==================================================================
     # Price update handler -- delegates to sub-managers
@@ -984,26 +1010,64 @@ class PositionManager:
         )
         return result
 
+    def _register_fill_event(self, order_id: str) -> None:
+        """Pre-register an asyncio.Event for an order BEFORE placing it."""
+        if order_id and order_id not in self._fill_events:
+            self._fill_events[order_id] = asyncio.Event()
+
     async def _wait_for_fill(
         self,
         order_id: str,
         timeout: int = 30,
+        order_result: Optional[dict] = None,
     ) -> Optional[dict]:
         """Wait for a fill event for the given Bybit order ID.
 
         Returns the fill data dict, or None on timeout.
+
+        If *order_result* is provided (the REST response from placing
+        the order), checks whether the order was already filled
+        immediately (common for Market orders).
         """
+        # Check 1: Did the order already fill in the REST response?
+        if order_result:
+            status = order_result.get("orderStatus", "")
+            if status == "Filled":
+                log.info("fill.immediate_from_rest", order_id=order_id)
+                return order_result
+
+        # Check 2: Did the fill event already arrive via WebSocket
+        # before we started waiting?
+        if order_id in self._fill_data:
+            log.info("fill.already_received", order_id=order_id)
+            data = self._fill_data.pop(order_id, None)
+            self._fill_events.pop(order_id, None)
+            return data
+
+        # Check 3: Wait for the WS fill event.
         event = self._fill_events.get(order_id)
         if event is None:
-            return None
+            # No event registered - create one now and also poll REST.
+            event = asyncio.Event()
+            self._fill_events[order_id] = event
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
             return self._fill_data.get(order_id)
         except asyncio.TimeoutError:
+            # Last resort: check order status via REST API.
+            try:
+                order_info = await self._bybit.get_order(
+                    symbol=self._fill_data.get("_symbol", "BTCUSDT"),
+                    order_id=order_id,
+                )
+                if order_info and order_info.get("orderStatus") == "Filled":
+                    log.info("fill.found_via_rest_poll", order_id=order_id)
+                    return order_info
+            except Exception:
+                pass
             return None
         finally:
-            # Clean up tracking state.
             self._fill_events.pop(order_id, None)
             self._fill_data.pop(order_id, None)
 
