@@ -322,6 +322,7 @@ class BybitAdapter:
             10001,   # Invalid parameter (qty, price, etc.)
             10004,   # API key/signature/timestamp invalid
             170140,  # Order quantity exceeded risk limit
+            34040,   # TP/SL not modified (already at target value)
         }
         last_exc: Optional[Exception] = None
 
@@ -752,13 +753,21 @@ class BybitAdapter:
 
         self._log.info("setting_trading_stop", **kwargs)
 
-        resp = await self._call_with_retry(
-            self._rest.set_trading_stop,
-            **kwargs,
-        )
-        self._log.info("trading_stop_set", symbol=symbol,
-                       position_idx=position_idx)
-        return resp.get("result", {})
+        try:
+            resp = await self._call_with_retry(
+                self._rest.set_trading_stop,
+                **kwargs,
+            )
+            self._log.info("trading_stop_set", symbol=symbol,
+                           position_idx=position_idx)
+            return resp.get("result", {})
+        except BybitAdapterError as exc:
+            # 34040: TP/SL not modified (already at target value) - treat as success.
+            if exc.ret_code == 34040:
+                self._log.info("trading_stop_already_set",
+                               symbol=symbol, position_idx=position_idx)
+                return {}
+            raise
 
     async def add_margin(
         self, symbol: str, position_idx: int, margin: float

@@ -214,17 +214,16 @@ class TelegramListener:
         # ID in the handler. outgoing=True is needed to catch messages
         # posted in channels where the user is an admin (the user's own
         # posts appear as "outgoing" in Telethon).
+        # Single handler for ALL messages (both incoming and outgoing).
+        # Using two handlers caused each message to be processed twice,
+        # creating a race condition in duplicate detection.
         self._client.add_event_handler(
             self._on_new_message,
-            events.NewMessage(incoming=True),
-        )
-        self._client.add_event_handler(
-            self._on_new_message,
-            events.NewMessage(outgoing=True),
+            events.NewMessage(),
         )
         log.info(
             "telegram_listener_handler_registered",
-            mode="all_messages_incoming_and_outgoing",
+            mode="all_messages_single_handler",
         )
 
         log.info("telegram_listener_started")

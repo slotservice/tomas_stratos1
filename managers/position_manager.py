@@ -83,6 +83,11 @@ class PositionManager:
         self._fill_events: Dict[str, asyncio.Event] = {}
         self._fill_data: Dict[str, dict] = {}
 
+        # In-flight signal locks per symbol to prevent race conditions where
+        # the same signal arrives multiple times before the first one has
+        # saved its trade to the DB. Key: symbol, Value: asyncio.Lock
+        self._symbol_locks: Dict[str, asyncio.Lock] = {}
+
         # --- Sub-managers ---
         self._be_mgr = BreakevenManager(
             settings=settings.breakeven,
@@ -133,6 +138,30 @@ class PositionManager:
         Returns the created ``Trade`` on success, or ``None`` if the
         signal was rejected or entry failed.
         """
+        symbol = signal.symbol
+        direction = signal.direction
+
+        # Serialize processing per symbol so the duplicate check sees any
+        # in-flight trade that's already being placed.
+        if symbol not in self._symbol_locks:
+            self._symbol_locks[symbol] = asyncio.Lock()
+        symbol_lock = self._symbol_locks[symbol]
+
+        async with symbol_lock:
+            return await self._process_signal_locked(
+                signal,
+                is_reentry=is_reentry,
+                parent_reentry_count=parent_reentry_count,
+            )
+
+    async def _process_signal_locked(
+        self,
+        signal: Any,
+        *,
+        is_reentry: bool = False,
+        parent_reentry_count: int = 0,
+    ) -> Optional[Trade]:
+        """Inner signal processing (runs while holding the symbol lock)."""
         symbol = signal.symbol
         direction = signal.direction
 
