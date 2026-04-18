@@ -275,6 +275,22 @@ class PositionManager:
                 settings=(self._settings.wallet, self._settings.leverage),
             )
 
+        # Round leverage to symbol's leverage step (keeps e.g. 12.34 precision).
+        try:
+            # Ensure instrument info is cached so round_leverage works.
+            await self._bybit.get_instrument_info(symbol)
+            leverage = self._bybit.round_leverage(leverage, symbol)
+        except Exception:
+            leverage = round(leverage, 2)
+
+        # Also set the leverage on Bybit BEFORE placing the order.
+        try:
+            side_tmp = "Buy" if direction == "LONG" else "Sell"
+            await self._bybit.set_leverage(symbol, leverage, side_tmp)
+        except Exception:
+            log.exception("trade.set_leverage_failed",
+                          symbol=symbol, leverage=leverage)
+
         # ----------------------------------------------------------
         # 6. Calculate order quantity (rounded to exchange precision).
         # ----------------------------------------------------------

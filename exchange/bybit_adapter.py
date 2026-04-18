@@ -428,7 +428,13 @@ class BybitAdapter:
         side : str
             ``"Buy"`` or ``"Sell"`` (informational; Bybit sets both sides).
         """
-        lev_str = str(leverage)
+        # Ensure instrument info is loaded so we respect leverageStep.
+        try:
+            await self.get_instrument_info(symbol)
+        except Exception:
+            pass
+        rounded = self.round_leverage(leverage, symbol)
+        lev_str = str(rounded)
         try:
             resp = await self._call_with_retry(
                 self._rest.set_leverage,
@@ -437,8 +443,8 @@ class BybitAdapter:
                 buyLeverage=lev_str,
                 sellLeverage=lev_str,
             )
-            self._log.info("leverage_set", symbol=symbol, leverage=leverage,
-                           side=side)
+            self._log.info("leverage_set", symbol=symbol, leverage=rounded,
+                           requested=leverage, side=side)
         except BybitAdapterError as exc:
             if exc.ret_code == ERR_LEVERAGE_NOT_CHANGED:
                 self._log.info("leverage_already_set",
@@ -946,6 +952,26 @@ class BybitAdapter:
             return qty
         precision = self._decimals_from_step(step)
         return round(math.floor(qty / step) * step, precision)
+
+    def round_leverage(self, leverage: float, symbol: str) -> float:
+        """
+        Round *leverage* to the symbol's leverage step.
+
+        Most symbols support 0.01 precision. Returns e.g. 12.34 if
+        the step allows it, or 12 if the step is 1.
+        """
+        cached = self._instrument_cache.get(symbol)
+        if not cached:
+            # Default: 2 decimals for most symbols
+            return round(leverage, 2)
+        step = cached.data.get("leverageStep", 0.01) or 0.01
+        min_lev = cached.data.get("minLeverage", 1.0) or 1.0
+        max_lev = cached.data.get("maxLeverage", 100.0) or 100.0
+        # Clamp to exchange bounds
+        leverage = max(min_lev, min(leverage, max_lev))
+        # Round down to step
+        precision = self._decimals_from_step(step)
+        return round(math.floor(leverage / step) * step, precision)
 
     def calculate_order_qty(
         self,
