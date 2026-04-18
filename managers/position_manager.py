@@ -338,22 +338,20 @@ class PositionManager:
                     "signal.symbol_not_on_bybit",
                     symbol=symbol,
                 )
-                await self._safe_notify(
-                    f"⚠️ SYMBOL EJ TILLGANGLIG\n"
-                    f"📊 Symbol: #{symbol}\n"
-                    f"📍 {symbol} finns inte som perpetual pa Bybit. Signal hoppas over."
-                )
+                try:
+                    await self._notifier.symbol_not_on_bybit(signal)
+                except Exception:
+                    log.exception("notify.symbol_not_on_bybit_failed")
                 return None
         except Exception:
             log.warning(
                 "signal.instrument_info_fetch_failed",
                 symbol=symbol,
             )
-            await self._safe_notify(
-                f"⚠️ SYMBOL VALIDERING MISSLYCKADES\n"
-                f"📊 Symbol: #{symbol}\n"
-                f"📍 Kunde inte kontrollera {symbol} pa Bybit. Signal hoppas over."
-            )
+            try:
+                await self._notifier.symbol_not_on_bybit(signal)
+            except Exception:
+                log.exception("notify.symbol_not_on_bybit_failed")
             return None
 
         # Round to the symbol's precision using Bybit instrument info.
@@ -1233,16 +1231,21 @@ class PositionManager:
                 qty=qty,
                 position_idx=position_idx,
             )
-        except Exception:
+        except Exception as exc:
             log.exception(
                 f"{order_label}.place_error",
                 trade_id=trade.id,
                 symbol=symbol,
             )
-            await self._safe_notify(
-                f"[ORDER ERROR] {symbol}: {order_label} kunde inte placeras. "
-                f"Se loggar."
-            )
+            try:
+                if trade.signal:
+                    await self._notifier.order_place_failed(
+                        signal=trade.signal,
+                        order_label=order_label,
+                        reason=str(exc)[:80],
+                    )
+            except Exception:
+                log.exception("notify.order_place_failed_failed")
             return None
 
         order_id_bybit = result.get("orderId", "")
@@ -1591,11 +1594,10 @@ class PositionManager:
                 trade_id=trade_id,
                 symbol=symbol,
             )
-            await self._safe_notify(
-                f"❌ TP/SL UPPDATERING MISSLYCKADES ❌\n"
-                f"📊 Symbol: #{symbol}\n"
-                f"📍 Kunde inte uppdatera TP/SL pa befintlig trade"
-            )
+            try:
+                await self._notifier.tp_sl_update_failed(signal)
+            except Exception:
+                log.exception("notify.tp_sl_update_failed_notify_error")
             return
 
         # --- Liquidation safety check ---

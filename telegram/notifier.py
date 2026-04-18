@@ -46,6 +46,24 @@ def _sym(symbol: str) -> str:
     return s
 
 
+def _chan(name: str) -> str:
+    """Format channel name with # prefix for hashtag tracking.
+
+    Converts e.g. "AiphaMint Signals" to "#AiphaMintSignals" so Telegram
+    treats it as a clickable hashtag for history filtering.
+    """
+    if not name:
+        return "#Unknown"
+    # Strip # if already present, remove whitespace/special chars for hashtag.
+    clean = name.lstrip("#").strip()
+    # Telegram hashtags only allow alphanumerics and underscore.
+    import re as _re
+    hashtag = _re.sub(r"[^A-Za-z0-9_]", "", clean)
+    if not hashtag:
+        return f"{name} #Unknown"
+    return f"{name} #{hashtag}"
+
+
 def _tp_lines(tp_list: list[float]) -> str:
     """Build TP lines, only including non-zero real values."""
     lines: list[str] = []
@@ -213,7 +231,7 @@ class TelegramNotifier:
         text = (
             f"✅ Signal mottagen & kopierad\n"
             f"🕒 Time: {_ts()}\n"
-            f"📢 From channel: {signal.channel_name}\n"
+            f"📢 From channel: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Direction: {direction}\n"
             f"📍 Type: {lev_type}\n"
@@ -239,10 +257,48 @@ class TelegramNotifier:
         text = (
             f"❌ SIGNAL BLOCKERAD (Dubblett ≤5%) ❌\n"
             f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 {reason or f'Duplicate of active trade at {existing_entry}'}"
+        )
+        return await self._send_notify(text)
+
+    async def symbol_not_on_bybit(self, signal) -> str:
+        """Signal rejected because the symbol is not on Bybit."""
+        text = (
+            f"❌ Finns inte på bybit ❌\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Fel: Kontrolera manuellt"
+        )
+        return await self._send_notify(text)
+
+    async def tp_sl_update_failed(self, signal, reason: str = "") -> str:
+        """TP/SL could not be updated on an existing trade (>5% signal)."""
+        text = (
+            f"❌ TP/SL UPPDATERING MISSLYCKADES ❌\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Fel: {reason or 'Kontrollera manuellt'}"
+        )
+        return await self._send_notify(text)
+
+    async def order_place_failed(self, signal, order_label: str = "entry1",
+                                 reason: str = "") -> str:
+        """Entry order could not be placed on Bybit."""
+        text = (
+            f"❌ ORDER MISSLYCKADES ❌\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Fel: {order_label} kunde inte placeras. "
+            f"{reason or 'Kontrollera manuellt.'}"
         )
         return await self._send_notify(text)
 
@@ -266,7 +322,7 @@ class TelegramNotifier:
         text = (
             f"✅ Signal updated - difference above 5%\n"
             f"🕒 Time: {_ts()}\n"
-            f"📢 From channel: {signal.channel_name}\n"
+            f"📢 From channel: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Direction: {direction}\n"
             f"📍 Type: {lev_type}\n"
@@ -302,7 +358,7 @@ class TelegramNotifier:
         text = (
             f"✅ Order placerad ({lev_type})\n"
             f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
@@ -336,7 +392,7 @@ class TelegramNotifier:
         text = (
             f"✅ Position öppnad ({lev_type})\n"
             f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
@@ -369,7 +425,7 @@ class TelegramNotifier:
         text = (
             f"✅ ENTRY 1 TAGEN\n"
             f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Typ: {lev_type}\n"
@@ -397,7 +453,7 @@ class TelegramNotifier:
         text = (
             f"✅ ENTRY 2 TAGEN\n"
             f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Typ: {lev_type}\n"
@@ -430,7 +486,7 @@ class TelegramNotifier:
         text = (
             f"✅ Sammanslagning av ENTRY 1 + ENTRY 2\n"
             f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Typ: {lev_type}\n"
@@ -471,7 +527,7 @@ class TelegramNotifier:
             f"<b>✅ TAKE PROFIT {tp_level} TAGEN</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   TP{tp_level}-pris: {tp_price}\n"
@@ -545,7 +601,7 @@ class TelegramNotifier:
             f"<b>📈 PYRAMID STEG {step_num} ({_pct(trigger_pct)})</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Trigger: {_pct(trigger_pct)}\n"
@@ -576,7 +632,7 @@ class TelegramNotifier:
             f"<b>🔄 TRAILING STOP AKTIVERAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Trigger: {_pct(trigger_pct)}\n"
@@ -601,7 +657,7 @@ class TelegramNotifier:
             f"<b>🔄 TRAILING STOP UPPDATERAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Nytt extremvärde: {new_extreme}\n"
@@ -628,7 +684,7 @@ class TelegramNotifier:
             f"<b>⚖️ BREAK-EVEN JUSTERAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   SL flyttad till: {sl_moved_to}\n"
@@ -657,7 +713,7 @@ class TelegramNotifier:
             f"<b>🛡️ HEDGE / VÄNDNING AKTIVERAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning (hedge): {'SHORT' if signal.direction == 'LONG' else 'LONG'}\n"
             f"   Hedge Entry: {hedge_entry}\n"
@@ -686,7 +742,7 @@ class TelegramNotifier:
             f"<b>🛡️ HEDGE / VÄNDNING AVSLUTAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Exit-pris: {exit_price}\n"
             f"   Qty: {qty}\n"
@@ -710,7 +766,7 @@ class TelegramNotifier:
             f"<b>🛡️ HEDGE AVBRUTEN</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Anledning: {reason}\n"
             f"\n"
@@ -730,7 +786,7 @@ class TelegramNotifier:
             f"<b>🛡️ HEDGE NEKAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Anledning: {reason}\n"
             f"\n"
@@ -755,7 +811,7 @@ class TelegramNotifier:
             f"<b>♻️ RE-ENTRY / ÅTERINTRÄDE AKTIVERAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Entry: {signal.entry}\n"
@@ -782,7 +838,7 @@ class TelegramNotifier:
             f"<b>♻️ RE-ENTRY / ÅTERINTRÄDE AVSLUTAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Exit-pris: {exit}\n"
@@ -805,7 +861,7 @@ class TelegramNotifier:
             f"<b>⛔ RE-ENTRY AVSTÄNGT (3/3 försök gjorda)</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Försök använda: 3/3\n"
@@ -835,7 +891,7 @@ class TelegramNotifier:
             f"<b>🚩 STOP LOSS TRÄFFAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   SL-pris: {sl_price}\n"
@@ -862,7 +918,7 @@ class TelegramNotifier:
             f"<b>✅ POSITION STÄNGD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Exit-pris: {exit_price}\n"
@@ -891,7 +947,7 @@ class TelegramNotifier:
             f"<b>🛡️ AUTO-SL OCH HÄVSTÅNG LÅST</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Auto-SL: {auto_sl_price} (-3 % från entry)\n"
@@ -916,7 +972,7 @@ class TelegramNotifier:
             f"<b>🧩 ORDER DELVIS FYLLD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Fylld: {qty_filled} / {qty_total} ({fill_pct:.1f} %)\n"
@@ -938,7 +994,7 @@ class TelegramNotifier:
             f"<b>🗑️ ORDER RADERAD (Timeout {timeout_hours} hours)</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Timeout: {timeout_hours} timmar\n"
@@ -964,7 +1020,7 @@ class TelegramNotifier:
             f"<b>📬 SIGNAL KÖAD (Limit Above/Below)</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Entry: {signal.entry}\n"
@@ -991,7 +1047,7 @@ class TelegramNotifier:
             f"<b>❌ SIGNAL OGILTIG</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Fel: {error_detail}\n"
             f"\n"
@@ -1009,7 +1065,7 @@ class TelegramNotifier:
             f"<b>❌ ORDER MISSLYCKADES, SIGNAL OGILTIG</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Fel: {error_detail}"
@@ -1087,7 +1143,7 @@ class TelegramNotifier:
             f"<b>❌ POSITION EJ ÖPPNAD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Fel: {error_detail}"
@@ -1104,7 +1160,7 @@ class TelegramNotifier:
             f"<b>❌ POSITION EJ STÄNGD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"   Fel: {error_detail}"
@@ -1133,7 +1189,7 @@ class TelegramNotifier:
             f"<b>❌ TP EJ UTFÖRD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Fel: {error_detail}"
         )
@@ -1149,7 +1205,7 @@ class TelegramNotifier:
             f"<b>❌ SL EJ UTFÖRD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
+            f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Fel: {error_detail}"
         )
