@@ -48,7 +48,7 @@ steps = [
 [trailing_stop]
 activation_pct = 6.1              # Activate at highest TP or 6.1% (whichever is lower)
 trailing_distance_pct = 2.5       # 2.5% trailing distance
-trigger_type = "MarkPrice"        # MarkPrice, LastPrice, or IndexPrice
+trigger_type = "LastPrice"        # MarkPrice, LastPrice, or IndexPrice (client pref: LastPrice)
 
 [hedge]
 enabled = true
@@ -87,7 +87,7 @@ weekly_report_day = 0             # 0=Monday
 weekly_report_hour = 23           # Hour (24h) to send weekly report
 
 [tp_sl]
-trigger_type = "MarkPrice"        # Consistent trigger: MarkPrice, LastPrice, IndexPrice
+trigger_type = "LastPrice"        # Consistent trigger: LastPrice (client pref), MarkPrice, or IndexPrice
 
 # ============================================================
 # Telegram Source Groups

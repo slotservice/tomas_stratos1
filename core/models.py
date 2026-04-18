@@ -133,6 +133,8 @@ class Trade:
 
     # --- Bybit order tracking ---
     bybit_order_ids: List[str] = field(default_factory=list)
+    # Individual TP conditional order IDs (one per TP level).
+    tp_order_ids: List[str] = field(default_factory=list)
 
     # --- TP / SL tracking ---
     tp_hits: List[float] = field(default_factory=list)

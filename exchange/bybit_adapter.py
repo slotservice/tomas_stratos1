@@ -652,6 +652,62 @@ class BybitAdapter:
                        price=price_str)
         return result
 
+    async def place_conditional_close(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        trigger_price: float,
+        position_idx: int,
+        trigger_by: str = "LastPrice",
+    ) -> dict:
+        """Place a reduce-only conditional market order.
+
+        Fires when ``trigger_price`` is touched (by last/mark/index price).
+        Used for partial TP levels - one order per TP so each portion
+        of the position closes independently as each TP is reached.
+
+        Parameters
+        ----------
+        side:
+            ``"Sell"`` for LONG positions (closes by selling),
+            ``"Buy"`` for SHORT positions (closes by buying).
+        position_idx:
+            1 = Buy/Long hedge, 2 = Sell/Short hedge.
+        trigger_by:
+            Price source that fires the trigger.  Client prefers
+            ``"LastPrice"`` - the actual traded price.
+        """
+        qty_rounded = self.round_qty(qty, symbol)
+        price_rounded = self.round_price(trigger_price, symbol)
+        self._log.info(
+            "placing_conditional_close",
+            symbol=symbol, side=side, qty=qty_rounded,
+            trigger_price=price_rounded, trigger_by=trigger_by,
+            position_idx=position_idx,
+        )
+        resp = await self._call_with_retry(
+            self._rest.place_order,
+            category=CATEGORY,
+            symbol=symbol,
+            side=side,
+            orderType="Market",
+            qty=str(qty_rounded),
+            triggerPrice=str(price_rounded),
+            triggerBy=trigger_by,
+            triggerDirection=1 if side == "Sell" else 2,  # 1=rise, 2=fall
+            positionIdx=position_idx,
+            reduceOnly=True,
+            closeOnTrigger=True,
+        )
+        result = resp.get("result", {})
+        self._log.info(
+            "conditional_close_placed",
+            symbol=symbol, order_id=result.get("orderId", ""),
+            trigger_price=price_rounded,
+        )
+        return result
+
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         """Cancel an open order by ``orderId``."""
         self._log.info("cancelling_order", symbol=symbol, order_id=order_id)
@@ -718,8 +774,8 @@ class BybitAdapter:
         stop_loss: Optional[float] = None,
         trailing_stop: Optional[float] = None,
         active_price: Optional[float] = None,
-        tp_trigger_by: str = "MarkPrice",
-        sl_trigger_by: str = "MarkPrice",
+        tp_trigger_by: str = "LastPrice",
+        sl_trigger_by: str = "LastPrice",
     ) -> dict:
         """
         Set TP / SL / trailing stop on an existing position via

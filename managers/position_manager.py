@@ -737,20 +737,18 @@ class PositionManager:
                     sl_price = round(max_safe_sl, 8)
                     trade.sl_price = sl_price
 
-        # Find a valid TP that hasn't been passed by current mark price.
-        # For LONG: TP must be ABOVE current mark price
-        # For SHORT: TP must be BELOW current mark price
-        tp_price = None
+        # Filter TPs that are still valid (not already passed by market).
+        # For LONG: TP must be ABOVE current mark.
+        # For SHORT: TP must be BELOW current mark.
+        valid_tps: list[float] = []
         for tp in tp_list:
             if tp and tp > 0:
                 if direction == "LONG" and tp > current_mark:
-                    tp_price = tp
-                    break
+                    valid_tps.append(tp)
                 elif direction == "SHORT" and tp < current_mark:
-                    tp_price = tp
-                    break
+                    valid_tps.append(tp)
 
-        if tp_price is None and tp_list:
+        if not valid_tps and tp_list:
             log.warning(
                 "trade.all_tps_already_passed",
                 trade_id=trade.id,
@@ -761,8 +759,6 @@ class PositionManager:
             )
 
         # Validate SL direction against current mark price.
-        # For LONG: SL must be BELOW current mark
-        # For SHORT: SL must be ABOVE current mark
         valid_sl = sl_price
         if valid_sl:
             if direction == "LONG" and valid_sl >= current_mark:
@@ -774,38 +770,91 @@ class PositionManager:
                             sl=valid_sl, mark=current_mark)
                 valid_sl = None
 
-        # Set TP and/or SL (only if we have valid values)
-        if tp_price or valid_sl:
+        # ---------- Place the SL via set_trading_stop ----------
+        # SL must always use the position-wide trading-stop (not a
+        # conditional order) because it applies to the whole position.
+        trigger_src = self._settings.tp_sl.trigger_type  # e.g. "LastPrice"
+        if valid_sl:
             try:
-                kwargs = {"symbol": symbol, "position_idx": position_idx}
-                if tp_price:
-                    kwargs["take_profit"] = tp_price
-                if valid_sl:
-                    kwargs["stop_loss"] = valid_sl
-
-                await self._bybit.set_trading_stop(**kwargs)
-                log.info(
-                    "trade.tp_sl_set",
-                    trade_id=trade.id,
+                await self._bybit.set_trading_stop(
                     symbol=symbol,
-                    tp=tp_price,
-                    sl=valid_sl,
+                    position_idx=position_idx,
+                    stop_loss=valid_sl,
+                    sl_trigger_by=trigger_src,
                 )
+                log.info("trade.sl_set",
+                         trade_id=trade.id, symbol=symbol, sl=valid_sl)
             except Exception:
                 log.exception(
-                    "trade.tp_sl_error",
-                    trade_id=trade.id,
-                    symbol=symbol,
+                    "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
                 await self._safe_notify(
-                    f"[VARNING] {symbol}: TP/SL kunde inte sattas pa borsen. "
+                    f"[VARNING] {symbol}: SL kunde inte sattas pa borsen. "
                     f"Manuell atgard kan kravas."
                 )
-        else:
+
+        # ---------- Place PARTIAL TPs - one reduce-only conditional
+        # order per TP level so each TP locks its slice of profit ----------
+        # 3 TPs -> 33/33/34%, 4 TPs -> 25/25/25/25%, 5 TPs -> 20 each, etc.
+        tp_order_ids: list[str] = []
+        if valid_tps and trade.quantity and trade.quantity > 0:
+            num_tps = len(valid_tps)
+            total_qty = trade.quantity
+            # Portion per TP (remainder goes to last TP to avoid leftover).
+            base_qty = total_qty / num_tps
+            # Close side is opposite of position.
+            close_side = "Sell" if direction == "LONG" else "Buy"
+
+            placed_qty = 0.0
+            for i, tp_price in enumerate(valid_tps):
+                is_last = (i == num_tps - 1)
+                # Last TP closes any remainder; others use base slice.
+                if is_last:
+                    this_qty = total_qty - placed_qty
+                else:
+                    this_qty = base_qty
+
+                try:
+                    this_qty_rounded = self._bybit.round_qty(this_qty, symbol)
+                    if this_qty_rounded <= 0:
+                        continue
+                    result = await self._bybit.place_conditional_close(
+                        symbol=symbol,
+                        side=close_side,
+                        qty=this_qty_rounded,
+                        trigger_price=tp_price,
+                        position_idx=position_idx,
+                        trigger_by=trigger_src,
+                    )
+                    oid = result.get("orderId", "")
+                    if oid:
+                        tp_order_ids.append(oid)
+                    placed_qty += this_qty_rounded
+                    log.info(
+                        "trade.partial_tp_placed",
+                        trade_id=trade.id, symbol=symbol,
+                        tp_index=i + 1, tp_price=tp_price,
+                        qty=this_qty_rounded, order_id=oid,
+                    )
+                except Exception:
+                    log.exception(
+                        "trade.partial_tp_error",
+                        trade_id=trade.id, symbol=symbol,
+                        tp_index=i + 1, tp_price=tp_price,
+                    )
+
+            # Persist TP order IDs on the trade for later cancel/tracking.
+            trade.tp_order_ids = tp_order_ids
+            log.info(
+                "trade.partial_tps_summary",
+                trade_id=trade.id, symbol=symbol,
+                placed=len(tp_order_ids), expected=num_tps,
+            )
+
+        if not valid_tps and not valid_sl:
             log.warning(
                 "trade.no_valid_tp_sl",
-                trade_id=trade.id,
-                symbol=symbol,
+                trade_id=trade.id, symbol=symbol,
             )
 
         # ----------------------------------------------------------
