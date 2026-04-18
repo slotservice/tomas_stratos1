@@ -399,7 +399,84 @@ name = "Crypto Heaven Official"
 id = -1002173116014
 name = "Crypto Alerts"
 
-# --- TEST: Your own channel for fake signals ---
+# --- Additional groups the client joined (2026-04-18) ---
+
 [[groups]]
-id = -1003984507614
-name = "Stratos1 Test"
+id = -1001935772577
+name = "Cryptonus Trade"
+
+[[groups]]
+id = -1002531544802
+name = "Wolf of Trading ViP"
+
+[[groups]]
+id = -1003763669185
+name = "MEXC Futures Signal"
+
+[[groups]]
+id = -1002625944679
+name = "Panda Traders"
+
+[[groups]]
+id = -1002696002183
+name = "RAVEN Signals Pro"
+
+[[groups]]
+id = -1002447010635
+name = "El Rey Rentable"
+
+[[groups]]
+id = -1003838312107
+name = "Nick Cassese"
+
+[[groups]]
+id = -1003847321863
+name = "ODES Crypto"
+
+[[groups]]
+id = -1003827542383
+name = "MEG Crypto Trading Team"
+
+[[groups]]
+id = -1003448341901
+name = "Axper Crypto Free"
+
+[[groups]]
+id = -1003500375042
+name = "Blockchain Bulls Official"
+
+[[groups]]
+id = -1003229348922
+name = "Crypto Expert"
+
+[[groups]]
+id = -1003642493783
+name = "Ali Khan Crypto"
+
+[[groups]]
+id = -1002899568541
+name = "Crypto Live Trading Signals"
+
+[[groups]]
+id = -1003802324369
+name = "Experttrader Channel"
+
+[[groups]]
+id = -1003763469840
+name = "Binance Futures Pumps Signals"
+
+[[groups]]
+id = -1003805161954
+name = "Economic Mike"
+
+[[groups]]
+id = -1003858786614
+name = "Yulius"
+
+[[groups]]
+id = -1003859912312
+name = "Crypto Premium Signals"
+
+[[groups]]
+id = -1003181750276
+name = "The Lord of Trading"
