@@ -3,6 +3,14 @@ venv/
 
 # Secrets - NEVER commit
 .env
+.env.*
+!.env.example
+
+# Local temp / caches
+pytest-cache-files-*/
+stratos1.db
+stratos1.db-*
+stratos1_run.log
 
 # Database
 *.db
