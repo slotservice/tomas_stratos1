@@ -183,20 +183,15 @@ class PositionManager:
                 # Within 5%: block entirely
                 log.info("signal.duplicate_blocked", symbol=symbol,
                          reason=dup_result.reason)
-                from core.time_utils import format_time, now_utc
-                channel_name = (
-                    getattr(signal, "channel_name", "")
-                    or getattr(signal, "source_channel_name", "")
-                    or "Unknown"
-                )
-                await self._safe_notify(
-                    f"❌ SIGNAL BLOCKERAD (Dubblett ≤{self._settings.duplicate.threshold_pct}%) ❌\n"
-                    f"🕒 Time: {format_time(now_utc())}\n"
-                    f"📢 From channel: {channel_name}\n"
-                    f"📊 Symbol: #{symbol}\n"
-                    f"📈 Riktning: {direction}\n"
-                    f"📍 {dup_result.reason}"
-                )
+                existing = dup_result.existing_trade or {}
+                try:
+                    await self._notifier.signal_blocked_duplicate(
+                        signal=signal,
+                        existing_entry=existing.get("entry_price", 0),
+                        reason=dup_result.reason,
+                    )
+                except Exception:
+                    log.exception("notify.signal_blocked_duplicate_failed")
                 try:
                     await self._db.increment_report_stat(
                         0, "ALL", datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -468,57 +463,32 @@ class PositionManager:
         await self._persist_trade_state(trade, entry1_order_id_bybit=order1_bybit_id)
 
         # ----------------------------------------------------------
-        # 9. Send "Signal mottagen" notification.
+        # 9. Send "Signal mottagen & kopierad" notification.
         # ----------------------------------------------------------
-        from core.time_utils import format_time, now_utc
-        channel_name = (
-            getattr(signal, "channel_name", "")
-            or getattr(signal, "source_channel_name", "")
-            or "Unknown"
-        )
-        auto_sl_note = " (Auto-SL)" if auto_sl_applied else ""
+        try:
+            await self._notifier.signal_received(
+                signal=signal,
+                leverage=leverage,
+                im=initial_margin,
+                bot_order_id=str(trade.id),
+                bybit_order_id=order1_bybit_id,
+            )
+        except Exception:
+            log.exception("notify.signal_received_failed")
 
-        # Build TP lines - only real TPs (skip zeros/empty)
-        tp_lines = []
-        for i, tp in enumerate(tp_list, start=1):
-            if tp and tp > 0:
-                if entry_price > 0:
-                    if direction == "LONG":
-                        pct = (tp - entry_price) / entry_price * 100
-                    else:
-                        pct = (entry_price - tp) / entry_price * 100
-                    tp_lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%)")
-                else:
-                    tp_lines.append(f"🎯 TP{i}: {tp}")
-        tp_text = "\n".join(tp_lines) if tp_lines else "🎯 TP: (none)"
-
-        # SL with percentage
-        if sl_price and entry_price > 0:
-            if direction == "LONG":
-                sl_pct = (sl_price - entry_price) / entry_price * 100
-            else:
-                sl_pct = (entry_price - sl_price) / entry_price * 100
-            sl_text = f"🚩 SL: {sl_price} ({sl_pct:+.2f}%)"
-        else:
-            sl_text = f"🚩 SL: {sl_price}"
-
-        await self._safe_notify(
-            f"✅ [SIGNAL MOTTAGEN] {symbol} {direction}{auto_sl_note}\n"
-            f"🕒 Time: {format_time(now_utc())}\n"
-            f"📢 From channel: {channel_name}\n"
-            f"📊 Symbol: #{symbol}\n"
-            f"📈 Riktning: {direction}\n"
-            f"\n"
-            f"💥 Entry: {entry_price}\n"
-            f"{tp_text}\n"
-            f"{sl_text}\n"
-            f"\n"
-            f"⚙️ Leverage: x{leverage}\n"
-            f"💰 IM: {initial_margin} USDT\n"
-            f"💵 Qty: {quantity}\n"
-            f"\n"
-            f"Entry 1 placerad..."
-        )
+        # Send "Order placerad" - the order has been placed on Bybit.
+        try:
+            await self._notifier.order_placed(
+                signal=signal,
+                leverage=leverage,
+                im=initial_margin,
+                entry1=entry_price,
+                entry2=entry_price,
+                bot_id=str(trade.id),
+                bybit_id=order1_bybit_id,
+            )
+        except Exception:
+            log.exception("notify.order_placed_failed")
 
         # ----------------------------------------------------------
         # 10. Wait for entry 1 fill confirmation.
@@ -541,6 +511,21 @@ class PositionManager:
         trade.entry1_fill_price = float(fill1.get("avgPrice", 0) or fill1.get("price", 0) or entry_price)
         trade.transition(TradeState.ENTRY1_FILLED)
         await self._persist_trade_state(trade, entry1_fill_price=trade.entry1_fill_price)
+
+        # Send "ENTRY 1 TAGEN" notification
+        try:
+            fill1_qty = float(fill1.get("cumExecQty", qty_per_order) or qty_per_order)
+            fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
+            await self._notifier.entry1_filled(
+                trade=trade,
+                qty=fill1_qty,
+                im=fill1_im,
+                im_total=fill1_im,
+                bot_id=str(trade.id),
+                bybit_id=order1_bybit_id,
+            )
+        except Exception:
+            log.exception("notify.entry1_filled_failed")
 
         # ----------------------------------------------------------
         # 11. Place entry order 2.
@@ -593,6 +578,23 @@ class PositionManager:
         trade.entry2_fill_price = float(fill2.get("avgPrice", 0) or fill2.get("price", 0) or entry_price)
         trade.transition(TradeState.ENTRY2_FILLED)
 
+        # Send "ENTRY 2 TAGEN" notification
+        try:
+            fill2_qty = float(fill2.get("cumExecQty", qty_per_order) or qty_per_order)
+            fill1_qty = float(fill1.get("cumExecQty", qty_per_order) or qty_per_order)
+            fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
+            fill2_im = (fill2_qty * trade.entry2_fill_price) / max(leverage, 1)
+            await self._notifier.entry2_filled(
+                trade=trade,
+                qty=fill2_qty,
+                im=fill2_im,
+                im_total=fill1_im + fill2_im,
+                bot_id=str(trade.id),
+                bybit_id=order2_bybit_id,
+            )
+        except Exception:
+            log.exception("notify.entry2_filled_failed")
+
         # ----------------------------------------------------------
         # 13. Both filled: calculate avg_entry.
         # ----------------------------------------------------------
@@ -600,12 +602,24 @@ class PositionManager:
             (trade.entry1_fill_price + trade.entry2_fill_price) / 2.0, 8
         )
         trade.avg_entry = avg_entry
+        trade.quantity = fill1_qty + fill2_qty
 
-        await self._safe_notify(
-            f"[ENTRIES MERGED] {symbol} {direction}\n"
-            f"Fill 1: {trade.entry1_fill_price} | Fill 2: {trade.entry2_fill_price}\n"
-            f"Snittpris: {avg_entry}"
-        )
+        # Send "Sammanslagning av ENTRY 1 + ENTRY 2" notification
+        try:
+            await self._notifier.entries_merged(
+                trade=trade,
+                entry1=trade.entry1_fill_price,
+                qty1=fill1_qty,
+                im1=fill1_im,
+                entry2=trade.entry2_fill_price,
+                qty2=fill2_qty,
+                im2=fill2_im,
+                avg_entry=avg_entry,
+                total_qty=fill1_qty + fill2_qty,
+                im_total=fill1_im + fill2_im,
+            )
+        except Exception:
+            log.exception("notify.entries_merged_failed")
 
         # ----------------------------------------------------------
         # 14. Set TP and SL via set_trading_stop.
@@ -720,6 +734,15 @@ class PositionManager:
 
         # Register in the active trades map.
         self._active_trades[trade.id] = trade
+
+        # Send "Position öppnad" notification
+        try:
+            await self._notifier.position_opened(
+                trade=trade,
+                signal=signal,
+            )
+        except Exception:
+            log.exception("notify.position_opened_failed")
 
         log.info(
             "trade.opened",
@@ -1548,16 +1571,21 @@ class PositionManager:
         except Exception:
             log.exception("trade.db_update_failed", trade_id=trade_id)
 
-        # --- Notify ---
-        tp_str = ", ".join(str(t) for t in new_tps if t and t > 0)
-        await self._safe_notify(
-            f"🔄 TP/SL UPPDATERAD (signal >5% avvikelse)\n"
-            f"📊 Symbol: #{symbol}\n"
-            f"📈 Riktning: {direction}\n"
-            f"🎯 Nya TP: {tp_str}\n"
-            f"🚩 Ny SL: {new_sl or 'oforandrad'}\n"
-            f"📍 Befintlig trade uppdaterad (ingen ny position)"
-        )
+        # --- Notify (matches client's "Signal updated - difference above 5%" template) ---
+        try:
+            # Best-effort: pull leverage/IM from existing trade if available
+            lev = float(existing_trade_row.get("leverage", 0) or 0) or 10.0
+            im_val = float(existing_trade_row.get("margin", 0) or 0) or \
+                     self._settings.wallet.initial_margin
+            await self._notifier.signal_updated_tp_sl(
+                signal=signal,
+                leverage=lev,
+                im=im_val,
+                bot_order_id=str(trade_id),
+                bybit_order_id=existing_trade_row.get("entry1_order_id_bybit", ""),
+            )
+        except Exception:
+            log.exception("notify.signal_updated_tp_sl_failed")
 
     async def _safe_notify(self, message: str) -> None:
         """Send a Telegram notification, swallowing errors."""

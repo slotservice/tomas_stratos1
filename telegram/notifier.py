@@ -55,6 +55,30 @@ def _tp_lines(tp_list: list[float]) -> str:
     return "\n".join(lines)
 
 
+def _tp_lines_pct(tp_list: list[float], entry: float, direction: str) -> str:
+    """Build TP lines with percentages, only real TPs (no zeros)."""
+    lines: list[str] = []
+    for i, tp in enumerate(tp_list, start=1):
+        if tp and tp > 0 and entry > 0:
+            if direction == "LONG":
+                pct = (tp - entry) / entry * 100
+            else:
+                pct = (entry - tp) / entry * 100
+            lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%)")
+    return "\n".join(lines)
+
+
+def _sl_line_pct(sl: float, entry: float, direction: str) -> str:
+    """Build SL line with percentage."""
+    if not sl or not entry:
+        return f"🚩 SL: {sl or 'Auto (-3%)'}"
+    if direction == "LONG":
+        pct = (sl - entry) / entry * 100
+    else:
+        pct = (entry - sl) / entry * 100
+    return f"🚩 SL: {sl} ({pct:+.2f}%)"
+
+
 def _pnl_sign(value: float) -> str:
     """Format PnL with explicit sign."""
     if value >= 0:
@@ -177,27 +201,31 @@ class TelegramNotifier:
         bot_order_id: str,
         bybit_order_id: str,
     ) -> str:
-        """Signal received and copied to Bybit."""
-        tp_block = _tp_lines(signal.tps)
-        lev_type = signal.signal_type  # swing / dynamic / fixed
-        sl_line = f"   SL: {signal.sl}" if signal.sl else "   SL: Auto (-3 %)"
+        """Signal received from external group and forwarded to channel."""
+        entry = signal.entry
+        direction = signal.direction
+        tp_block = _tp_lines_pct(signal.tps, entry, direction)
+        sl_line = _sl_line_pct(signal.sl, entry, direction)
+        lev_type = signal.signal_type
+        bot_id_str = bot_order_id or "pending"
+        bybit_id_str = bybit_order_id or "pending"
 
         text = (
-            f"<b>✅ Signal mottagen & kopierad</b>\n"
+            f"✅ Signal mottagen & kopierad\n"
+            f"🕒 Time: {_ts()}\n"
+            f"📢 From channel: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Direction: {direction}\n"
+            f"📍 Type: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Typ: {lev_type}\n"
-            f"   Entry: {signal.entry}\n"
+            f"💥 Entry: {entry}\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
-            f"   Hävstång: {lev_type} x{leverage}\n"
-            f"   IM: {im:.2f} USDT\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {bot_order_id}\n"
-            f"   🔑 Order-ID Bybit: {bybit_order_id}"
+            f"⚙️ Leverage ({lev_type}): x{leverage}\n"
+            f"💰 IM: {im:.2f} USDT\n"
+            f"🔑 Order-ID BOT: {bot_id_str}\n"
+            f"🔑 Order-ID Bybit: {bybit_id_str}"
         )
         return await self._send_notify(text)
 
@@ -205,19 +233,52 @@ class TelegramNotifier:
         self,
         signal,
         existing_entry: float,
+        reason: str = "",
     ) -> str:
         """Signal blocked as duplicate (within 5% of active trade)."""
         text = (
-            f"<b>❌ SIGNAL BLOCKERAD (Dubblett ≤5 %)</b>\n"
+            f"❌ SIGNAL BLOCKERAD (Dubblett ≤5%) ❌\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 {reason or f'Duplicate of active trade at {existing_entry}'}"
+        )
+        return await self._send_notify(text)
+
+    async def signal_updated_tp_sl(
+        self,
+        signal,
+        leverage: float,
+        im: float,
+        bot_order_id: str,
+        bybit_order_id: str,
+    ) -> str:
+        """Signal with >5% entry difference - updates TP/SL on existing trade."""
+        entry = signal.entry
+        direction = signal.direction
+        tp_block = _tp_lines_pct(signal.tps, entry, direction)
+        sl_line = _sl_line_pct(signal.sl, entry, direction)
+        lev_type = signal.signal_type
+        bot_id_str = bot_order_id or "pending"
+        bybit_id_str = bybit_order_id or "pending"
+
+        text = (
+            f"✅ Signal updated - difference above 5%\n"
+            f"🕒 Time: {_ts()}\n"
+            f"📢 From channel: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Direction: {direction}\n"
+            f"📍 Type: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Ny Entry: {signal.entry}\n"
-            f"   Befintlig Entry: {existing_entry}\n"
+            f"💥 Entry: {entry}\n"
+            f"{tp_block}\n"
+            f"{sl_line}\n"
             f"\n"
-            f"   Signal ignorerad — aktiv position finns redan."
+            f"⚙️ Leverage ({lev_type}): x{leverage}\n"
+            f"💰 IM: {im:.2f} USDT\n"
+            f"🔑 Order-ID BOT: {bot_id_str}\n"
+            f"🔑 Order-ID Bybit: {bybit_id_str}"
         )
         return await self._send_notify(text)
 
@@ -231,30 +292,31 @@ class TelegramNotifier:
         bot_id: str,
         bybit_id: str,
     ) -> str:
-        """Order placed on Bybit."""
-        tp_block = _tp_lines(signal.tps)
+        """Order placed on Bybit (before fill confirmation)."""
+        entry = signal.entry
+        direction = signal.direction
+        tp_block = _tp_lines_pct(signal.tps, entry, direction)
+        sl_line = _sl_line_pct(signal.sl, entry, direction)
         lev_type = signal.signal_type
-        sl_line = f"   SL: {signal.sl}" if signal.sl else "   SL: Auto (-3 %)"
 
         text = (
-            f"<b>✅ Order placerad</b>\n"
+            f"✅ Order placerad ({lev_type})\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Typ: {lev_type}\n"
-            f"   Entry 1: {entry1}\n"
-            f"   Entry 2: {entry2}\n"
+            f"💥 Entry1: {entry1}\n"
+            f"💥 Entry2: {entry2}\n"
+            f"\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
-            f"   Hävstång: {lev_type} x{leverage}\n"
-            f"   IM: {im:.2f} USDT\n"
-            f"   Post-Only: Nej\n"
-            f"   Reduce-Only: Nej\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {bot_id}\n"
-            f"   🔑 Order-ID Bybit: {bybit_id}"
+            f"⚙️ Hävstång ({lev_type}): x{leverage}\n"
+            f"💰 IM: {im:.2f} USDT\n"
+            f"🔑 Order-ID BOT: {bot_id}\n"
+            f"🔑 Order-ID Bybit: {bybit_id}"
         )
         return await self._send_notify(text)
 
@@ -264,29 +326,31 @@ class TelegramNotifier:
         signal,
     ) -> str:
         """Position confirmed open on Bybit."""
-        tp_block = _tp_lines(signal.tps)
+        entry = signal.entry
+        direction = signal.direction
+        tp_block = _tp_lines_pct(signal.tps, entry, direction)
+        sl_line = _sl_line_pct(trade.sl_price or signal.sl, entry, direction)
         lev_type = signal.signal_type
-        sl_line = f"   SL: {trade.sl_price}" if trade.sl_price else "   SL: Auto (-3 %)"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
 
         text = (
-            f"<b>✅ Position öppnad</b>\n"
+            f"✅ Position öppnad ({lev_type})\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Typ: {lev_type}\n"
-            f"   Entry: {trade.avg_entry or trade.entry1_fill_price}\n"
-            f"   Quantity: {trade.quantity}\n"
+            f"💥 Entry1: {trade.entry1_fill_price}\n"
+            f"💥 Entry2: {trade.entry2_fill_price}\n"
+            f"\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
-            f"   Hävstång: {lev_type} x{trade.leverage}\n"
-            f"   IM: {trade.margin:.2f} USDT\n"
-            f"   Post-Only: Nej\n"
-            f"   Reduce-Only: Nej\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"⚙️ Hävstång ({lev_type}): x{trade.leverage}\n"
+            f"💰 IM: {trade.margin:.2f} USDT (Bybit confirmed)\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
@@ -299,22 +363,22 @@ class TelegramNotifier:
         bot_id: str,
         bybit_id: str,
     ) -> str:
-        """Entry 1 filled."""
+        """Entry 1 filled notification."""
         signal = trade.signal
+        lev_type = signal.signal_type
         text = (
-            f"<b>✅ ENTRY 1 TAGEN</b>\n"
+            f"✅ ENTRY 1 TAGEN\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Entry-pris: {trade.entry1_fill_price}\n"
-            f"   Quantity: {qty}\n"
-            f"   IM (bekräftad Bybit): {im:.2f} USDT\n"
-            f"   IM Total: {im_total:.2f} USDT\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {bot_id}\n"
-            f"   🔑 Order-ID Bybit: {bybit_id}"
+            f"💥 Entry1: {trade.entry1_fill_price}\n"
+            f"💵 Kvantitet: {qty}\n"
+            f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
+            f"🔑 Order-ID BOT: {bot_id}\n"
+            f"🔑 Order-ID Bybit: {bybit_id}"
         )
         return await self._send_notify(text)
 
@@ -327,22 +391,22 @@ class TelegramNotifier:
         bot_id: str,
         bybit_id: str,
     ) -> str:
-        """Entry 2 filled."""
+        """Entry 2 filled notification."""
         signal = trade.signal
+        lev_type = signal.signal_type
         text = (
-            f"<b>✅ ENTRY 2 TAGEN</b>\n"
+            f"✅ ENTRY 2 TAGEN\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Entry-pris: {trade.entry2_fill_price}\n"
-            f"   Quantity: {qty}\n"
-            f"   IM (bekräftad Bybit): {im:.2f} USDT\n"
-            f"   IM Total: {im_total:.2f} USDT\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {bot_id}\n"
-            f"   🔑 Order-ID Bybit: {bybit_id}"
+            f"💥 Entry2: {trade.entry2_fill_price}\n"
+            f"💵 Kvantitet: {qty}\n"
+            f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
+            f"🔑 Order-ID BOT: {bot_id}\n"
+            f"🔑 Order-ID Bybit: {bybit_id}"
         )
         return await self._send_notify(text)
 
@@ -361,24 +425,32 @@ class TelegramNotifier:
     ) -> str:
         """Both entries merged into a single position."""
         signal = trade.signal
+        lev_type = signal.signal_type
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         text = (
-            f"<b>✅ Sammanslagning av ENTRY 1 + ENTRY 2</b>\n"
+            f"✅ Sammanslagning av ENTRY 1 + ENTRY 2\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {signal.channel_name}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {signal.channel_name}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
+            f"📌 ENTRY 1\n"
+            f"💥 Entry: {entry1}\n"
+            f"💵 Kvantitet: {qty1}\n"
+            f"💰 IM: {im1:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"\n"
-            f"   ENTRY 1: {entry1}  |  Qty: {qty1}  |  IM: {im1:.2f} USDT\n"
-            f"   ENTRY 2: {entry2}  |  Qty: {qty2}  |  IM: {im2:.2f} USDT\n"
+            f"📌 ENTRY 2\n"
+            f"💥 Entry: {entry2}\n"
+            f"💵 Kvantitet: {qty2}\n"
+            f"💰 IM: {im2:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"\n"
-            f"   <b>Sammanslagen position:</b>\n"
-            f"   Avg Entry: {avg_entry}\n"
-            f"   Total Qty: {total_qty}\n"
-            f"   IM Total: {im_total:.2f} USDT\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"📌 SAMMANSATT POSITION\n"
+            f"💥 Genomsnittligt Entry: {avg_entry}\n"
+            f"💵 Total kvantitet: {total_qty}\n"
+            f"💰 IM totalt: {im_total:.2f} USDT\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
