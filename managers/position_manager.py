@@ -992,6 +992,38 @@ class PositionManager:
             await self._reentry_mgr.check_and_activate(trade, current_price)
             return
 
+        # --- Verify position still exists on Bybit (every 30s) ---
+        # Prevents error spam when the position was closed externally
+        # (TP hit on exchange / liquidation) but the bot didn't catch
+        # the close event because public WS is down.
+        import time as _time
+        now = _time.monotonic()
+        last_check = getattr(trade, "_last_pos_check", 0)
+        if now - last_check > 30:
+            trade._last_pos_check = now
+            try:
+                if trade.signal:
+                    side = "Buy" if trade.signal.direction == "LONG" else "Sell"
+                    pos = await self._bybit.get_position(
+                        trade.signal.symbol, side,
+                    )
+                    pos_size = float(pos.get("size", 0) or 0) if pos else 0
+                    if pos_size == 0:
+                        # Position no longer exists on Bybit - mark closed.
+                        log.info(
+                            "trade.position_closed_externally",
+                            trade_id=trade.id,
+                            symbol=trade.signal.symbol,
+                        )
+                        await self.close_trade(
+                            trade.id, "external_close", current_price,
+                        )
+                        return
+            except Exception:
+                log.exception(
+                    "trade.position_check_error", trade_id=trade.id,
+                )
+
         # --- Break-even check (only if not yet applied) ---
         if trade.be_price is None:
             applied = await self._be_mgr.check_and_apply(trade, current_price)

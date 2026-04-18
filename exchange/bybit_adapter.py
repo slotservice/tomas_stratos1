@@ -318,6 +318,7 @@ class BybitAdapter:
             110003,  # Position not exist
             110020,  # Position mode not supported
             110025,  # Position mode is not modified (already correct)
+            110033,  # Margin cannot be set without open position
             110043,  # Leverage not changed (already correct)
             10001,   # Invalid parameter (qty, price, etc.)
             10004,   # API key/signature/timestamp invalid
