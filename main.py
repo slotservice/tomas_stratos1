@@ -504,6 +504,54 @@ async def main() -> None:
             except Exception:
                 log.exception("periodic_health.error")
 
+    async def _periodic_price_poll() -> None:
+        """
+        Poll Bybit REST for current prices of all active trades' symbols
+        every 5 seconds. This is the fallback path when the public
+        WebSocket is down (VPN / geo-blocking issues). Without this,
+        BE / scaling / trailing / hedge / re-entry managers never fire
+        because they all depend on price updates.
+        """
+        poll_interval = 5  # seconds between polls
+        while not shutdown.is_shutting_down:
+            try:
+                await asyncio.sleep(poll_interval)
+                if shutdown.is_shutting_down:
+                    break
+
+                # Get unique symbols from active trades.
+                active = getattr(position_mgr, "_active_trades", {})
+                symbols = set()
+                for trade in active.values():
+                    if trade.signal and trade.signal.symbol:
+                        symbols.add(trade.signal.symbol)
+
+                if not symbols:
+                    continue
+
+                # Poll ticker for each symbol.
+                for symbol in symbols:
+                    try:
+                        ticker = await bybit.get_ticker(symbol)
+                        if ticker:
+                            price = float(
+                                ticker.get("markPrice") or
+                                ticker.get("lastPrice") or
+                                0
+                            )
+                            if price > 0:
+                                await position_mgr.handle_price_update(
+                                    symbol, price,
+                                )
+                    except Exception:
+                        log.exception(
+                            "price_poll.ticker_error", symbol=symbol,
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("price_poll.error")
+
     async def _periodic_order_cleanup() -> None:
         """Clean up timed-out unfilled orders every 1 hour."""
         while not shutdown.is_shutting_down:
@@ -556,6 +604,10 @@ async def main() -> None:
     health_task = asyncio.create_task(_periodic_health())
     background_tasks.add(health_task)
     health_task.add_done_callback(background_tasks.discard)
+
+    price_poll_task = asyncio.create_task(_periodic_price_poll())
+    background_tasks.add(price_poll_task)
+    price_poll_task.add_done_callback(background_tasks.discard)
 
     cleanup_task = asyncio.create_task(_periodic_order_cleanup())
     background_tasks.add(cleanup_task)
