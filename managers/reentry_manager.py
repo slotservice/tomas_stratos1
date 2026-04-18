@@ -139,11 +139,12 @@ class ReentryManager:
 
         # --- Update the original trade ---
         trade.reentry_count += 1
+        trade.transition(TradeState.CLOSED)
         try:
             await self._db.update_trade(
                 int(trade.id),
                 reentry_count=trade.reentry_count,
-                state=TradeState.CLOSED.value,
+                state=trade.state.value,
                 close_reason="reentry_triggered",
             )
             await self._db.log_event(

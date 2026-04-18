@@ -312,6 +312,17 @@ class BybitAdapter:
         Returns the full response dict on success.
         Raises BybitAdapterError on non-retryable failures.
         """
+        # Known non-retryable error codes - fail fast, don't retry.
+        NON_RETRYABLE = {
+            110001,  # Order not exists or too late to cancel
+            110003,  # Position not exist
+            110020,  # Position mode not supported
+            110025,  # Position mode is not modified (already correct)
+            110043,  # Leverage not changed (already correct)
+            10001,   # Invalid parameter (qty, price, etc.)
+            10004,   # API key/signature/timestamp invalid
+            170140,  # Order quantity exceeded risk limit
+        }
         last_exc: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
@@ -332,7 +343,6 @@ class BybitAdapter:
                     await asyncio.sleep(delay)
                     continue
 
-                # Non-retryable known errors: raise immediately
                 raise BybitAdapterError(
                     f"Bybit API error {ret_code}: {ret_msg}",
                     ret_code=ret_code,
@@ -343,9 +353,30 @@ class BybitAdapter:
                 raise
             except Exception as exc:
                 last_exc = exc
+                err_str = str(exc)
+
+                # Extract ret_code from pybit error message if possible.
+                ret_code = None
+                import re
+                m = re.search(r"ErrCode:\s*(\d+)", err_str)
+                if m:
+                    ret_code = int(m.group(1))
+
+                # Non-retryable: raise immediately without retrying
+                if ret_code and ret_code in NON_RETRYABLE:
+                    self._log.info(
+                        "api_call.non_retryable",
+                        ret_code=ret_code,
+                        error=err_str[:120],
+                    )
+                    raise BybitAdapterError(
+                        err_str,
+                        ret_code=ret_code,
+                    )
+
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
                 self._log.warning("api_call_error",
-                                  error=str(exc),
+                                  error=err_str,
                                   attempt=attempt,
                                   delay=delay)
                 if attempt < max_retries:

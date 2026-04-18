@@ -120,10 +120,11 @@ class ScalingManager:
         # --- Set leverage (if specified in this step) ---
         if step.set_leverage is not None:
             try:
+                side = "Buy" if direction == "LONG" else "Sell"
                 await self._bybit.set_leverage(
                     symbol=symbol,
-                    buy_leverage=step.set_leverage,
-                    sell_leverage=step.set_leverage,
+                    leverage=step.set_leverage,
+                    side=side,
                 )
                 log.info(
                     "scaling.leverage_set",

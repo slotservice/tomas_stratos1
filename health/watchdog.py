@@ -638,7 +638,7 @@ class HealthChecker:
                     now_iso = datetime.now(timezone.utc).isoformat()
                     await self._db.update_trade(
                         trade_id,
-                        state="closed",
+                        state="CLOSED",
                         close_reason="orphan_on_restart",
                         closed_at=now_iso,
                     )

@@ -498,6 +498,7 @@ class PositionManager:
             order1_bybit_id,
             timeout=self._settings.entry.entry_timeout_seconds,
             order_result=order1_result,
+            symbol=symbol,
         )
         if fill1 is None:
             log.warning(
@@ -545,6 +546,7 @@ class PositionManager:
             order2_bybit_id,
             timeout=self._settings.entry.entry_timeout_seconds,
             order_result=order2_result,
+            symbol=symbol,
         )
         if fill2 is None:
             log.warning(
@@ -1141,6 +1143,7 @@ class PositionManager:
         order_id: str,
         timeout: int = 30,
         order_result: Optional[dict] = None,
+        symbol: Optional[str] = None,
     ) -> Optional[dict]:
         """Wait for a fill event for the given Bybit order ID.
 
@@ -1168,7 +1171,6 @@ class PositionManager:
         # Check 3: Wait for the WS fill event.
         event = self._fill_events.get(order_id)
         if event is None:
-            # No event registered - create one now and also poll REST.
             event = asyncio.Event()
             self._fill_events[order_id] = event
 
@@ -1177,16 +1179,19 @@ class PositionManager:
             return self._fill_data.get(order_id)
         except asyncio.TimeoutError:
             # Last resort: check order status via REST API.
-            try:
-                order_info = await self._bybit.get_order(
-                    symbol=self._fill_data.get("_symbol", "BTCUSDT"),
-                    order_id=order_id,
-                )
-                if order_info and order_info.get("orderStatus") == "Filled":
-                    log.info("fill.found_via_rest_poll", order_id=order_id)
-                    return order_info
-            except Exception:
-                pass
+            if symbol:
+                try:
+                    order_info = await self._bybit.get_order(
+                        symbol=symbol,
+                        order_id=order_id,
+                    )
+                    if order_info and order_info.get("orderStatus") == "Filled":
+                        log.info("fill.found_via_rest_poll",
+                                 order_id=order_id, symbol=symbol)
+                        return order_info
+                except Exception:
+                    log.exception("fill.rest_poll_error",
+                                  order_id=order_id, symbol=symbol)
             return None
         finally:
             self._fill_events.pop(order_id, None)
