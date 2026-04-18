@@ -92,9 +92,13 @@ _ENTRY_PATTERNS = [
         + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
+    # "Entry Targets:\n0.4101" - Hassan Crypto format (price on next line)
+    re.compile(
+        r"entry\s+targets?\s*[:=]?\s*\n\s*" + _PRICE_RE
+        + r"(?:\s*\n\s*" + _PRICE_RE + r")?",
+        re.IGNORECASE,
+    ),
     # Numbered list under "Entry:" header e.g. "Entry :\n1) 87.0700\n2) 84.4579"
-    # List marker must be at start of line or after whitespace, NOT after a digit
-    # (to avoid "0." in "0.2050" matching as a list marker).
     re.compile(
         r"entry\s*(?:zone|orders?)?\s*[:=]?"
         r"\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE
@@ -294,6 +298,22 @@ def extract_prices(text: str) -> dict:
         "tps": [],
         "sl": None,
     }
+
+    # Normalize emoji digits (1️⃣, 2️⃣, etc.) to regular digits with ")"
+    # so they match the numbered list patterns.
+    _EMOJI_DIGITS = {
+        "\u0031\ufe0f\u20e3": "1)",  # 1️⃣
+        "\u0032\ufe0f\u20e3": "2)",  # 2️⃣
+        "\u0033\ufe0f\u20e3": "3)",  # 3️⃣
+        "\u0034\ufe0f\u20e3": "4)",  # 4️⃣
+        "\u0035\ufe0f\u20e3": "5)",  # 5️⃣
+        "\u0036\ufe0f\u20e3": "6)",  # 6️⃣
+        "\u0037\ufe0f\u20e3": "7)",  # 7️⃣
+        "\u0038\ufe0f\u20e3": "8)",  # 8️⃣
+        "\u0039\ufe0f\u20e3": "9)",  # 9️⃣
+    }
+    for emoji, repl in _EMOJI_DIGITS.items():
+        text = text.replace(emoji, repl)
 
     # --- Entry ---
     for pat in _ENTRY_PATTERNS:
