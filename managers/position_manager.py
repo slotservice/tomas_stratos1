@@ -624,9 +624,12 @@ class PositionManager:
         # ----------------------------------------------------------
         # 14. Set TP and SL via set_trading_stop.
         # ----------------------------------------------------------
-        # Get current market price to validate TPs against actual
-        # mark price (not just avg_entry).
+        # Get current market price + liquidation price to validate
+        # the SL against actual position state (prevents liquidation
+        # before SL triggers - the scenario where fill slippage puts
+        # the SL inside the liquidation zone).
         current_mark = avg_entry
+        liq_price = None
         try:
             ticker = await self._bybit.get_ticker(symbol)
             if ticker:
@@ -635,6 +638,44 @@ class PositionManager:
                     current_mark = mp
         except Exception:
             pass
+
+        # Fetch actual position to get liquidation price from Bybit.
+        try:
+            pos_side = "Buy" if direction == "LONG" else "Sell"
+            pos = await self._bybit.get_position(symbol, pos_side)
+            if pos:
+                lp = float(pos.get("liqPrice", 0) or 0)
+                if lp > 0:
+                    liq_price = lp
+        except Exception:
+            log.exception("trade.liq_price_fetch_failed", symbol=symbol)
+
+        # Safety adjust SL so it fires BEFORE liquidation
+        # (prevents the "liquidated before SL triggered" problem).
+        if sl_price and liq_price:
+            buffer_pct = 0.005  # 0.5% safety buffer before liq
+            if direction == "LONG":
+                # SL must be ABOVE liquidation price (LONG: liq is below entry)
+                min_safe_sl = liq_price * (1 + buffer_pct)
+                if sl_price <= min_safe_sl:
+                    log.warning(
+                        "trade.sl_inside_liq_zone.adjusting",
+                        symbol=symbol, old_sl=sl_price,
+                        new_sl=min_safe_sl, liq_price=liq_price,
+                    )
+                    sl_price = round(min_safe_sl, 8)
+                    trade.sl_price = sl_price
+            else:
+                # SL must be BELOW liquidation price (SHORT: liq is above entry)
+                max_safe_sl = liq_price * (1 - buffer_pct)
+                if sl_price >= max_safe_sl:
+                    log.warning(
+                        "trade.sl_inside_liq_zone.adjusting",
+                        symbol=symbol, old_sl=sl_price,
+                        new_sl=max_safe_sl, liq_price=liq_price,
+                    )
+                    sl_price = round(max_safe_sl, 8)
+                    trade.sl_price = sl_price
 
         # Find a valid TP that hasn't been passed by current mark price.
         # For LONG: TP must be ABOVE current mark price
