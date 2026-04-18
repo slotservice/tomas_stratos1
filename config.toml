@@ -23,9 +23,10 @@ scaling_leverage = 50.0           # Leverage after +2.4% scaling step
 
 [entry]
 order_type = "Market"             # Market orders for entry
-num_entry_orders = 2              # Two linked entry orders
+num_entry_orders = 1              # 1 = single market order (simpler, cheaper),
+                                  # 2 = split into two orders (legacy)
 slippage_tolerance_pct = 0.5      # Max acceptable slippage %
-entry_timeout_seconds = 30        # Timeout for second entry order
+entry_timeout_seconds = 30        # Timeout for fill confirmation
 
 [breakeven]
 trigger_pct = 2.3                 # Move SL to BE at +2.3%

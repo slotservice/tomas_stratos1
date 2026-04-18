@@ -385,8 +385,9 @@ class PositionManager:
 
         # Split into 2 equal parts for 2 entry orders,
         # rounded down to exchange step size.
+        num_orders = max(1, self._settings.entry.num_entry_orders)
         try:
-            qty_per_order = self._bybit.round_qty(quantity / 2.0, symbol)
+            qty_per_order = self._bybit.round_qty(quantity / num_orders, symbol)
         except Exception:
             import math
             if entry_price > 10000:
@@ -574,98 +575,109 @@ class PositionManager:
             log.exception("notify.entry1_filled_failed")
 
         # ----------------------------------------------------------
-        # 11. Place entry order 2.
+        # 11-12. Place entry order 2 (only if num_entry_orders > 1).
+        # For single-order mode, skip to merge step with entry2 = entry1.
         # ----------------------------------------------------------
-        order2_result = await self._place_entry_order(
-            trade=trade,
-            symbol=symbol,
-            side=side,
-            qty=qty_per_order,
-            position_idx=position_idx,
-            order_label="entry2",
-        )
-        if order2_result is None:
-            # Entry 1 filled but entry 2 failed -- close partial.
-            await self._abort_trade(
-                trade,
-                "Entry 2 kunde inte placeras. Stanger partiell position.",
-                close_partial=True,
+        if num_orders > 1:
+            order2_result = await self._place_entry_order(
+                trade=trade,
+                symbol=symbol,
+                side=side,
+                qty=qty_per_order,
+                position_idx=position_idx,
+                order_label="entry2",
             )
-            return None
+            if order2_result is None:
+                await self._abort_trade(
+                    trade,
+                    "Entry 2 kunde inte placeras. Stanger partiell position.",
+                    close_partial=True,
+                )
+                return None
 
-        order2_bybit_id = order2_result.get("orderId", "")
-        trade.entry2_order_id = order2_bybit_id
-        trade.bybit_order_ids.append(order2_bybit_id)
-        trade.transition(TradeState.ENTRY2_PLACED)
-        await self._persist_trade_state(trade, entry2_order_id_bybit=order2_bybit_id)
+            order2_bybit_id = order2_result.get("orderId", "")
+            trade.entry2_order_id = order2_bybit_id
+            trade.bybit_order_ids.append(order2_bybit_id)
+            trade.transition(TradeState.ENTRY2_PLACED)
+            await self._persist_trade_state(trade, entry2_order_id_bybit=order2_bybit_id)
 
-        # ----------------------------------------------------------
-        # 12. Wait for entry 2 fill confirmation.
-        # ----------------------------------------------------------
-        fill2 = await self._wait_for_fill(
-            order2_bybit_id,
-            timeout=self._settings.entry.entry_timeout_seconds,
-            order_result=order2_result,
-            symbol=symbol,
-        )
-        if fill2 is None:
-            log.warning(
-                "entry2.fill_timeout",
-                trade_id=trade.id,
+            fill2 = await self._wait_for_fill(
+                order2_bybit_id,
+                timeout=self._settings.entry.entry_timeout_seconds,
+                order_result=order2_result,
                 symbol=symbol,
             )
-            await self._abort_trade(
-                trade,
-                "Entry 2 fylldes inte inom timeout. Stanger partiell position.",
-                close_partial=True,
-            )
-            return None
+            if fill2 is None:
+                log.warning(
+                    "entry2.fill_timeout",
+                    trade_id=trade.id,
+                    symbol=symbol,
+                )
+                await self._abort_trade(
+                    trade,
+                    "Entry 2 fylldes inte inom timeout. Stanger partiell position.",
+                    close_partial=True,
+                )
+                return None
+        else:
+            # Single-order mode: fill2 mirrors fill1 for downstream logic.
+            order2_bybit_id = order1_bybit_id
+            fill2 = fill1
 
         trade.entry2_fill_price = float(fill2.get("avgPrice", 0) or fill2.get("price", 0) or entry_price)
         trade.transition(TradeState.ENTRY2_FILLED)
 
-        # Send "ENTRY 2 TAGEN" notification
-        try:
-            fill2_qty = float(fill2.get("cumExecQty", qty_per_order) or qty_per_order)
-            fill1_qty = float(fill1.get("cumExecQty", qty_per_order) or qty_per_order)
-            fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
-            fill2_im = (fill2_qty * trade.entry2_fill_price) / max(leverage, 1)
-            await self._notifier.entry2_filled(
-                trade=trade,
-                qty=fill2_qty,
-                im=fill2_im,
-                im_total=fill1_im + fill2_im,
-                bot_id=str(trade.id),
-                bybit_id=order2_bybit_id,
-            )
-        except Exception:
-            log.exception("notify.entry2_filled_failed")
+        fill1_qty = float(fill1.get("cumExecQty", qty_per_order) or qty_per_order)
+        fill2_qty = float(fill2.get("cumExecQty", qty_per_order) or qty_per_order)
+        fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
+        fill2_im = (fill2_qty * trade.entry2_fill_price) / max(leverage, 1)
+
+        # Send Entry 2 + Merged notifications only when actually using
+        # 2 orders. Single-order mode already notified via entry1_filled.
+        if num_orders > 1:
+            try:
+                await self._notifier.entry2_filled(
+                    trade=trade,
+                    qty=fill2_qty,
+                    im=fill2_im,
+                    im_total=fill1_im + fill2_im,
+                    bot_id=str(trade.id),
+                    bybit_id=order2_bybit_id,
+                )
+            except Exception:
+                log.exception("notify.entry2_filled_failed")
 
         # ----------------------------------------------------------
-        # 13. Both filled: calculate avg_entry.
+        # 13. Calculate avg_entry and total qty.
+        # For 1-order mode, both fills are the same order.
         # ----------------------------------------------------------
-        avg_entry = round(
-            (trade.entry1_fill_price + trade.entry2_fill_price) / 2.0, 8
-        )
+        if num_orders > 1:
+            avg_entry = round(
+                (trade.entry1_fill_price + trade.entry2_fill_price) / 2.0, 8
+            )
+            trade.quantity = fill1_qty + fill2_qty
+        else:
+            avg_entry = trade.entry1_fill_price
+            trade.quantity = fill1_qty
         trade.avg_entry = avg_entry
-        trade.quantity = fill1_qty + fill2_qty
 
-        # Send "Sammanslagning av ENTRY 1 + ENTRY 2" notification
-        try:
-            await self._notifier.entries_merged(
-                trade=trade,
-                entry1=trade.entry1_fill_price,
-                qty1=fill1_qty,
-                im1=fill1_im,
-                entry2=trade.entry2_fill_price,
-                qty2=fill2_qty,
-                im2=fill2_im,
-                avg_entry=avg_entry,
-                total_qty=fill1_qty + fill2_qty,
-                im_total=fill1_im + fill2_im,
-            )
-        except Exception:
-            log.exception("notify.entries_merged_failed")
+        # Send "Sammanslagning" only in 2-order mode.
+        if num_orders > 1:
+            try:
+                await self._notifier.entries_merged(
+                    trade=trade,
+                    entry1=trade.entry1_fill_price,
+                    qty1=fill1_qty,
+                    im1=fill1_im,
+                    entry2=trade.entry2_fill_price,
+                    qty2=fill2_qty,
+                    im2=fill2_im,
+                    avg_entry=avg_entry,
+                    total_qty=fill1_qty + fill2_qty,
+                    im_total=fill1_im + fill2_im,
+                )
+            except Exception:
+                log.exception("notify.entries_merged_failed")
 
         # ----------------------------------------------------------
         # 14. Set TP and SL via set_trading_stop.

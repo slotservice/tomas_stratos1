@@ -183,10 +183,59 @@ class ScalingManager:
             )
             await self._safe_notify(
                 f"[SCALING VARNING] {symbol}: likvidationspris for nara "
-                f"efter steg {next_step_idx + 1}. Kontrollera positionen!"
+                f"efter steg {next_step_idx + 1}. Flyttar SL for sakerhet."
             )
-            # We still record the step as executed -- rolling back leverage /
-            # margin on-exchange would be more dangerous than the warning.
+
+        # --- After scaling (esp. x50 leverage), re-adjust SL if it's
+        #     now inside the new liquidation zone (critical to prevent
+        #     KERNELUSDT-style liquidations where leverage x50 shrinks
+        #     the liq distance below the original SL). ---
+        try:
+            pos_side = "Buy" if direction == "LONG" else "Sell"
+            pos = await self._bybit.get_position(symbol, pos_side)
+            if pos:
+                liq_price = float(pos.get("liqPrice", 0) or 0)
+                if liq_price > 0 and trade.sl_price:
+                    buffer_pct = 0.03  # 3% safety buffer
+                    if direction == "LONG":
+                        min_safe_sl = liq_price * (1 + buffer_pct)
+                        if trade.sl_price <= min_safe_sl:
+                            log.warning(
+                                "scaling.sl_inside_liq_after_step.moving",
+                                trade_id=trade.id, symbol=symbol,
+                                old_sl=trade.sl_price,
+                                new_sl=min_safe_sl,
+                                liq_price=liq_price,
+                            )
+                            new_sl = round(min_safe_sl, 8)
+                            await self._bybit.set_trading_stop(
+                                symbol=symbol,
+                                position_idx=position_idx,
+                                stop_loss=new_sl,
+                            )
+                            trade.sl_price = new_sl
+                    else:
+                        max_safe_sl = liq_price * (1 - buffer_pct)
+                        if trade.sl_price >= max_safe_sl:
+                            log.warning(
+                                "scaling.sl_inside_liq_after_step.moving",
+                                trade_id=trade.id, symbol=symbol,
+                                old_sl=trade.sl_price,
+                                new_sl=max_safe_sl,
+                                liq_price=liq_price,
+                            )
+                            new_sl = round(max_safe_sl, 8)
+                            await self._bybit.set_trading_stop(
+                                symbol=symbol,
+                                position_idx=position_idx,
+                                stop_loss=new_sl,
+                            )
+                            trade.sl_price = new_sl
+        except Exception:
+            log.exception(
+                "scaling.sl_liq_check_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
 
         # --- Update trade state ---
         trade.scaling_step = next_step_idx + 1
