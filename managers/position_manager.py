@@ -275,6 +275,38 @@ class PositionManager:
                 settings=(self._settings.wallet, self._settings.leverage),
             )
 
+        # Slippage guard: reject signal if current market price is too
+        # far from the signal's entry price. Prevents placing orders on
+        # stale signals where the market has already moved through the
+        # TP or SL zone - the main cause of the PROMUSDT liquidation.
+        try:
+            ticker = await self._bybit.get_ticker(symbol)
+            if ticker:
+                current = float(ticker.get("markPrice", 0) or ticker.get("lastPrice", 0) or 0)
+                if current > 0 and entry_price > 0:
+                    price_diff_pct = abs(current - entry_price) / entry_price * 100
+                    max_slippage = 3.0  # reject if market moved >3% from signal
+                    if price_diff_pct > max_slippage:
+                        log.warning(
+                            "signal.stale_price",
+                            symbol=symbol,
+                            signal_entry=entry_price,
+                            current_mark=current,
+                            diff_pct=round(price_diff_pct, 2),
+                        )
+                        await self._safe_notify(
+                            f"⚠️ SIGNAL AVVISAD (pris for langt fran entry)\n"
+                            f"📊 Symbol: #{symbol}\n"
+                            f"📈 Riktning: {direction}\n"
+                            f"💥 Signal entry: {entry_price}\n"
+                            f"📍 Marknadspris: {current}\n"
+                            f"📍 Diff: {price_diff_pct:.2f}% (max {max_slippage}%)\n"
+                            f"📍 Signalen ar for gammal / marknad har redan flyttat."
+                        )
+                        return None
+        except Exception:
+            log.exception("signal.slippage_check_error", symbol=symbol)
+
         # Round leverage to symbol's leverage step (keeps e.g. 12.34 precision).
         try:
             # Ensure instrument info is cached so round_leverage works.
@@ -666,12 +698,14 @@ class PositionManager:
         except Exception:
             log.exception("trade.liq_price_fetch_failed", symbol=symbol)
 
-        # Safety adjust SL so it fires BEFORE liquidation
-        # (prevents the "liquidated before SL triggered" problem).
+        # Safety adjust SL so it fires BEFORE liquidation.
+        # Bybit's reported liq_price is the bankruptcy price - actual
+        # liquidation happens ~2-3% earlier due to maintenance margin.
+        # So we need a 3% buffer to ensure SL triggers first.
         if sl_price and liq_price:
-            buffer_pct = 0.005  # 0.5% safety buffer before liq
+            buffer_pct = 0.03  # 3% safety buffer before liq
             if direction == "LONG":
-                # SL must be ABOVE liquidation price (LONG: liq is below entry)
+                # LONG: liq is below entry, SL must be even higher than liq+buffer
                 min_safe_sl = liq_price * (1 + buffer_pct)
                 if sl_price <= min_safe_sl:
                     log.warning(
@@ -682,7 +716,7 @@ class PositionManager:
                     sl_price = round(min_safe_sl, 8)
                     trade.sl_price = sl_price
             else:
-                # SL must be BELOW liquidation price (SHORT: liq is above entry)
+                # SHORT: liq is above entry, SL must be even lower than liq-buffer
                 max_safe_sl = liq_price * (1 - buffer_pct)
                 if sl_price >= max_safe_sl:
                     log.warning(
