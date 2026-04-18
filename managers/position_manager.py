@@ -258,10 +258,31 @@ class PositionManager:
         raw_quantity = (initial_margin * leverage) / entry_price
 
         # Ensure instrument info is cached for this symbol.
+        # If the symbol doesn't exist on Bybit, reject the signal early.
         try:
-            await self._bybit.get_instrument_info(symbol)
+            instrument_info = await self._bybit.get_instrument_info(symbol)
+            if not instrument_info:
+                log.warning(
+                    "signal.symbol_not_on_bybit",
+                    symbol=symbol,
+                )
+                await self._safe_notify(
+                    f"⚠️ SYMBOL EJ TILLGANGLIG\n"
+                    f"📊 Symbol: #{symbol}\n"
+                    f"📍 {symbol} finns inte som perpetual pa Bybit. Signal hoppas over."
+                )
+                return None
         except Exception:
-            log.warning("signal.instrument_info_fetch_failed", symbol=symbol)
+            log.warning(
+                "signal.instrument_info_fetch_failed",
+                symbol=symbol,
+            )
+            await self._safe_notify(
+                f"⚠️ SYMBOL VALIDERING MISSLYCKADES\n"
+                f"📊 Symbol: #{symbol}\n"
+                f"📍 Kunde inte kontrollera {symbol} pa Bybit. Signal hoppas over."
+            )
+            return None
 
         # Round to the symbol's precision using Bybit instrument info.
         try:
@@ -420,16 +441,53 @@ class PositionManager:
         # ----------------------------------------------------------
         # 9. Send "Signal mottagen" notification.
         # ----------------------------------------------------------
+        from core.time_utils import format_time, now_utc
         channel_name = (
             getattr(signal, "channel_name", "")
             or getattr(signal, "source_channel_name", "")
+            or "Unknown"
         )
         auto_sl_note = " (Auto-SL)" if auto_sl_applied else ""
+
+        # Build TP lines - only real TPs (skip zeros/empty)
+        tp_lines = []
+        for i, tp in enumerate(tp_list, start=1):
+            if tp and tp > 0:
+                if entry_price > 0:
+                    if direction == "LONG":
+                        pct = (tp - entry_price) / entry_price * 100
+                    else:
+                        pct = (entry_price - tp) / entry_price * 100
+                    tp_lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%)")
+                else:
+                    tp_lines.append(f"🎯 TP{i}: {tp}")
+        tp_text = "\n".join(tp_lines) if tp_lines else "🎯 TP: (none)"
+
+        # SL with percentage
+        if sl_price and entry_price > 0:
+            if direction == "LONG":
+                sl_pct = (sl_price - entry_price) / entry_price * 100
+            else:
+                sl_pct = (entry_price - sl_price) / entry_price * 100
+            sl_text = f"🚩 SL: {sl_price} ({sl_pct:+.2f}%)"
+        else:
+            sl_text = f"🚩 SL: {sl_price}"
+
         await self._safe_notify(
-            f"[SIGNAL MOTTAGEN] {symbol} {direction}{auto_sl_note}\n"
-            f"Entry: {entry_price} | SL: {sl_price}\n"
-            f"Leverage: x{leverage} | Qty: {quantity}\n"
-            f"Kalla: {channel_name}\n"
+            f"✅ [SIGNAL MOTTAGEN] {symbol} {direction}{auto_sl_note}\n"
+            f"🕒 Time: {format_time(now_utc())}\n"
+            f"📢 From channel: {channel_name}\n"
+            f"📊 Symbol: #{symbol}\n"
+            f"📈 Riktning: {direction}\n"
+            f"\n"
+            f"💥 Entry: {entry_price}\n"
+            f"{tp_text}\n"
+            f"{sl_text}\n"
+            f"\n"
+            f"⚙️ Leverage: x{leverage}\n"
+            f"💰 IM: {initial_margin} USDT\n"
+            f"💵 Qty: {quantity}\n"
+            f"\n"
             f"Entry 1 placerad..."
         )
 
