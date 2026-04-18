@@ -75,10 +75,36 @@ _RANGE_SEP = r"(?:[^\S\n]*[-–~]+[^\S\n]*|[^\S\n]+to[^\S\n]+)"
 
 # Entry patterns
 _ENTRY_PATTERNS = [
+    # "Entry Market Price (0.2050)" format (match FIRST - most specific)
+    re.compile(
+        r"entry\s+market\s+price\s*\(\s*" + _PRICE_RE + r"\s*\)",
+        re.IGNORECASE,
+    ),
+    # "ENTRY PRICE: 0.2050" - prioritise before numbered list to avoid 0. trap
+    re.compile(
+        r"entry\s+price\s*[:=@]?\s*" + _PRICE_RE
+        + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
+        re.IGNORECASE,
+    ),
+    # "ENTRY1: 0.4241" / "ENTRY 1: ..."
+    re.compile(
+        r"entry\s*\d+\s*[:=@]\s*" + _PRICE_RE
+        + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
+        re.IGNORECASE,
+    ),
+    # Numbered list under "Entry:" header e.g. "Entry :\n1) 87.0700\n2) 84.4579"
+    # List marker must be at start of line or after whitespace, NOT after a digit
+    # (to avoid "0." in "0.2050" matching as a list marker).
+    re.compile(
+        r"entry\s*(?:zone|orders?)?\s*[:=]?"
+        r"\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE
+        + r"(?:\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE + r")?",
+        re.IGNORECASE,
+    ),
     # "Entry: 65000" / "Entry Zone: 3200-3250" / "Buy: 0.152"
     re.compile(
-        r"(?:entry\s*(?:zone|price|area)?|buy(?:\s*(?:zone|price|area|at|around|@))?|"
-        r"open|limit|market\s*(?:buy|entry))\s*[:=@]?\s*"
+        r"(?:entry\s*(?:zone|price|area|orders?)?|buy(?:\s*(?:zone|price|area|at|around|@))?|"
+        r"open|limit|market\s*(?:buy|entry))\s*[:=@]\s*"
         + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
@@ -93,13 +119,20 @@ _ENTRY_PATTERNS = [
 _TP_PATTERNS = [
     # "TP1: 66000" / "T1: 66000" / "Target 1: 66000"
     re.compile(
-        r"(?:tp|t|target|take\s*profit)\s*(\d+)\s*[:=]?\s*" + _PRICE_RE,
+        r"(?:tp|t|target|take[\s_-]*profit)\s*(\d+)\s*[:=]?\s*" + _PRICE_RE,
         re.IGNORECASE,
     ),
-    # "Targets: 3300/3400/3500" or "Targets: 3300, 3400, 3500"
+    # Numbered list under "Targets :" header e.g. "Targets :\n1) 87.57\n2) 89.38"
+    # List markers must be "N)" or "N." followed by SPACE - not matching "0." in prices.
     re.compile(
-        r"(?:targets?|tps?|take\s*profits?)\s*[:=]?\s*"
-        r"([\d.,\s/|]+)",
+        r"(?:targets?|take[\s_-]*profits?)\s*[:=]?"
+        r"\s*\n\s*((?:\d+[\)\.]\s+[\d.]+\s*\n?\s*){1,8})",
+        re.IGNORECASE,
+    ),
+    # "Targets: 3300/3400/3500" or "Targets: 3300, 3400, 3500" (comma/slash separated)
+    re.compile(
+        r"(?:targets?|tps?|take[\s_-]*profits?)\s*[:=]?\s*"
+        r"([\d.,\s/|\-]+)",
         re.IGNORECASE,
     ),
 ]
@@ -290,15 +323,45 @@ def extract_prices(text: str) -> dict:
         if price > 0:
             collected_tps[idx] = price
 
-    # Pattern 2: comma/slash-separated list ("Targets: 3300/3400/3500")
+    # Pattern 2: numbered list under "Targets:" header
+    # e.g. "Targets :\n1) 87.57\n2) 89.38\n3) 91.20"
     if not collected_tps:
         m = _TP_PATTERNS[1].search(text)
         if m:
+            block = m.group(1)
+            # Extract "N) price" or "N. price" pairs from the block
+            for item in re.finditer(
+                r"(\d+)[\)\.]\s*([\d.]+)", block
+            ):
+                idx = int(item.group(1))
+                price = _parse_price(item.group(2))
+                if price > 0:
+                    collected_tps[idx] = price
+
+    # Pattern 3: parenthesised list - "TP (0.1950-0.1900-0.1850-0.1750)"
+    if not collected_tps:
+        pat = re.compile(
+            r"(?:tps?|targets?|take[\s_-]*profits?)\s*\(([^)]+)\)",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if m:
             raw_list = m.group(1)
-            # Split on / , | or whitespace
-            parts = re.split(r"[/|,\s]+", raw_list.strip())
+            parts = re.split(r"[/|,\-\s]+", raw_list.strip())
             for i, part in enumerate(parts, start=1):
-                price = _parse_price(part)
+                price = _parse_price(part.rstrip(".,"))
+                if price > 0:
+                    collected_tps[i] = price
+
+    # Pattern 4: comma/slash-separated list ("Targets: 3300/3400/3500")
+    if not collected_tps:
+        m = _TP_PATTERNS[2].search(text)
+        if m:
+            raw_list = m.group(1)
+            # Split on / , | - or whitespace
+            parts = re.split(r"[/|,\-\s]+", raw_list.strip())
+            for i, part in enumerate(parts, start=1):
+                price = _parse_price(part.rstrip(".,"))
                 if price > 0:
                     collected_tps[i] = price
 
