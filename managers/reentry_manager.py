@@ -131,10 +131,16 @@ class ReentryManager:
                 trade_id=trade.id,
                 symbol=trade.signal.symbol,
             )
-            await self._safe_notify(
-                f"[REENTRY ERROR] {trade.signal.symbol}: "
-                f"kunde inte oppna ny trade vid reentry. Se loggar."
-            )
+            # Throttle error notifications - only once per 5 minutes
+            # per trade to avoid spam when conditions don't improve.
+            import time as _time
+            last_notify = getattr(trade, "_last_reentry_error_notify", 0)
+            if _time.monotonic() - last_notify > 300:
+                trade._last_reentry_error_notify = _time.monotonic()
+                await self._safe_notify(
+                    f"[REENTRY ERROR] {trade.signal.symbol}: "
+                    f"kunde inte oppna ny trade vid reentry. Se loggar."
+                )
             return False
 
         # --- Update the original trade ---
@@ -205,23 +211,24 @@ class ReentryManager:
         direction: str,
         original_entry: float,
         current_price: float,
-        tolerance_pct: float = 0.3,
+        tolerance_pct: float = 0.5,
     ) -> bool:
-        """Check if current price is at or past the original entry.
+        """Check if current price has RETURNED to within tolerance of
+        the original signal entry.
 
-        Uses a small tolerance (0.3 %) to avoid missing the exact tick.
+        Re-entry should fire only when price is close to the original
+        entry again (symmetric band around entry), not when price is
+        still far away on either side.
 
-        For LONG: price must be at or below entry + tolerance.
-        For SHORT: price must be at or above entry - tolerance.
+        A wider slippage guard in process_signal will still reject
+        obviously stale re-entries, but this symmetric check prevents
+        the re-entry manager from firing hundreds of times per minute
+        when price is nowhere near the original entry.
         """
-        tolerance = original_entry * (tolerance_pct / 100.0)
-
-        if direction == "LONG":
-            # Price should have come back down to (or near) the entry.
-            return current_price <= original_entry + tolerance
-        else:
-            # Price should have come back up to (or near) the entry.
-            return current_price >= original_entry - tolerance
+        if original_entry <= 0:
+            return False
+        diff_pct = abs(current_price - original_entry) / original_entry * 100
+        return diff_pct <= tolerance_pct
 
     async def _open_new_trade(self, original_trade: Trade) -> Optional[Any]:
         """Create a fresh trade from the original trade's signal.
