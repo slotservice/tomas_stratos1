@@ -1330,15 +1330,32 @@ class PositionManager:
                 trade_id=trade.id,
                 symbol=symbol,
             )
-            try:
-                if trade.signal:
-                    await self._notifier.order_place_failed(
-                        signal=trade.signal,
-                        order_label=order_label,
-                        reason=str(exc)[:80],
-                    )
-            except Exception:
-                log.exception("notify.order_place_failed_failed")
+            err_str = str(exc)
+            # 110007 = "available balance not enough" -> use SLUT PA PENGAR
+            # template and throttle to once per 10 minutes.
+            if "110007" in err_str or "not enough" in err_str.lower():
+                import time as _time
+                last = getattr(self, "_last_no_money_notify", 0)
+                if _time.monotonic() - last > 600:
+                    self._last_no_money_notify = _time.monotonic()
+                    try:
+                        await self._notifier._send_notify(
+                            f"❌ SLUT PÅ PENGAR ❌\n"
+                            f"📍 SYSTEM BYBIT\n"
+                            f"📍 Fel: Inga medel kvar på kontot för att öppna eller fylla på position"
+                        )
+                    except Exception:
+                        log.exception("notify.no_money_failed")
+            else:
+                try:
+                    if trade.signal:
+                        await self._notifier.order_place_failed(
+                            signal=trade.signal,
+                            order_label=order_label,
+                            reason=err_str[:80],
+                        )
+                except Exception:
+                    log.exception("notify.order_place_failed_failed")
             return None
 
         order_id_bybit = result.get("orderId", "")
