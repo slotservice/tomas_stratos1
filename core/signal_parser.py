@@ -92,10 +92,13 @@ _ENTRY_PATTERNS = [
         + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
-    # "Entry Targets:\n0.4101" - Hassan Crypto format (price on next line)
+    # "Entry Targets:\n0.4101" - Hassan Crypto / CoinAura emoji-prefix
+    # format. Allow any non-digit characters between the newline and
+    # the price (emojis like 💡, bullets, etc). Only ONE price here —
+    # a second "price on the next line" greedily absorbs the leading
+    # digit of a following TP ordinal like "1) 2.65" if allowed.
     re.compile(
-        r"entry\s+targets?\s*[:=]?\s*\n\s*" + _PRICE_RE
-        + r"(?:\s*\n\s*" + _PRICE_RE + r")?",
+        r"entry\s+targets?\s*[:=]?\s*\n[^\d\n]*" + _PRICE_RE,
         re.IGNORECASE,
     ),
     # Numbered list under "Entry:" header e.g. "Entry :\n1) 87.0700\n2) 84.4579"
@@ -121,9 +124,12 @@ _ENTRY_PATTERNS = [
 
 # TP patterns - match TP1/T1/Target 1/Take Profit 1 etc.
 _TP_PATTERNS = [
-    # "TP1: 66000" / "T1: 66000" / "Target 1: 66000"
+    # "TP1: 66000" / "T1: 66000" / "Target 1: 66000" / "TP1 ➝ 2.640"
+    # / "TP1.➝2.500" — allow any non-digit, non-newline separators
+    # (colons, periods, arrows like ➝ → ⇒ = etc.) between the TP
+    # number and the price.
     re.compile(
-        r"(?:tp|t|target|take[\s_-]*profit)\s*(\d+)\s*[:=]?\s*" + _PRICE_RE,
+        r"(?:tp|t|target|take[\s_-]*profit)\s*(\d+)[^\d\n]{0,6}" + _PRICE_RE,
         re.IGNORECASE,
     ),
     # Numbered list under "Targets :" header e.g. "Targets :\n1) 87.57\n2) 89.38"
@@ -164,18 +170,31 @@ _SHORT_KEYWORDS = re.compile(
 )
 
 # Symbol patterns (ordered by specificity)
+# Ordered from most-specific to least — first match wins. USDT-suffix
+# patterns are preferred because they're self-anchoring. Bare "#TICKER"
+# fallbacks come last and only fire when nothing else matched.
 _SYMBOL_PATTERNS = [
     # "#BTCUSDT" / "BTCUSDT" / "$BTCUSDT"
     re.compile(r"[#$]?\b([A-Z0-9]{2,20}USDT)\b", re.IGNORECASE),
-    # "BTC/USDT" / "SOL/USDT" / "BTC-USDT"
-    re.compile(r"\b([A-Z0-9]{2,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
+    # "BTC/USDT" / "SOL/USDT" / "BTC-USDT" / "Q/USDT" (1-char ticker
+    # allowed — the /USDT anchor makes it unambiguous).
+    re.compile(r"\b([A-Z0-9]{1,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
     # "Coin: SOL/USDT" / "Pair: BTC/USDT"
-    re.compile(r"(?:coin|pair|symbol|ticker)\s*[:=]\s*[#$]?([A-Z0-9]{2,15})\s*[/\-]?\s*USDT\b", re.IGNORECASE),
+    re.compile(r"(?:coin|pair|symbol|ticker)\s*[:=]\s*[#$]?([A-Z0-9]{1,15})\s*[/\-]?\s*USDT\b", re.IGNORECASE),
     # "Coin: SOL" (no USDT suffix)
     re.compile(r"(?:coin|pair|symbol|ticker)\s*[:=]\s*[#$]?([A-Z0-9]{2,15})\b", re.IGNORECASE),
     # Standalone symbol at start of line or after emoji: "BTCUSDT" / "#SOL"
-    re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰✅❌]*\s*([A-Z0-9]{2,15}USDT)\b", re.IGNORECASE),
-    re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰✅❌]*\s*([A-Z0-9]{2,10})\b", re.IGNORECASE),
+    # Prefix emoji class extended with more currency/signal emojis.
+    re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰💵💴💶💷💹💲✅❌]*\s*([A-Z0-9]{2,15}USDT)\b", re.IGNORECASE),
+    # "PAIR ✈️MOVR/USDT" — "PAIR" / "pair" label followed by an emoji
+    # or whitespace then the ticker (CoinAura header format).
+    re.compile(r"\bpair\b[^A-Za-z0-9\n]*([A-Z0-9]{1,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
+    re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰💵💴💶💷💹💲✅❌]*\s*([A-Z0-9]{2,10})\b", re.IGNORECASE),
+    # FALLBACK: "#MIVR" or "#DAM" — a hash-prefixed ticker with no
+    # USDT suffix. We append USDT ourselves. 2-10 uppercase letters +
+    # digits, must be followed by non-word char (emoji, newline, end
+    # of string) to avoid capturing half of a longer word.
+    re.compile(r"#([A-Z0-9]{2,10})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
 ]
 
 
@@ -304,15 +323,15 @@ def extract_prices(text: str) -> dict:
     # Normalize emoji digits (1️⃣, 2️⃣, etc.) to regular digits with ")"
     # so they match the numbered list patterns.
     _EMOJI_DIGITS = {
-        "\u0031\ufe0f\u20e3": "1)",  # 1️⃣
-        "\u0032\ufe0f\u20e3": "2)",  # 2️⃣
-        "\u0033\ufe0f\u20e3": "3)",  # 3️⃣
-        "\u0034\ufe0f\u20e3": "4)",  # 4️⃣
-        "\u0035\ufe0f\u20e3": "5)",  # 5️⃣
-        "\u0036\ufe0f\u20e3": "6)",  # 6️⃣
-        "\u0037\ufe0f\u20e3": "7)",  # 7️⃣
-        "\u0038\ufe0f\u20e3": "8)",  # 8️⃣
-        "\u0039\ufe0f\u20e3": "9)",  # 9️⃣
+        "\u0031\ufe0f\u20e3": "1) ",  # 1️⃣
+        "\u0032\ufe0f\u20e3": "2) ",  # 2️⃣
+        "\u0033\ufe0f\u20e3": "3) ",  # 3️⃣
+        "\u0034\ufe0f\u20e3": "4) ",  # 4️⃣
+        "\u0035\ufe0f\u20e3": "5) ",  # 5️⃣
+        "\u0036\ufe0f\u20e3": "6) ",  # 6️⃣
+        "\u0037\ufe0f\u20e3": "7) ",  # 7️⃣
+        "\u0038\ufe0f\u20e3": "8) ",  # 8️⃣
+        "\u0039\ufe0f\u20e3": "9) ",  # 9️⃣
     }
     for emoji, repl in _EMOJI_DIGITS.items():
         text = text.replace(emoji, repl)
@@ -510,15 +529,21 @@ def _extract_symbol(text: str) -> Optional[str]:
     Try every symbol pattern in priority order and return the first
     plausible match, normalized to XXXUSDT.
     """
-    for pat in _SYMBOL_PATTERNS:
+    for pat_idx, pat in enumerate(_SYMBOL_PATTERNS):
         m = pat.search(text)
         if m:
             raw = m.group(1)
-            # Skip very short matches that are likely false positives
-            # (e.g. "TP", "SL", "T1") unless they are known bases.
             upper = raw.upper()
-            if len(upper) <= 2 and upper not in _KNOWN_BASES:
-                continue
+            # A USDT-anchored pattern (1, 2, 3, 5) is high-confidence
+            # — the "USDT" suffix in the source text makes even 1-char
+            # tickers like "Q/USDT" unambiguous. Skip the short-name
+            # filter for those.
+            usdt_anchored_indices = {0, 1, 2, 4, 5}
+            if pat_idx not in usdt_anchored_indices:
+                # Skip very short matches that are likely false positives
+                # (e.g. "TP", "SL", "T1") unless they are known bases.
+                if len(upper) <= 2 and upper not in _KNOWN_BASES:
+                    continue
             # Skip tokens that are obviously not symbols
             if upper in (
                 "TP", "SL", "BE", "PNL", "ROI", "USD", "BUY", "SELL",
@@ -526,6 +551,13 @@ def _extract_symbol(text: str) -> Optional[str]:
                 "PROFIT", "LOSS", "ZONE", "AREA", "PRICE", "COIN",
                 "PAIR", "SIGNAL", "ALERT", "UPDATE", "NEW", "FREE",
                 "VIP", "CALL", "CALLS",
+                # Signal-metadata words that often appear at line start
+                # and would otherwise false-match the generic fallback.
+                "LEVERAGE", "ORDERS", "ORDER", "TYPE", "SETUP",
+                "STRATEGY", "ACCURACY", "CROSS", "ISOLATED", "TREND",
+                "TRENDLINE", "SCALPING", "SWING", "DYNAMIC", "FIXED",
+                "HIGH", "LOW", "MID", "TERM", "OPPORTUNITY", "STRONG",
+                "RISK", "MANAGE", "MANUAL", "MANUALLY",
             ):
                 continue
             return normalize_symbol(raw)
