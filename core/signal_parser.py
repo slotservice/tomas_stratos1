@@ -92,13 +92,18 @@ _ENTRY_PATTERNS = [
         + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
-    # "Entry Targets:\n0.4101" - Hassan Crypto / CoinAura emoji-prefix
-    # format. Allow any non-digit characters between the newline and
-    # the price (emojis like 💡, bullets, etc). Only ONE price here —
-    # a second "price on the next line" greedily absorbs the leading
-    # digit of a following TP ordinal like "1) 2.65" if allowed.
+    # "Entry Targets:\n0.4101" / "Entry Zone:\n💠 9.19\n💠 9.11" —
+    # header on one line, price(s) on following line(s) with optional
+    # emoji/bullet prefix. Accepted keywords: target(s), zone, area,
+    # order(s). An OPTIONAL second price is captured on the IMMEDIATELY
+    # next line only. The second capture uses an inline digit regex
+    # (NO leading \s*) because _PRICE_RE's leading \s* would cross the
+    # blank line and grab the "1" of a following TP ordinal like
+    # "1) 2.65" — the CoinAura MOVR regression on 2026-04-24.
     re.compile(
-        r"entry\s+targets?\s*[:=]?\s*\n[^\d\n]*" + _PRICE_RE,
+        r"entry\s+(?:targets?|zone|orders?|area)\s*[:=]?[^\S\n]*\n[^\d\n]*"
+        + _PRICE_RE
+        + r"(?:[^\S\n]*\n[^\d\n]+(\d[\d,]*\.?\d*))?",
         re.IGNORECASE,
     ),
     # Numbered list under "Entry:" header e.g. "Entry :\n1) 87.0700\n2) 84.4579"
@@ -108,11 +113,13 @@ _ENTRY_PATTERNS = [
         + r"(?:\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
-    # "Entry: 65000" / "Entry Zone: 3200-3250" / "Buy: 0.152"
+    # "Entry: 65000" / "Entry Zone: 3200-3250" / "Buy: 0.152" /
+    # "Entry Target: (0.07300)" (parenthesised single price).
     re.compile(
-        r"(?:entry\s*(?:zone|price|area|orders?)?|buy(?:\s*(?:zone|price|area|at|around|@))?|"
-        r"open|limit|market\s*(?:buy|entry))\s*[:=@]\s*"
-        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
+        r"(?:entry\s*(?:zone|price|area|orders?|targets?)?|"
+        r"buy(?:\s*(?:zone|price|area|at|around|@))?|"
+        r"open|limit|market\s*(?:buy|entry))\s*[:=@]\s*\(?\s*"
+        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?\s*\)?",
         re.IGNORECASE,
     ),
     # Standalone "Entry 65000" without colon
@@ -132,16 +139,19 @@ _TP_PATTERNS = [
         r"(?:tp|t|target|take[\s_-]*profit)\s*(\d+)[^\d\n]{0,6}" + _PRICE_RE,
         re.IGNORECASE,
     ),
-    # Numbered list under "Targets :" header e.g. "Targets :\n1) 87.57\n2) 89.38"
-    # List markers must be "N)" or "N." followed by SPACE - not matching "0." in prices.
+    # Numbered list under a "Targets :" / "Take Profits :" / "Take
+    # Profit Targets :" header. e.g. "Targets :\n1) 87.57\n2) 89.38"
+    # List markers must be "N)" or "N." followed by SPACE - not
+    # matching "0." in prices. The trailing "(?:\s+targets?)?"
+    # absorbs the extra word when the header is "Take Profit Targets".
     re.compile(
-        r"(?:targets?|take[\s_-]*profits?)\s*[:=]?"
+        r"(?:targets?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?"
         r"\s*\n\s*((?:\d+[\)\.]\s+[\d.]+\s*\n?\s*){1,8})",
         re.IGNORECASE,
     ),
     # "Targets: 3300/3400/3500" or "Targets: 3300, 3400, 3500" (comma/slash separated)
     re.compile(
-        r"(?:targets?|tps?|take[\s_-]*profits?)\s*[:=]?\s*"
+        r"(?:targets?|tps?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?\s*"
         r"([\d.,\s/|\-]+)",
         re.IGNORECASE,
     ),
@@ -332,6 +342,9 @@ def extract_prices(text: str) -> dict:
         "\u0037\ufe0f\u20e3": "7) ",  # 7️⃣
         "\u0038\ufe0f\u20e3": "8) ",  # 8️⃣
         "\u0039\ufe0f\u20e3": "9) ",  # 9️⃣
+        "🥇": "1) ",  # 🥇
+        "🥈": "2) ",  # 🥈
+        "🥉": "3) ",  # 🥉
     }
     for emoji, repl in _EMOJI_DIGITS.items():
         text = text.replace(emoji, repl)
@@ -380,9 +393,14 @@ def extract_prices(text: str) -> dict:
                     collected_tps[idx] = price
 
     # Pattern 3: parenthesised list - "TP (0.1950-0.1900-0.1850-0.1750)"
+    # or "Take Profits: (0.07100, 0.06860, 0.06400)" — allow an
+    # optional ":" / "=" between the header and the parenthesis.
+    # Bare "targets?" is DELIBERATELY omitted from the alternative
+    # list because "Entry Target: (<price>)" would otherwise match
+    # here and steal the TP slot (UB/CHIP/Q regression 2026-04-24).
     if not collected_tps:
         pat = re.compile(
-            r"(?:tps?|targets?|take[\s_-]*profits?)\s*\(([^)]+)\)",
+            r"(?:tps?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?\s*\(([^)]+)\)",
             re.IGNORECASE,
         )
         m = pat.search(text)
