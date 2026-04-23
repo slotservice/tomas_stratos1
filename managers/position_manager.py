@@ -730,10 +730,17 @@ class PositionManager:
             total_qty = fill1_qty + fill2_qty
             fill1_im = total_im_actual * (fill1_qty / total_qty)
             fill2_im = total_im_actual * (fill2_qty / total_qty)
+            # Overwrite trade.margin with the ACTUAL IM Bybit is
+            # charging for this position so the "Position oppnad"
+            # notification (and downstream PnL maths) reflect reality
+            # instead of the configured 20.00 nominal (client IZZU
+            # 2026-04-24: "money = bybit, not 20 usdt").
+            trade.margin = round(total_im_actual, 4)
         else:
             # Fallback to calculated value if position query failed
             fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
             fill2_im = (fill2_qty * trade.entry2_fill_price) / max(leverage, 1)
+            trade.margin = round(fill1_im + fill2_im, 4)
 
         # Send Entry 2 + Merged notifications only when actually using
         # 2 orders. Single-order mode already notified via entry1_filled.
@@ -994,6 +1001,8 @@ class PositionManager:
             trade,
             entry2_fill_price=trade.entry2_fill_price,
             avg_entry=avg_entry,
+            margin=trade.margin,
+            quantity=trade.quantity,
         )
 
         await self._db.log_event(
