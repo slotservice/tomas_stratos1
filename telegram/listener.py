@@ -422,10 +422,43 @@ class TelegramListener:
             if not raw_text:
                 return
 
+            # If this message was forwarded from another channel, append
+            # the original source so the client can tell apart "native"
+            # posts from forwards (client feedback 2026-04-24: SUI/XRP
+            # signals arriving via OkxFreecryptosignal were actually
+            # forwarded auto-generated signals, not that channel's own
+            # posts). Telethon exposes forward metadata on message.forward.
+            fwd = getattr(message, "forward", None)
+            fwd_name: Optional[str] = None
+            if fwd is not None:
+                try:
+                    fwd_chat = getattr(fwd, "chat", None)
+                    if fwd_chat is not None:
+                        fwd_name = (
+                            getattr(fwd_chat, "title", None)
+                            or getattr(fwd_chat, "username", None)
+                            or getattr(fwd_chat, "first_name", None)
+                        )
+                    if not fwd_name:
+                        fwd_sender = getattr(fwd, "sender", None)
+                        if fwd_sender is not None:
+                            fwd_name = (
+                                getattr(fwd_sender, "title", None)
+                                or getattr(fwd_sender, "username", None)
+                                or getattr(fwd_sender, "first_name", None)
+                            )
+                    if not fwd_name:
+                        fwd_name = getattr(fwd, "from_name", None)
+                except Exception:
+                    fwd_name = None
+            if fwd_name:
+                channel_name = f"{channel_name} (fwd: {fwd_name})"
+
             log.info(
                 "message_received",
                 chat_id=chat_id,
                 channel_name=channel_name,
+                forwarded=bool(fwd_name),
                 text_length=len(raw_text),
                 text_preview=raw_text[:100],
             )

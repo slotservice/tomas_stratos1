@@ -463,6 +463,15 @@ class TelegramNotifier:
         else:
             header = "ENTRY 1 TAGEN"
             entry_label = "Entry1"
+
+        # Client 2026-04-24: position-opened message must show the
+        # full contract (entry, all TPs, SL, leverage) alongside fill
+        # info so the operator sees everything in one message.
+        fill_price = trade.entry1_fill_price or signal.entry
+        tp_block = _tp_lines_pct(signal.tps, fill_price, signal.direction)
+        sl_line = _sl_line_pct(trade.sl_price or signal.sl, fill_price, signal.direction)
+        leverage = trade.leverage if trade.leverage else 0.0
+
         text = (
             f"✅ {header}\n"
             f"🕒 Tid: {_ts()}\n"
@@ -471,8 +480,13 @@ class TelegramNotifier:
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"💥 {entry_label}: {trade.entry1_fill_price}\n"
+            f"💥 {entry_label}: {fill_price}\n"
             f"💵 Kvantitet: {qty}\n"
+            f"\n"
+            f"{tp_block}\n"
+            f"{sl_line}\n"
+            f"\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
