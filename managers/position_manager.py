@@ -595,11 +595,24 @@ class PositionManager:
         # ----------------------------------------------------------
         # 9. Send "Signal mottagen & kopierad" notification.
         # ----------------------------------------------------------
+        # Effective IM = post-rounding quantity * entry / leverage.
+        # This differs from the nominal initial_margin because the
+        # exchange's lot-size rounding shifts the qty slightly, which
+        # in turn shifts the real IM (20.12 instead of flat 20.00).
+        # Client IZZU 2026-04-24: "the problem is many templates only
+        # show 20 USDT as hardcoded values". Pre-fill notifications
+        # can't read Bybit positionIM yet, so we surface the
+        # better-than-nominal estimate here and let position_opened
+        # overwrite with the exact Bybit value post-fill.
+        effective_im = initial_margin
+        if quantity and quantity > 0 and leverage and leverage > 0 and entry_price > 0:
+            effective_im = round(quantity * entry_price / leverage, 4)
+
         try:
             await self._notifier.signal_received(
                 signal=signal,
                 leverage=leverage,
-                im=initial_margin,
+                im=effective_im,
                 bot_order_id=str(trade.id),
                 bybit_order_id=order1_bybit_id,
             )
@@ -611,7 +624,7 @@ class PositionManager:
             await self._notifier.order_placed(
                 signal=signal,
                 leverage=leverage,
-                im=initial_margin,
+                im=effective_im,
                 entry1=entry_price,
                 entry2=entry_price,
                 bot_id=str(trade.id),

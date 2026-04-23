@@ -254,7 +254,7 @@ class TelegramNotifier:
             f"{sl_line}\n"
             f"\n"
             f"⚙️ Leverage ({_lev_class(lev_type)}): x{leverage}\n"
-            f"💰 IM: {im:.4f} USDT\n"
+            f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
         )
@@ -359,7 +359,7 @@ class TelegramNotifier:
             f"{sl_line}\n"
             f"\n"
             f"⚙️ Leverage ({_lev_class(lev_type)}): x{leverage}\n"
-            f"💰 IM: {im:.4f} USDT\n"
+            f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
         )
@@ -404,7 +404,7 @@ class TelegramNotifier:
             f"{sl_line}\n"
             f"\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
-            f"💰 IM: {im:.4f} USDT\n"
+            f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
         )
@@ -447,7 +447,7 @@ class TelegramNotifier:
             f"{sl_line}\n"
             f"\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{trade.leverage}\n"
-            f"💰 IM: {trade.margin:.4f} USDT (Bybit confirmed)\n"
+            f"💰 IM: {trade.margin:.2f} USDT (Bybit confirmed)\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
         )
@@ -501,7 +501,7 @@ class TelegramNotifier:
             f"{sl_line}\n"
             f"\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
-            f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.4f} USDT)\n"
+            f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
         )
@@ -529,7 +529,7 @@ class TelegramNotifier:
             f"\n"
             f"💥 Entry2: {trade.entry2_fill_price}\n"
             f"💵 Kvantitet: {qty}\n"
-            f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.4f} USDT)\n"
+            f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
         )
@@ -563,17 +563,17 @@ class TelegramNotifier:
             f"📌 ENTRY 1\n"
             f"💥 Entry: {entry1}\n"
             f"💵 Kvantitet: {qty1}\n"
-            f"💰 IM: {im1:.2f} USDT (IM totalt: {im_total:.4f} USDT)\n"
+            f"💰 IM: {im1:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"\n"
             f"📌 ENTRY 2\n"
             f"💥 Entry: {entry2}\n"
             f"💵 Kvantitet: {qty2}\n"
-            f"💰 IM: {im2:.2f} USDT (IM totalt: {im_total:.4f} USDT)\n"
+            f"💰 IM: {im2:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"\n"
             f"📌 SAMMANSATT POSITION\n"
             f"💥 Genomsnittligt Entry: {avg_entry}\n"
             f"💵 Total kvantitet: {total_qty}\n"
-            f"💰 IM totalt: {im_total:.4f} USDT\n"
+            f"💰 IM totalt: {im_total:.2f} USDT\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
         )
@@ -641,8 +641,8 @@ class TelegramNotifier:
         # Build step-specific details
         if step_num == 1:
             detail = (
-                f"   IM tillagd: {im_added:.4f} USDT\n"
-                f"   IM Total: {im_total:.4f} USDT"
+                f"   IM tillagd: {im_added:.2f} USDT\n"
+                f"   IM Total: {im_total:.2f} USDT"
             )
         elif step_num == 2:
             detail = (
@@ -657,13 +657,13 @@ class TelegramNotifier:
             )
         elif step_num >= 4:
             detail = (
-                f"   IM tillagd: {im_added:.4f} USDT\n"
-                f"   IM Total: {im_total:.4f} USDT"
+                f"   IM tillagd: {im_added:.2f} USDT\n"
+                f"   IM Total: {im_total:.2f} USDT"
             )
         else:
             detail = (
-                f"   IM tillagd: {im_added:.4f} USDT\n"
-                f"   IM Total: {im_total:.4f} USDT"
+                f"   IM tillagd: {im_added:.2f} USDT\n"
+                f"   IM Total: {im_total:.2f} USDT"
             )
 
         text = (
@@ -789,7 +789,7 @@ class TelegramNotifier:
             f"   Hedge SL: {hedge_sl}\n"
             f"   Hedge TP: {hedge_tp}\n"
             f"   Hävstång: x{leverage}\n"
-            f"   IM: {im:.4f} USDT\n"
+            f"   IM: {im:.2f} USDT\n"
             f"\n"
             f"   🔑 Order-ID BOT: {trade.id}\n"
             f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
@@ -885,7 +885,7 @@ class TelegramNotifier:
             f"   Riktning: {signal.direction}\n"
             f"   Entry: {signal.entry}\n"
             f"   Hävstång: x{leverage}\n"
-            f"   IM: {im:.4f} USDT\n"
+            f"   IM: {im:.2f} USDT\n"
             f"   Försök: {trade.reentry_count}/3\n"
             f"\n"
             f"   🔑 Order-ID BOT: {trade.id}\n"
@@ -1096,7 +1096,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"   Hävstång: x{leverage}\n"
-            f"   IM: {im:.4f} USDT\n"
+            f"   IM: {im:.2f} USDT\n"
             f"\n"
             f"   Väntar på att priset når entry-nivån."
         )
