@@ -97,6 +97,13 @@ def _sl_line_pct(sl: float, entry: float, direction: str) -> str:
     return f"🚩 SL: {sl} ({pct:+.2f}%)"
 
 
+def _lev_class(leverage: float) -> str:
+    """Classify the leverage VALUE (not the signal type).
+    Returns 'fixed' if at/below x6 (the floor), 'dynamic' otherwise.
+    """
+    return "fixed" if leverage <= 6.0 else "dynamic"
+
+
 def _pnl_sign(value: float) -> str:
     """Format PnL with explicit sign."""
     if value >= 0:
@@ -240,7 +247,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Leverage ({lev_type}): x{leverage}\n"
+            f"⚙️ Leverage ({_lev_class(leverage)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
@@ -331,7 +338,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Leverage ({lev_type}): x{leverage}\n"
+            f"⚙️ Leverage ({_lev_class(leverage)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
@@ -355,6 +362,14 @@ class TelegramNotifier:
         sl_line = _sl_line_pct(signal.sl, entry, direction)
         lev_type = signal.signal_type
 
+        # Signals carry a single entry price; only split into Entry1 +
+        # Entry2 when the two values actually differ (future-proof for
+        # signals that ever provide a two-leg entry).
+        if entry1 == entry2:
+            entry_lines = f"💥 Entry: {entry1}"
+        else:
+            entry_lines = f"💥 Entry1: {entry1}\n💥 Entry2: {entry2}"
+
         text = (
             f"✅ Order placerad ({lev_type})\n"
             f"🕒 Tid: {_ts()}\n"
@@ -363,13 +378,12 @@ class TelegramNotifier:
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"💥 Entry1: {entry1}\n"
-            f"💥 Entry2: {entry2}\n"
+            f"{entry_lines}\n"
             f"\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Hävstång ({lev_type}): x{leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(leverage)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
@@ -389,6 +403,16 @@ class TelegramNotifier:
         lev_type = signal.signal_type
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
 
+        # Collapse to single Entry line when the two fills are
+        # identical (1-order mode always, and 2-order mode when both
+        # legs happened to fill at the same price).
+        e1 = trade.entry1_fill_price
+        e2 = trade.entry2_fill_price
+        if e1 == e2 or e2 in (None, 0):
+            entry_lines = f"💥 Entry: {e1}"
+        else:
+            entry_lines = f"💥 Entry1: {e1}\n💥 Entry2: {e2}"
+
         text = (
             f"✅ Position öppnad ({lev_type})\n"
             f"🕒 Tid: {_ts()}\n"
@@ -397,13 +421,12 @@ class TelegramNotifier:
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"💥 Entry1: {trade.entry1_fill_price}\n"
-            f"💥 Entry2: {trade.entry2_fill_price}\n"
+            f"{entry_lines}\n"
             f"\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Hävstång ({lev_type}): x{trade.leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(trade.leverage)}): x{trade.leverage}\n"
             f"💰 IM: {trade.margin:.2f} USDT (Bybit confirmed)\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
@@ -418,19 +441,31 @@ class TelegramNotifier:
         im_total: float,
         bot_id: str,
         bybit_id: str,
+        single_order: bool = False,
     ) -> str:
-        """Entry 1 filled notification."""
+        """Entry filled notification.
+
+        In 1-order mode (single_order=True) this is the only entry message
+        and renders as 'POSITION OPPNAD'. In 2-order mode it renders as
+        'ENTRY 1 TAGEN' and entry2_filled + entries_merged follow.
+        """
         signal = trade.signal
         lev_type = signal.signal_type
+        if single_order:
+            header = "POSITION ÖPPNAD"
+            entry_label = "Entry"
+        else:
+            header = "ENTRY 1 TAGEN"
+            entry_label = "Entry1"
         text = (
-            f"✅ ENTRY 1 TAGEN\n"
+            f"✅ {header}\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"💥 Entry1: {trade.entry1_fill_price}\n"
+            f"💥 {entry_label}: {trade.entry1_fill_price}\n"
             f"💵 Kvantitet: {qty}\n"
             f"💰 IM: {im:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"🔑 Order-ID BOT: {bot_id}\n"

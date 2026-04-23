@@ -55,6 +55,10 @@ trigger_pct = -2.0                # Hedge activates at -2% from entry
 max_hedge_count = 1               # Only one hedge per signal
 # hedge SL = original signal entry
 # hedge TP = original signal stop loss
+# Combined (main + hedge) net loss cap. If unrealized PnL across both
+# legs falls below -max_combined_loss_usdt, bot force-closes the main
+# leg at market so the pair can never double-lose past this bound.
+max_combined_loss_usdt = 4.0
 
 [reentry]
 enabled = true

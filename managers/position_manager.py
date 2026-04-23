@@ -114,6 +114,9 @@ class PositionManager:
             notifier=notifier,
             db=db,
         )
+        # Give hedge manager a way to force-close the main leg when the
+        # combined-loss cap is hit (no-double-loss contract).
+        self._hedge_mgr.bind_close_main_callback(self.close_trade)
         self._reentry_mgr = ReentryManager(
             settings=settings.reentry,
             bybit=bybit,
@@ -582,6 +585,7 @@ class PositionManager:
                 im_total=fill1_im,
                 bot_id=str(trade.id),
                 bybit_id=order1_bybit_id,
+                single_order=(num_orders <= 1),
             )
         except Exception:
             log.exception("notify.entry1_filled_failed")
@@ -771,13 +775,38 @@ class PositionManager:
         # Filter TPs that are still valid (not already passed by market).
         # For LONG: TP must be ABOVE current mark.
         # For SHORT: TP must be BELOW current mark.
+        # Also drop TPs whose profit distance from entry is <2% — partial
+        # closes below that threshold eat too much into the SL+buffer safety
+        # margin for minimal profit (client rule 2026-04-23).
+        min_tp_distance_pct = 2.0
         valid_tps: list[float] = []
+        skipped_too_close: list[float] = []
         for tp in tp_list:
-            if tp and tp > 0:
-                if direction == "LONG" and tp > current_mark:
-                    valid_tps.append(tp)
-                elif direction == "SHORT" and tp < current_mark:
-                    valid_tps.append(tp)
+            if not tp or tp <= 0:
+                continue
+            # Direction sanity vs current mark.
+            if direction == "LONG" and tp <= current_mark:
+                continue
+            if direction == "SHORT" and tp >= current_mark:
+                continue
+            # Distance from avg entry in %.
+            if avg_entry and avg_entry > 0:
+                if direction == "LONG":
+                    dist_pct = (tp - avg_entry) / avg_entry * 100.0
+                else:
+                    dist_pct = (avg_entry - tp) / avg_entry * 100.0
+                if dist_pct < min_tp_distance_pct:
+                    skipped_too_close.append(tp)
+                    continue
+            valid_tps.append(tp)
+
+        if skipped_too_close:
+            log.info(
+                "trade.tps_below_min_distance.skipped",
+                trade_id=trade.id, symbol=symbol,
+                skipped=skipped_too_close,
+                min_pct=min_tp_distance_pct,
+            )
 
         if not valid_tps and tp_list:
             log.warning(
@@ -1153,6 +1182,13 @@ class PositionManager:
         else:
             # Pending delayed SL move after a hedge has opened?
             await self._hedge_mgr.check_pending_sl_move(trade, current_price)
+            # No-double-loss guard: reconcile hedge lifecycle + cap
+            # combined unrealized loss. Returns True if main was closed.
+            closed = await self._hedge_mgr.check_linked_closure(
+                trade, current_price,
+            )
+            if closed:
+                return
 
     # ==================================================================
     # Trade closure
@@ -1724,36 +1760,59 @@ class PositionManager:
         return None
 
     def _infer_close_reason(self, trade: Trade, exit_price: float) -> str:
-        """Infer why a position was closed based on exit price vs SL/TP."""
+        """Infer why a position was closed based on exit price vs SL/TP.
+
+        Tolerance is widened to ~1% because LastPrice-triggered SL/TP
+        closes routinely slip a few basis points past the trigger level,
+        and partial-TP progression moves the SL to earlier TP prices —
+        so 'near a moved SL' is a far more common exit than 'exactly at
+        the original SL'.
+        """
         if trade.signal is None:
-            return "unknown"
+            return "external_close"
 
-        # Check if exit matches SL.
-        sl = trade.sl_price or trade.be_price
-        if sl and exit_price > 0:
-            sl_dist = abs(exit_price - sl) / sl * 100.0
-            if sl_dist < 0.5:
-                if trade.be_price is not None and abs(sl - trade.be_price) < 0.01:
-                    return "be_hit"
-                return "sl_hit"
+        tol_pct = 1.0  # match window in %
 
-        # Check if exit matches any TP.
+        def _near(a: float, b: float) -> bool:
+            return b > 0 and abs(a - b) / b * 100.0 <= tol_pct
+
+        # 1) Trailing stop takes priority — once armed, SL is the trail.
+        if trade.trailing_sl is not None and _near(exit_price, trade.trailing_sl):
+            return "trailing_stop"
+
+        # 2) Break-even: SL was moved to entry + buffer.
+        if trade.be_price is not None and _near(exit_price, trade.be_price):
+            return "be_hit"
+
+        # 3) TP progression: SL was advanced to a previously-hit TP
+        #    level (TP2 hit -> SL moved to TP0 reference, etc.). If the
+        #    exit is near any hit TP, call it a progressed SL.
+        for tp in trade.tp_hits or []:
+            if _near(exit_price, tp):
+                return "tp_progression_sl_hit"
+
+        # 4) Current active SL on the trade record.
+        if trade.sl_price and _near(exit_price, trade.sl_price):
+            return "sl_hit"
+
+        # 5) Any signal TP level hit.
         tp_list = (
             trade.signal.tps if hasattr(trade.signal, "tps")
             else trade.signal.tp_list if hasattr(trade.signal, "tp_list")
             else []
         )
         for tp in tp_list:
-            if tp > 0:
-                tp_dist = abs(exit_price - tp) / tp * 100.0
-                if tp_dist < 0.5:
-                    return "tp_hit"
+            if tp and _near(exit_price, tp):
+                return "tp_hit"
 
-        # Check if trailing stop.
-        if trade.trailing_sl is not None:
-            return "trailing_stop"
+        # 6) Compare against avg_entry — near-entry exits are almost
+        #    always BE/progressed-SL fills that drifted past tolerance.
+        if trade.avg_entry and _near(exit_price, trade.avg_entry):
+            return "near_entry_close"
 
-        return "unknown"
+        # 7) Last resort: flag as external close rather than "unknown"
+        #    so the operator knows the bot didn't originate it.
+        return "external_close"
 
     async def _update_report_stats(
         self,

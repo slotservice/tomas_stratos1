@@ -357,6 +357,197 @@ class HedgeManager:
             trade._hedge_sl_move_pending = False
 
     # ------------------------------------------------------------------
+    # Combined-loss guard + hedge lifecycle reconciliation
+    # ------------------------------------------------------------------
+
+    async def check_linked_closure(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> bool:
+        """Enforce the no-double-loss contract between main leg and hedge.
+
+        Two responsibilities:
+          1. Poll the hedge position on Bybit (every ~15s). If it has
+             been externally closed by its own TP or SL, reconcile: mark
+             the hedge trade closed in the DB and evaluate whether the
+             main leg should also be closed.
+          2. Compute combined unrealized PnL across main + hedge. If
+             the net sits at or below ``-max_combined_loss_usdt``, force
+             close the main leg at market so the pair can never tip
+             further into double loss.
+
+        Returns True if this call triggered a close of the main trade
+        (caller should short-circuit the rest of the trigger pipeline).
+        """
+        if trade.hedge_trade_id is None:
+            return False
+        if trade.signal is None or trade.avg_entry is None:
+            return False
+
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(trade, "_last_hedge_pos_check", 0.0)
+        if now - last < 15:
+            # Still do the cheap combined-PnL guard on every tick.
+            return await self._combined_loss_guard(trade, current_price)
+        trade._last_hedge_pos_check = now
+
+        direction = trade.signal.direction
+        hedge_direction = "SHORT" if direction == "LONG" else "LONG"
+        hedge_side = "Sell" if hedge_direction == "SHORT" else "Buy"
+        symbol = trade.signal.symbol
+
+        hedge_pos = None
+        try:
+            hedge_pos = await self._bybit.get_position(symbol, hedge_side)
+        except Exception:
+            log.exception(
+                "hedge.position_poll_error",
+                trade_id=trade.id, symbol=symbol,
+            )
+            return False
+
+        hedge_size = 0.0
+        if hedge_pos:
+            try:
+                hedge_size = float(hedge_pos.get("size", 0) or 0)
+            except (TypeError, ValueError):
+                hedge_size = 0.0
+
+        if hedge_size == 0.0 and not getattr(trade, "_hedge_reconciled", False):
+            # Hedge closed externally by its own TP/SL. Reconcile DB,
+            # then decide whether to also close the main leg.
+            trade._hedge_reconciled = True
+            try:
+                hedge_id = int(trade.hedge_trade_id)
+                await self._db.update_trade(
+                    hedge_id,
+                    state="CLOSED",
+                    close_reason="hedge_external_close",
+                    closed_at=self._now_iso(),
+                )
+                await self._db.log_event(
+                    trade_id=int(trade.id),
+                    event_type="hedge_external_close",
+                    details={
+                        "hedge_trade_id": trade.hedge_trade_id,
+                        "observed_price": current_price,
+                    },
+                )
+            except (ValueError, Exception):
+                log.exception(
+                    "hedge.reconcile_db_error", trade_id=trade.id,
+                )
+
+            await self._safe_notify(
+                f"[HEDGE STANGD] {symbol}\n"
+                f"Hedge-position stangd externt (TP/SL) vid ~{current_price}\n"
+                f"Kontrollerar huvudposition for linkad stangning..."
+            )
+            log.info(
+                "hedge.external_close_detected",
+                trade_id=trade.id, symbol=symbol,
+                current_price=current_price,
+            )
+
+        return await self._combined_loss_guard(trade, current_price)
+
+    async def _combined_loss_guard(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> bool:
+        """Force-close main leg if combined unrealized PnL is too negative."""
+        cap = getattr(self._settings, "max_combined_loss_usdt", 0.0)
+        if not cap or cap <= 0:
+            return False
+        if trade.signal is None or trade.avg_entry is None or not trade.quantity:
+            return False
+
+        direction = trade.signal.direction
+        main_qty = trade.quantity or 0.0
+        avg_entry = trade.avg_entry
+
+        # Main leg unrealized PnL (USDT).
+        if direction == "LONG":
+            main_pnl = (current_price - avg_entry) * main_qty
+        else:
+            main_pnl = (avg_entry - current_price) * main_qty
+
+        # Hedge leg PnL: if hedge still open, unrealized in opposite
+        # direction using same quantity and the price at which the hedge
+        # opened (stored as avg_entry on the hedge row). If hedge has
+        # already closed, treat as realized at the SL (worst case) so we
+        # don't under-count loss.
+        hedge_pnl = 0.0
+        try:
+            hedge_row = await self._db.get_trade(int(trade.hedge_trade_id))
+        except (ValueError, Exception):
+            hedge_row = None
+
+        if hedge_row:
+            hedge_entry = float(hedge_row.get("avg_entry", 0) or 0)
+            hedge_qty = float(hedge_row.get("quantity", 0) or main_qty)
+            hedge_state = hedge_row.get("state", "")
+            hedge_sl = float(hedge_row.get("sl_price", 0) or 0)
+            hedge_is_short = (direction == "LONG")  # hedge opposes main
+
+            if hedge_state == "CLOSED":
+                # Worst-case: assume hedge closed at its SL (= main entry).
+                # That's the defining loss scenario; TP-close is profit
+                # and already beneficial, so this bound is conservative.
+                if hedge_entry > 0 and hedge_sl > 0:
+                    if hedge_is_short:
+                        hedge_pnl = (hedge_entry - hedge_sl) * hedge_qty
+                    else:
+                        hedge_pnl = (hedge_sl - hedge_entry) * hedge_qty
+            else:
+                if hedge_is_short:
+                    hedge_pnl = (hedge_entry - current_price) * hedge_qty
+                else:
+                    hedge_pnl = (current_price - hedge_entry) * hedge_qty
+
+        combined = main_pnl + hedge_pnl
+        if combined <= -abs(cap):
+            log.warning(
+                "hedge.combined_loss_cap_hit",
+                trade_id=trade.id,
+                symbol=trade.signal.symbol,
+                main_pnl=round(main_pnl, 4),
+                hedge_pnl=round(hedge_pnl, 4),
+                combined=round(combined, 4),
+                cap=cap,
+            )
+            await self._safe_notify(
+                f"[LINKAD STANGNING] {trade.signal.symbol}\n"
+                f"Kombinerad forlust (main + hedge) {combined:.2f} USDT "
+                f"har natt granssen -{cap:.2f} USDT.\n"
+                f"Stanger huvudposition for att undvika dubbel forlust."
+            )
+            # Hand off to position manager via the injected callback.
+            close_cb = getattr(self, "_close_main_cb", None)
+            if close_cb is not None:
+                try:
+                    await close_cb(
+                        trade.id, "combined_loss_cap", current_price,
+                    )
+                    return True
+                except Exception:
+                    log.exception(
+                        "hedge.close_main_cb_error", trade_id=trade.id,
+                    )
+        return False
+
+    def bind_close_main_callback(self, cb) -> None:
+        """Inject the PositionManager.close_trade bound method.
+
+        Called once during startup to break a circular import between
+        the hedge manager and the position manager.
+        """
+        self._close_main_cb = cb
+
+    # ------------------------------------------------------------------
     # Close hedge
     # ------------------------------------------------------------------
 

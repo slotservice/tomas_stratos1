@@ -130,6 +130,7 @@ class HedgeSettings(BaseModel):
     enabled: bool = True
     trigger_pct: float = -2.0
     max_hedge_count: int = 1
+    max_combined_loss_usdt: float = 4.0
 
 
 class ReentrySettings(BaseModel):
