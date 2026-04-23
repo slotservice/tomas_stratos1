@@ -23,8 +23,7 @@ scaling_leverage = 50.0           # Leverage after +2.4% scaling step
 
 [entry]
 order_type = "Market"             # Market orders for entry
-num_entry_orders = 1              # 1 = single market order (simpler, cheaper),
-                                  # 2 = split into two orders (legacy)
+num_entry_orders = 2              # Client: 2 market orders (Entry 1 + Entry 2 + merged)
 slippage_tolerance_pct = 0.5      # Max acceptable slippage %
 entry_timeout_seconds = 30        # Timeout for fill confirmation
 

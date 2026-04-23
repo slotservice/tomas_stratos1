@@ -559,10 +559,22 @@ class PositionManager:
         trade.transition(TradeState.ENTRY1_FILLED)
         await self._persist_trade_state(trade, entry1_fill_price=trade.entry1_fill_price)
 
-        # Send "ENTRY 1 TAGEN" notification
+        # Send "ENTRY 1 TAGEN" notification.
+        # IM must be the ACTUAL value reported by Bybit (e.g. 19.47 USDT),
+        # not our calculated estimate. Fetch from position endpoint.
         try:
             fill1_qty = float(fill1.get("cumExecQty", qty_per_order) or qty_per_order)
-            fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
+            pos_side = "Buy" if direction == "LONG" else "Sell"
+            fill1_im = None
+            try:
+                pos = await self._bybit.get_position(symbol, pos_side)
+                if pos:
+                    fill1_im = float(pos.get("positionIM", 0) or 0)
+            except Exception:
+                pass
+            if not fill1_im or fill1_im <= 0:
+                fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
+
             await self._notifier.entry1_filled(
                 trade=trade,
                 qty=fill1_qty,
@@ -629,8 +641,27 @@ class PositionManager:
 
         fill1_qty = float(fill1.get("cumExecQty", qty_per_order) or qty_per_order)
         fill2_qty = float(fill2.get("cumExecQty", qty_per_order) or qty_per_order)
-        fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
-        fill2_im = (fill2_qty * trade.entry2_fill_price) / max(leverage, 1)
+
+        # Fetch actual IM from Bybit position (not calculated).
+        # After entry2 the position is complete, so positionIM reflects
+        # the total IM. We split proportionally for entry1 vs entry2.
+        pos_side = "Buy" if direction == "LONG" else "Sell"
+        total_im_actual = None
+        try:
+            pos = await self._bybit.get_position(symbol, pos_side)
+            if pos:
+                total_im_actual = float(pos.get("positionIM", 0) or 0)
+        except Exception:
+            pass
+
+        if total_im_actual and total_im_actual > 0 and (fill1_qty + fill2_qty) > 0:
+            total_qty = fill1_qty + fill2_qty
+            fill1_im = total_im_actual * (fill1_qty / total_qty)
+            fill2_im = total_im_actual * (fill2_qty / total_qty)
+        else:
+            # Fallback to calculated value if position query failed
+            fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
+            fill2_im = (fill2_qty * trade.entry2_fill_price) / max(leverage, 1)
 
         # Send Entry 2 + Merged notifications only when actually using
         # 2 orders. Single-order mode already notified via entry1_filled.
