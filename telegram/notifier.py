@@ -277,8 +277,21 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
-    async def symbol_not_on_bybit(self, signal) -> str:
-        """Signal rejected because the symbol is not on Bybit."""
+    async def symbol_not_on_bybit(self, signal, suggestion: str = None) -> str:
+        """Signal rejected because the symbol is not on Bybit.
+
+        If a 1000x/10000x/1000000x-prefixed variant exists on Bybit
+        futures (common for small-price meme tokens), ``suggestion``
+        carries that Bybit symbol. We surface it so the operator can
+        verify/trade manually — we don't auto-trade because the signal
+        prices are per-1-token and would be off by the prefix factor.
+        """
+        extra = ""
+        if suggestion:
+            extra = (
+                f"\n📍 Bybit har symbolen som {suggestion} "
+                f"(priser per-{suggestion[:-len(signal.symbol)] or '1'}-token)."
+            )
         text = (
             f"❌ Finns inte på bybit ❌\n"
             f"🕒 Tid: {_ts()}\n"
@@ -286,6 +299,7 @@ class TelegramNotifier:
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Fel: Kontrolera manuellt"
+            f"{extra}"
         )
         return await self._send_notify(text)
 

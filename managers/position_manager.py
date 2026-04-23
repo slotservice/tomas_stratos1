@@ -297,8 +297,10 @@ class PositionManager:
                             current_mark=current,
                             diff_pct=round(price_diff_pct, 2),
                         )
+                        chan = getattr(signal, "channel_name", "") or "okand"
                         await self._safe_notify(
                             f"⚠️ SIGNAL AVVISAD (pris for langt fran entry)\n"
+                            f"📢 Fran kanal: {chan}\n"
                             f"📊 Symbol: #{symbol}\n"
                             f"📈 Riktning: {direction}\n"
                             f"💥 Signal entry: {entry_price}\n"
@@ -333,16 +335,38 @@ class PositionManager:
         raw_quantity = (initial_margin * leverage) / entry_price
 
         # Ensure instrument info is cached for this symbol.
-        # If the symbol doesn't exist on Bybit, reject the signal early.
+        # If the symbol doesn't exist on Bybit, probe common Bybit
+        # prefixes before rejecting — small-price meme tokens are often
+        # listed as 1000XXXUSDT / 10000XXXUSDT / 1000000XXXUSDT because
+        # Bybit quotes are per-1k / per-10k / per-1M tokens for those.
+        # We do NOT auto-trade the prefixed variant because prices in
+        # the signal are per-1-token and would be 1000x off — but we
+        # surface the match so the operator can decide manually.
         try:
             instrument_info = await self._bybit.get_instrument_info(symbol)
+            resolved_prefix: Optional[str] = None
             if not instrument_info:
+                base = symbol
+                if base.endswith("USDT"):
+                    base = base[: -len("USDT")]
+                for prefix in ("1000", "10000", "1000000"):
+                    alt = f"{prefix}{base}USDT"
+                    try:
+                        alt_info = await self._bybit.get_instrument_info(alt)
+                    except Exception:
+                        alt_info = None
+                    if alt_info:
+                        resolved_prefix = alt
+                        break
                 log.warning(
                     "signal.symbol_not_on_bybit",
                     symbol=symbol,
+                    suggestion=resolved_prefix,
                 )
                 try:
-                    await self._notifier.symbol_not_on_bybit(signal)
+                    await self._notifier.symbol_not_on_bybit(
+                        signal, suggestion=resolved_prefix,
+                    )
                 except Exception:
                     log.exception("notify.symbol_not_on_bybit_failed")
                 return None
@@ -493,6 +517,45 @@ class PositionManager:
         side = "Buy" if direction == "LONG" else "Sell"
         position_idx = 1 if direction == "LONG" else 2
 
+        # Pre-trade guard: if a Bybit position for this symbol/side
+        # already has size > 0, a new market order would MERGE with it
+        # and stack the margin (40 USDT IM instead of 20 USDT — the
+        # BOMEUSDT / AKEUSDT cases on 2026-04-24). This happens when a
+        # residual position from a previous session wasn't closed
+        # manually. Reject the signal in that case so the client can
+        # clean up Bybit state explicitly instead of accumulating IM.
+        # Re-entries intentionally skip this check — a re-entry is the
+        # valid case where we want to re-open after a close.
+        if not is_reentry:
+            try:
+                existing = await self._bybit.get_position(symbol, side)
+                existing_size = 0.0
+                if existing:
+                    existing_size = float(existing.get("size", 0) or 0)
+                if existing_size > 0:
+                    log.warning(
+                        "signal.existing_position_on_bybit",
+                        symbol=symbol,
+                        side=side,
+                        existing_size=existing_size,
+                    )
+                    chan = getattr(signal, "channel_name", "") or "okand"
+                    await self._safe_notify(
+                        f"⚠️ SIGNAL BLOCKERAD (position finns redan på Bybit)\n"
+                        f"📢 Fran kanal: {chan}\n"
+                        f"📊 Symbol: #{symbol}\n"
+                        f"📈 Riktning: {direction}\n"
+                        f"📍 Bybit har redan storlek {existing_size} på "
+                        f"{side}-sidan.\n"
+                        f"📍 Sta'ng positionen manuellt pa Bybit, "
+                        f"sedan kan boten ta nya signaler."
+                    )
+                    return None
+            except Exception:
+                log.exception(
+                    "signal.existing_position_check_failed", symbol=symbol,
+                )
+
         order1_result = await self._place_entry_order(
             trade=trade,
             symbol=symbol,
@@ -578,15 +641,20 @@ class PositionManager:
             if not fill1_im or fill1_im <= 0:
                 fill1_im = (fill1_qty * trade.entry1_fill_price) / max(leverage, 1)
 
-            await self._notifier.entry1_filled(
-                trade=trade,
-                qty=fill1_qty,
-                im=fill1_im,
-                im_total=fill1_im,
-                bot_id=str(trade.id),
-                bybit_id=order1_bybit_id,
-                single_order=(num_orders <= 1),
-            )
+            # In single-order mode the full "POSITION OPPNAD" message
+            # is sent later via position_opened() with TPs/SL/leverage
+            # already finalized. Sending entry1_filled here would only
+            # duplicate and contradict it (different IM reading, etc.).
+            if num_orders > 1:
+                await self._notifier.entry1_filled(
+                    trade=trade,
+                    qty=fill1_qty,
+                    im=fill1_im,
+                    im_total=fill1_im,
+                    bot_id=str(trade.id),
+                    bybit_id=order1_bybit_id,
+                    single_order=False,
+                )
         except Exception:
             log.exception("notify.entry1_filled_failed")
 
