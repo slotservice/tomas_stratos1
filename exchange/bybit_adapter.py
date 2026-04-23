@@ -321,6 +321,7 @@ class BybitAdapter:
             110025,  # Position mode is not modified (already correct)
             110033,  # Margin cannot be set without open position
             110043,  # Leverage not changed (already correct)
+            110074,  # Contract not live / delisted / not tradable
             10001,   # Invalid parameter (qty, price, etc.)
             10004,   # API key/signature/timestamp invalid
             170140,  # Order quantity exceeded risk limit

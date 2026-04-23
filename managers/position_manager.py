@@ -336,21 +336,38 @@ class PositionManager:
 
         # Ensure instrument info is cached for this symbol.
         # If the symbol doesn't exist on Bybit, probe common Bybit
-        # prefixes before rejecting — small-price meme tokens are often
-        # listed as 1000XXXUSDT / 10000XXXUSDT / 1000000XXXUSDT because
-        # Bybit quotes are per-1k / per-10k / per-1M tokens for those.
-        # We do NOT auto-trade the prefixed variant because prices in
-        # the signal are per-1-token and would be 1000x off — but we
-        # surface the match so the operator can decide manually.
+        # multiplier variants before rejecting — small-price meme tokens
+        # are listed on Bybit as either <prefix><BASE>USDT (1000PEPE,
+        # 1000NEIROCTO, 10000SATS) OR <BASE><suffix>USDT (SHIB1000,
+        # BONK1000, FLOKI1000) — the convention depends on when the
+        # pair was listed. We also handle signal symbols that embed
+        # the multiplier on the opposite side (signal says
+        # 1000SHIBUSDT but Bybit lists SHIB1000USDT).
+        # We do NOT auto-trade the variant because prices in the
+        # signal are per-1-token and would be off by the multiplier;
+        # we only surface the resolved symbol to the operator.
         try:
             instrument_info = await self._bybit.get_instrument_info(symbol)
             resolved_prefix: Optional[str] = None
             if not instrument_info:
+                # Strip the USDT suffix for manipulation.
                 base = symbol
                 if base.endswith("USDT"):
                     base = base[: -len("USDT")]
-                for prefix in ("1000", "10000", "1000000"):
-                    alt = f"{prefix}{base}USDT"
+                # Also strip any leading 1000/10000/1000000 to get the
+                # pure base (e.g. "1000SHIB" -> "SHIB") so we can try
+                # the suffix variant.
+                import re as _re
+                m = _re.match(r"^(1000000|10000|1000)(.+)$", base)
+                core = m.group(2) if m else base
+                candidates: list[str] = []
+                for mult in ("1000", "10000", "1000000"):
+                    candidates.append(f"{mult}{core}USDT")  # prefix
+                    candidates.append(f"{core}{mult}USDT")  # suffix
+                # De-duplicate while preserving order.
+                seen: set[str] = set()
+                candidates = [c for c in candidates if c != symbol and not (c in seen or seen.add(c))]
+                for alt in candidates:
                     try:
                         alt_info = await self._bybit.get_instrument_info(alt)
                     except Exception:
@@ -1487,9 +1504,10 @@ class PositionManager:
                 symbol=symbol,
             )
             err_str = str(exc)
+            err_lower = err_str.lower()
             # 110007 = "available balance not enough" -> use SLUT PA PENGAR
             # template and throttle to once per 10 minutes.
-            if "110007" in err_str or "not enough" in err_str.lower():
+            if "110007" in err_str or "not enough" in err_lower:
                 import time as _time
                 last = getattr(self, "_last_no_money_notify", 0)
                 if _time.monotonic() - last > 600:
@@ -1502,6 +1520,18 @@ class PositionManager:
                         )
                     except Exception:
                         log.exception("notify.no_money_failed")
+            elif "110074" in err_str or "not live" in err_lower or "delist" in err_lower:
+                # Contract delisted / not tradable — give a human
+                # reason instead of the raw API error.
+                try:
+                    if trade.signal:
+                        await self._notifier.order_place_failed(
+                            signal=trade.signal,
+                            order_label=order_label,
+                            reason="Kontraktet är inte aktivt på Bybit (delistat eller ej handelbart).",
+                        )
+                except Exception:
+                    log.exception("notify.order_place_failed_failed")
             else:
                 try:
                     if trade.signal:
