@@ -143,8 +143,10 @@ _TP_PATTERNS = [
 
 # SL patterns
 _SL_PATTERNS = [
+    # Accepts "SL", "Stop Loss", "Stop-Loss", "StopLoss", "Stop loss",
+    # "stop" alone, "invalidation". Hyphen/space/none between the words.
     re.compile(
-        r"(?:sl|stop\s*loss|stop|stoploss|invalidation)\s*[:=]?\s*" + _PRICE_RE,
+        r"(?:sl|stop[-\s]*loss|stop|stoploss|invalidation)\s*[:=]?\s*" + _PRICE_RE,
         re.IGNORECASE,
     ),
 ]
@@ -384,6 +386,40 @@ def extract_prices(text: str) -> dict:
                 price = _parse_price(part.rstrip(".,"))
                 if price > 0:
                     collected_tps[i] = price
+
+    # Pattern 5: unlabeled TP list between Entry and Stop-Loss
+    # (CoinAura format — price-only lines follow the Entry line,
+    # no "TP:" / "Target:" labels). A TP line is a line whose only
+    # content is a price, optionally preceded by a bullet/emoji or
+    # "N)" / "N." index marker. Any line containing alphabetic
+    # characters after an optional bullet/index prefix is skipped
+    # so that metadata lines (Leverage, etc.) don't get captured.
+    if not collected_tps:
+        entry_line_re = re.compile(r"(?im)^.*\bentry\b.*$")
+        sl_line_re = re.compile(
+            r"(?im)^.*\b(?:sl|stop[-\s]*loss|stoploss|invalidation)\b.*$"
+        )
+        em = entry_line_re.search(text)
+        if em:
+            sm = sl_line_re.search(text, em.end())
+            end_pos = sm.start() if sm else len(text)
+            block = text[em.end():end_pos]
+            # Ordinal prefix ("1)" / "1.") is optional. Require whitespace
+            # AFTER the separator so a decimal point (e.g. "0.02580") is
+            # never mistaken for an ordinal. Limit ordinal digits to 1-2
+            # so four-digit integer prices are never swallowed either.
+            tp_line_re = re.compile(
+                r"^\s*\W*(?:\d{1,2}[)\.]\s+)?" + _PRICE_RE + r"\s*\W*$",
+                re.MULTILINE,
+            )
+            idx = 0
+            for m in tp_line_re.finditer(block):
+                price = _parse_price(m.group(1))
+                if price > 0:
+                    idx += 1
+                    collected_tps[idx] = price
+                    if idx >= 10:
+                        break
 
     # Sort by index and store
     if collected_tps:
