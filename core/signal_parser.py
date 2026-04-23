@@ -200,11 +200,14 @@ _SYMBOL_PATTERNS = [
     # or whitespace then the ticker (CoinAura header format).
     re.compile(r"\bpair\b[^A-Za-z0-9\n]*([A-Z0-9]{1,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
     re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰💵💴💶💷💹💲✅❌]*\s*([A-Z0-9]{2,10})\b", re.IGNORECASE),
-    # FALLBACK: "#MIVR" or "#DAM" — a hash-prefixed ticker with no
-    # USDT suffix. We append USDT ourselves. 2-10 uppercase letters +
-    # digits, must be followed by non-word char (emoji, newline, end
-    # of string) to avoid capturing half of a longer word.
-    re.compile(r"#([A-Z0-9]{2,10})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
+    # FALLBACK: "#MIVR" / "#DAM" / "#Q" — hash-prefixed ticker with no
+    # USDT suffix. We append USDT via normalize_symbol. Must start with
+    # a LETTER (so "#123" hashtags / arbitrary numeric tags don't match)
+    # and be followed by a non-word char (emoji, newline, end of string)
+    # so we don't capture half of a longer word. Letter-then-0-to-9
+    # chars allows 1-char tickers like Q on CoinAura's STRONG SHORT
+    # format ("💵#Q🔥").
+    re.compile(r"#([A-Z][A-Z0-9]{0,9})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
 ]
 
 
@@ -552,12 +555,12 @@ def _extract_symbol(text: str) -> Optional[str]:
         if m:
             raw = m.group(1)
             upper = raw.upper()
-            # A USDT-anchored pattern (1, 2, 3, 5) is high-confidence
-            # — the "USDT" suffix in the source text makes even 1-char
-            # tickers like "Q/USDT" unambiguous. Skip the short-name
-            # filter for those.
-            usdt_anchored_indices = {0, 1, 2, 4, 5}
-            if pat_idx not in usdt_anchored_indices:
+            # High-confidence patterns — the "USDT" suffix (0,1,2,4,5)
+            # or explicit "#"-prefix hash-ticker fallback (7) makes
+            # even 1-char tickers like "Q/USDT" or "#Q" unambiguous.
+            # Skip the short-name filter for those.
+            high_confidence_indices = {0, 1, 2, 4, 5, 7}
+            if pat_idx not in high_confidence_indices:
                 # Skip very short matches that are likely false positives
                 # (e.g. "TP", "SL", "T1") unless they are known bases.
                 if len(upper) <= 2 and upper not in _KNOWN_BASES:
