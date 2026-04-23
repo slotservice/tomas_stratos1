@@ -1444,14 +1444,13 @@ class PositionManager:
     ) -> None:
         """Detect TP fills by price crossing and advance SL.
 
-        Uses price-based detection (not order-status polling) because
-        it's cheap and works even when WS order events are missed.
-
-        TP levels and SL progression:
-          TP1 hit -> SL moves to entry + buffer (lock 0 loss)
-          TP2 hit -> SL moves to TP1  (lock TP1 profit)
-          TP3 hit -> SL moves to TP2  (lock TP2 profit)
-          TP4 hit -> SL moves to TP3  (lock TP3 profit)
+        TP-2 offset progression (client spec 2026-04-24):
+          TP1 hit -> no SL change (too early to lock)
+          TP2 hit -> SL moves to entry + buffer (zero loss locked)
+          TP3 hit -> SL moves to TP1
+          TP4 hit -> SL moves to TP2
+          TP5 hit -> SL moves to TP3
+          ...TPn hit (n >= 2) -> SL moves to TP(n-2), or entry+buffer if n == 2.
         """
         if trade.signal is None or trade.avg_entry is None:
             return
@@ -1478,7 +1477,7 @@ class PositionManager:
         if touched_count <= prev_hits:
             return  # No new TP hit yet.
 
-        # New TP(s) hit. Update tp_hits and advance SL.
+        # New TP(s) hit. Update tp_hits for bookkeeping.
         for i in range(prev_hits, touched_count):
             tp_price = tp_list[i]
             trade.tp_hits.append(tp_price)
@@ -1490,18 +1489,23 @@ class PositionManager:
                 tp_price=tp_price,
             )
 
-        # Determine new SL from the latest-hit TP.
-        latest_hit_idx = touched_count - 1  # zero-based
-        if latest_hit_idx == 0:
-            # TP1 hit -> SL to entry + buffer (lock-in zero loss)
+        # Determine new SL from the latest-hit TP (TP-2 offset).
+        latest_hit_idx = touched_count - 1  # zero-based index
+        tp_num = latest_hit_idx + 1          # 1-based TP number
+
+        if tp_num < 2:
+            # TP1 hit alone - do not move SL yet.
+            return
+        elif tp_num == 2:
+            # TP2 hit -> SL moves to entry + buffer.
             buffer_pct = self._settings.breakeven.buffer_pct / 100.0
             if direction == "LONG":
                 new_sl = round(entry * (1 + buffer_pct), 8)
             else:
                 new_sl = round(entry * (1 - buffer_pct), 8)
         else:
-            # TPn hit (n >= 2) -> SL moves to TP(n-1)
-            new_sl = tp_list[latest_hit_idx - 1]
+            # TPn hit (n >= 3) -> SL moves to TP(n-2).
+            new_sl = tp_list[latest_hit_idx - 2]
 
         # Only move SL if the new level is MORE protective than current.
         current_sl = trade.sl_price or 0
@@ -1521,7 +1525,8 @@ class PositionManager:
                 position_idx=position_idx,
             )
             trade.sl_price = new_sl
-            if latest_hit_idx == 0:
+            if tp_num == 2:
+                # SL now at break-even after TP2 hit.
                 trade.be_price = new_sl
             try:
                 await self._db.update_trade(
