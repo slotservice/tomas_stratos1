@@ -97,11 +97,17 @@ def _sl_line_pct(sl: float, entry: float, direction: str) -> str:
     return f"🚩 SL: {sl} ({pct:+.2f}%)"
 
 
-def _lev_class(leverage: float) -> str:
-    """Classify the leverage VALUE (not the signal type).
-    Returns 'fixed' if at/below x6 (the floor), 'dynamic' otherwise.
+def _lev_class(signal_type: str) -> str:
+    """Leverage label mirrors the signal classification.
+
+    swing/dynamic/fixed is a single taxonomy (per client 2026-04-24):
+        fixed   -> SL was missing (auto-SL + x10 leverage)
+        swing   -> wide SL (>4% distance)
+        dynamic -> normal SL
+    The leverage display label must match signal_type so the two lines
+    of the notification tell a consistent story.
     """
-    return "fixed" if leverage <= 6.0 else "dynamic"
+    return signal_type or "dynamic"
 
 
 def _pnl_sign(value: float) -> str:
@@ -247,7 +253,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Leverage ({_lev_class(leverage)}): x{leverage}\n"
+            f"⚙️ Leverage ({_lev_class(lev_type)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
@@ -338,7 +344,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Leverage ({_lev_class(leverage)}): x{leverage}\n"
+            f"⚙️ Leverage ({_lev_class(lev_type)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
@@ -383,7 +389,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Hävstång ({_lev_class(leverage)}): x{leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
@@ -426,7 +432,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Hävstång ({_lev_class(trade.leverage)}): x{trade.leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{trade.leverage}\n"
             f"💰 IM: {trade.margin:.2f} USDT (Bybit confirmed)\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"

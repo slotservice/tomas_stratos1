@@ -403,24 +403,22 @@ def extract_prices(text: str) -> dict:
 
 def _classify_signal_type(entry: float, sl: Optional[float]) -> str:
     """
-    Classify signal based on SL distance from entry.
+    Classify signal based on SL presence + distance from entry.
 
-    Returns:
-        "swing"   - SL > 4% from entry
-        "dynamic" - SL 2-4% from entry (or no SL)
-        "fixed"   - SL < 2% from entry
+    Client taxonomy (2026-04-24):
+        "fixed"   - SL is missing -> bot uses auto-SL (-3%) and locks
+                    leverage to x10. Applies ONLY to SL-missing signals.
+        "swing"   - SL is present and > 4% from entry (long-timeframe
+                    signal; leverage comes out on the lower end).
+        "dynamic" - SL is present and <= 4% from entry (normal signal).
     """
     if sl is None or sl <= 0 or entry <= 0:
-        return "dynamic"
+        return "fixed"
 
     distance_pct = abs(entry - sl) / entry * 100
-
     if distance_pct > 4.0:
         return "swing"
-    elif distance_pct >= 2.0:
-        return "dynamic"
-    else:
-        return "fixed"
+    return "dynamic"
 
 
 def validate_signal(signal: ParsedSignal) -> tuple[bool, str]:

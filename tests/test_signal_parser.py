@@ -228,18 +228,15 @@ class TestSignalTypeClassification:
     """Test _classify_signal_type based on SL distance."""
 
     def test_signal_type_classification(self):
-        # SL > 4% from entry -> "swing"
-        assert _classify_signal_type(100.0, 95.0) == "swing"
-
-        # SL 2-4% from entry -> "dynamic"
-        assert _classify_signal_type(100.0, 97.0) == "dynamic"
-
-        # SL < 2% from entry -> "fixed"
-        assert _classify_signal_type(100.0, 99.0) == "fixed"
-
-        # No SL -> "dynamic" (default)
-        assert _classify_signal_type(100.0, None) == "dynamic"
-        assert _classify_signal_type(100.0, 0.0) == "dynamic"
+        # Client taxonomy (2026-04-24):
+        #   fixed   -> SL missing (auto-SL + x10)
+        #   swing   -> SL > 4% from entry
+        #   dynamic -> SL present and <= 4% from entry
+        assert _classify_signal_type(100.0, 95.0) == "swing"    # 5% dist
+        assert _classify_signal_type(100.0, 97.0) == "dynamic"  # 3% dist
+        assert _classify_signal_type(100.0, 99.0) == "dynamic"  # 1% dist (was "fixed" pre-2026-04-24)
+        assert _classify_signal_type(100.0, None) == "fixed"    # no SL
+        assert _classify_signal_type(100.0, 0.0) == "fixed"     # invalid SL
 
 
 # ===================================================================
