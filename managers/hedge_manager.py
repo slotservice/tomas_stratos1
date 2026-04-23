@@ -184,57 +184,25 @@ class HedgeManager:
                 f"inte sattas! Manuell atgard kravs."
             )
 
-        # --- Move original trade's SL 2% closer to entry ---
-        # Client requirement: when hedge opens, the original trade's SL
-        # is moved 2% forward (toward entry). This means the original
-        # trade will close 2% before its original SL, locking in the
-        # -2% loss while the hedge runs.
-        try:
-            original_sl = trade.sl_price or 0
-            original_position_idx = 1 if direction == "LONG" else 2
-
-            if original_sl > 0 and avg_entry > 0:
-                sl_distance = abs(avg_entry - original_sl)
-                # Move SL 2% of entry price closer to entry
-                adjustment = avg_entry * 0.02
-
-                if direction == "LONG":
-                    # LONG: SL is below entry -> move it UP (closer to entry)
-                    new_original_sl = round(original_sl + adjustment, 8)
-                else:
-                    # SHORT: SL is above entry -> move it DOWN (closer to entry)
-                    new_original_sl = round(original_sl - adjustment, 8)
-
-                await self._bybit.set_trading_stop(
-                    symbol=symbol,
-                    stop_loss=new_original_sl,
-                    position_idx=original_position_idx,
-                )
-
-                # Update trade record
-                trade.sl_price = new_original_sl
-                try:
-                    await self._db.update_trade(
-                        int(trade.id),
-                        sl_price=new_original_sl,
-                    )
-                except Exception:
-                    pass
-
-                log.info(
-                    "hedge.original_sl_adjusted",
-                    trade_id=trade.id,
-                    symbol=symbol,
-                    old_sl=original_sl,
-                    new_sl=new_original_sl,
-                    adjustment=round(adjustment, 4),
-                )
-        except Exception:
-            log.exception(
-                "hedge.original_sl_adjust_error",
-                trade_id=trade.id,
-                symbol=symbol,
-            )
+        # --- Schedule delayed SL adjustment on original trade ---
+        # Client requirement (2026-04-23): do NOT move the original
+        # trade's SL immediately when the hedge opens. Wait for price
+        # to either:
+        #   (a) move a further 0.5% in the hedge direction (confirms
+        #       the adverse move is real, not a spike), OR
+        #   (b) 90 seconds pass as time-based fallback.
+        # This prevents premature stop-outs from volatility spikes.
+        import time as _time
+        trade._hedge_sl_move_at_price = current_price  # baseline price
+        trade._hedge_sl_move_deadline = _time.monotonic() + 90
+        trade._hedge_sl_move_pending = True
+        log.info(
+            "hedge.original_sl_move_scheduled",
+            trade_id=trade.id,
+            symbol=symbol,
+            baseline_price=current_price,
+            time_fallback_sec=90,
+        )
 
         # --- Save hedge trade to DB ---
         hedge_trade_db_id: Optional[int] = None
@@ -297,6 +265,96 @@ class HedgeManager:
             hedge_trade_id=trade.hedge_trade_id,
         )
         return True
+
+    # ------------------------------------------------------------------
+    # Delayed SL adjustment on the original trade
+    # ------------------------------------------------------------------
+
+    async def check_pending_sl_move(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> None:
+        """Move the original trade's SL 2% closer to entry AFTER either:
+            (a) price has moved >=0.5% further in the hedge direction, OR
+            (b) 90s have passed since the hedge opened.
+
+        Called on every price tick while a hedge is active and the SL
+        move is still pending.
+        """
+        if not getattr(trade, "_hedge_sl_move_pending", False):
+            return
+        if trade.signal is None or trade.avg_entry is None:
+            return
+
+        import time as _time
+        direction = trade.signal.direction
+        baseline = getattr(trade, "_hedge_sl_move_at_price", current_price)
+        deadline = getattr(trade, "_hedge_sl_move_deadline", 0)
+
+        # Condition (a): further adverse move of 0.5%+
+        confirm_move_pct = 0.5
+        confirmed = False
+        if baseline > 0:
+            if direction == "LONG":
+                # Hedge direction = price going DOWN further
+                move_pct = (baseline - current_price) / baseline * 100
+                if move_pct >= confirm_move_pct:
+                    confirmed = True
+            else:
+                move_pct = (current_price - baseline) / baseline * 100
+                if move_pct >= confirm_move_pct:
+                    confirmed = True
+
+        # Condition (b): time deadline
+        time_expired = _time.monotonic() >= deadline
+
+        if not confirmed and not time_expired:
+            return
+
+        reason = "confirmed_move" if confirmed else "time_fallback"
+
+        # Now move the SL as originally planned.
+        try:
+            original_sl = trade.sl_price or 0
+            avg_entry = trade.avg_entry
+            original_position_idx = 1 if direction == "LONG" else 2
+
+            if original_sl > 0 and avg_entry > 0:
+                adjustment = avg_entry * 0.02
+                if direction == "LONG":
+                    new_sl = round(original_sl + adjustment, 8)
+                else:
+                    new_sl = round(original_sl - adjustment, 8)
+
+                await self._bybit.set_trading_stop(
+                    symbol=trade.signal.symbol,
+                    stop_loss=new_sl,
+                    position_idx=original_position_idx,
+                )
+                trade.sl_price = new_sl
+                try:
+                    await self._db.update_trade(
+                        int(trade.id), sl_price=new_sl,
+                    )
+                except Exception:
+                    pass
+
+                log.info(
+                    "hedge.original_sl_adjusted",
+                    trade_id=trade.id,
+                    symbol=trade.signal.symbol,
+                    reason=reason,
+                    old_sl=original_sl,
+                    new_sl=new_sl,
+                )
+        except Exception:
+            log.exception(
+                "hedge.delayed_sl_adjust_error",
+                trade_id=trade.id,
+            )
+        finally:
+            trade._hedge_sl_move_pending = False
 
     # ------------------------------------------------------------------
     # Close hedge

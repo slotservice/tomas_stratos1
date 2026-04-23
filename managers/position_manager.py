@@ -1116,11 +1116,20 @@ class PositionManager:
                     "trade.position_check_error", trade_id=trade.id,
                 )
 
-        # --- Break-even check (only if not yet applied) ---
-        if trade.be_price is None:
+        # --- TP progression: every time a partial TP fills, advance SL
+        #     TP1 hit -> SL to entry + 0.15% buffer
+        #     TP2 hit -> SL to TP1 price
+        #     TP3 hit -> SL to TP2 price
+        #     TP4 hit -> SL to TP3 price
+        #     etc.
+        # (Fallback: +2.3% still moves SL to entry+buffer if TPs fail) ---
+        await self._check_tp_progression(trade, current_price)
+
+        # --- Break-even fallback (only if not yet applied and no TP hit) ---
+        if trade.be_price is None and len(trade.tp_hits) == 0:
             applied = await self._be_mgr.check_and_apply(trade, current_price)
             if applied:
-                return  # Give the trade a tick before checking further.
+                return
 
         # --- Scaling check (next pending step) ---
         if trade.scaling_step < len(self._settings.scaling.steps):
@@ -1141,6 +1150,9 @@ class PositionManager:
         # --- Hedge trigger ---
         if trade.hedge_trade_id is None:
             await self._hedge_mgr.check_and_activate(trade, current_price)
+        else:
+            # Pending delayed SL move after a hedge has opened?
+            await self._hedge_mgr.check_pending_sl_move(trade, current_price)
 
     # ==================================================================
     # Trade closure
@@ -1424,6 +1436,124 @@ class PositionManager:
         """Pre-register an asyncio.Event for an order BEFORE placing it."""
         if order_id and order_id not in self._fill_events:
             self._fill_events[order_id] = asyncio.Event()
+
+    async def _check_tp_progression(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> None:
+        """Detect TP fills by price crossing and advance SL.
+
+        Uses price-based detection (not order-status polling) because
+        it's cheap and works even when WS order events are missed.
+
+        TP levels and SL progression:
+          TP1 hit -> SL moves to entry + buffer (lock 0 loss)
+          TP2 hit -> SL moves to TP1  (lock TP1 profit)
+          TP3 hit -> SL moves to TP2  (lock TP2 profit)
+          TP4 hit -> SL moves to TP3  (lock TP3 profit)
+        """
+        if trade.signal is None or trade.avg_entry is None:
+            return
+        tp_list = getattr(trade.signal, "tps", None) or []
+        if not tp_list:
+            return
+
+        direction = trade.signal.direction
+        entry = trade.avg_entry
+
+        # Determine how many TPs have now been touched by the market.
+        touched_count = 0
+        if direction == "LONG":
+            for tp in tp_list:
+                if tp and current_price >= tp:
+                    touched_count += 1
+        else:
+            for tp in tp_list:
+                if tp and 0 < tp and current_price <= tp:
+                    touched_count += 1
+
+        # Compare against how many we've already recorded.
+        prev_hits = len(trade.tp_hits)
+        if touched_count <= prev_hits:
+            return  # No new TP hit yet.
+
+        # New TP(s) hit. Update tp_hits and advance SL.
+        for i in range(prev_hits, touched_count):
+            tp_price = tp_list[i]
+            trade.tp_hits.append(tp_price)
+            log.info(
+                "trade.tp_hit",
+                trade_id=trade.id,
+                symbol=trade.signal.symbol,
+                tp_index=i + 1,
+                tp_price=tp_price,
+            )
+
+        # Determine new SL from the latest-hit TP.
+        latest_hit_idx = touched_count - 1  # zero-based
+        if latest_hit_idx == 0:
+            # TP1 hit -> SL to entry + buffer (lock-in zero loss)
+            buffer_pct = self._settings.breakeven.buffer_pct / 100.0
+            if direction == "LONG":
+                new_sl = round(entry * (1 + buffer_pct), 8)
+            else:
+                new_sl = round(entry * (1 - buffer_pct), 8)
+        else:
+            # TPn hit (n >= 2) -> SL moves to TP(n-1)
+            new_sl = tp_list[latest_hit_idx - 1]
+
+        # Only move SL if the new level is MORE protective than current.
+        current_sl = trade.sl_price or 0
+        better = False
+        if direction == "LONG" and new_sl > current_sl:
+            better = True
+        if direction == "SHORT" and (current_sl == 0 or new_sl < current_sl):
+            better = True
+        if not better:
+            return
+
+        try:
+            position_idx = 1 if direction == "LONG" else 2
+            await self._bybit.set_trading_stop(
+                symbol=trade.signal.symbol,
+                stop_loss=new_sl,
+                position_idx=position_idx,
+            )
+            trade.sl_price = new_sl
+            if latest_hit_idx == 0:
+                trade.be_price = new_sl
+            try:
+                await self._db.update_trade(
+                    int(trade.id), sl_price=new_sl, be_price=trade.be_price,
+                )
+            except Exception:
+                pass
+
+            await self._safe_notify(
+                f"🔒 TP{latest_hit_idx + 1} TAGEN - SL flyttad\n"
+                f"🕒 Tid: {self._now_fmt()}\n"
+                f"📊 Symbol: #{trade.signal.symbol}\n"
+                f"📈 Riktning: {direction}\n"
+                f"📍 Ny SL: {new_sl}\n"
+                f"📍 Last TP hit: TP{latest_hit_idx + 1} @ {tp_list[latest_hit_idx]}"
+            )
+            log.info(
+                "trade.sl_advanced_after_tp",
+                trade_id=trade.id,
+                symbol=trade.signal.symbol,
+                tp_index=latest_hit_idx + 1,
+                new_sl=new_sl,
+            )
+        except Exception:
+            log.exception(
+                "trade.sl_advance_error",
+                trade_id=trade.id,
+            )
+
+    def _now_fmt(self) -> str:
+        from core.time_utils import format_time, now_utc
+        return format_time(now_utc())
 
     async def _wait_for_fill(
         self,

@@ -1,17 +1,5 @@
-# ============================================================
-# Telegram Source Groups Configuration
-# Add groups here. Bot will listen to all of them.
-# id = Telegram chat ID (negative number)
-# name = Display name for reports (channel NAME, not number)
-# ============================================================
-
-[[groups]]
-id = -1002290339976
-name = "Crypto Raketen"
-
-[[groups]]
-id = -1002339729195
-name = "Smart Crypto"
+# Active Telegram source groups (Telegramgrupper.xlsx, 2026-04-23).
+# Deleted/inactive groups removed per client instruction.
 
 [[groups]]
 id = -1001731265095
@@ -51,7 +39,7 @@ name = "Coin Rise"
 
 [[groups]]
 id = -1003576729853
-name = "Crypto World Signals"
+name = "Crypto Wolrd Signals"
 
 [[groups]]
 id = -1002320405797
@@ -83,7 +71,7 @@ name = "USA Bitcoin Army"
 
 [[groups]]
 id = -1002973994121
-name = "Crypto League"
+name = "Crypto Leuage"
 
 [[groups]]
 id = -1002183877022
@@ -99,7 +87,7 @@ name = "x1000 Signal"
 
 [[groups]]
 id = -1002590702399
-name = "Coin Bureau"
+name = "Coin Bearu"
 
 [[groups]]
 id = -1003287883842
@@ -107,7 +95,7 @@ name = "Crypto Mason"
 
 [[groups]]
 id = -1003572583873
-name = "Blockchain Bullhorn"
+name = "Blockshain Bullhorn"
 
 [[groups]]
 id = -1003078829894
@@ -123,7 +111,7 @@ name = "Ash Crypto"
 
 [[groups]]
 id = -1003258455609
-name = "James Collins Trading"
+name = "trading jeams Colin"
 
 [[groups]]
 id = -1003614766733
@@ -131,11 +119,11 @@ name = "Crypto PM"
 
 [[groups]]
 id = -1003251715348
-name = "Andreas M Antonopoulos"
+name = "Anderas M Antonopoulos"
 
 [[groups]]
 id = -1003472410719
-name = "Binance Free Signals"
+name = "Binance Free singals"
 
 [[groups]]
 id = -1002234181057
@@ -151,7 +139,7 @@ name = "Robert Croak"
 
 [[groups]]
 id = -1002417588257
-name = "Kriptoloop"
+name = "Kripoloop"
 
 [[groups]]
 id = -1002755345396
@@ -159,11 +147,11 @@ name = "Core Crypto Club"
 
 [[groups]]
 id = -1001215365882
-name = "Crypto Crown"
+name = "Crypto Corn"
 
 [[groups]]
 id = -1003158319001
-name = "Tahlili"
+name = "Thahili"
 
 [[groups]]
 id = -1001945142080
@@ -190,20 +178,16 @@ id = -1003826664397
 name = "Bull Trade"
 
 [[groups]]
-id = -1003530805185
-name = "Kelly Crypto Exchange"
-
-[[groups]]
 id = -1002874829814
 name = "Dad Trader"
 
 [[groups]]
 id = -1003892638816
-name = "Inside Club"
+name = "Inside CLub"
 
 [[groups]]
 id = -1003738532149
-name = "Zappy Tradezz"
+name = "Zappy tradezz"
 
 [[groups]]
 id = -1002767126169
@@ -214,16 +198,16 @@ id = -1002787842089
 name = "Crypto Futures"
 
 [[groups]]
+id = -1002339729195
+name = "Smart Crypto"
+
+[[groups]]
 id = -1002444199983
 name = "Crypto Analyst"
 
 [[groups]]
 id = -1001982472141
 name = "Crypto Beast"
-
-[[groups]]
-id = -1003546072244
-name = "Bulls Crypto"
 
 [[groups]]
 id = -1003386959527
@@ -246,10 +230,6 @@ id = -1003645692223
 name = "BTC XRP ETH Pro"
 
 [[groups]]
-id = -1003459763837
-name = "Crypto Yapper"
-
-[[groups]]
 id = -1002433237720
 name = "T N J Trade"
 
@@ -268,8 +248,6 @@ name = "BB Trading"
 [[groups]]
 id = -1002113810715
 name = "AI Felix Crypto"
-
-# --- Added 2026-04-10 ---
 
 [[groups]]
 id = -1003858070664
@@ -297,7 +275,7 @@ name = "Crypto Conquered"
 
 [[groups]]
 id = -1002325551440
-name = "AiphaMint Signals"
+name = "AiphaMint_Signals"
 
 [[groups]]
 id = -1001804798661
@@ -316,6 +294,10 @@ id = -1003557662995
 name = "CRYPTO BANANA BOT"
 
 [[groups]]
+id = -1003451725295
+name = "Crypto Robinhooders"
+
+[[groups]]
 id = -1003784444289
 name = "CRYPTO INSIGHTS"
 
@@ -325,7 +307,7 @@ name = "Crypto Safe Calls"
 
 [[groups]]
 id = -1003615491164
-name = "American Crypto"
+name = "American 🇺🇸 Crypto"
 
 [[groups]]
 id = -1003657180432
@@ -353,7 +335,7 @@ name = "StockBroker Futures"
 
 [[groups]]
 id = -1003865559826
-name = "Crypto Bull Society"
+name = "Crypto bull society"
 
 [[groups]]
 id = -1003747571857
@@ -369,7 +351,7 @@ name = "Whales of Investment"
 
 [[groups]]
 id = -1003173496680
-name = "Crypto Spider"
+name = "Crypto spider"
 
 [[groups]]
 id = -1002807997390
@@ -377,7 +359,7 @@ name = "CAP CHAIN"
 
 [[groups]]
 id = -1002632362395
-name = "A.R.S. Crypto Calls"
+name = "A.R.S. Crypto CallS"
 
 [[groups]]
 id = -1002565580953
@@ -399,84 +381,7 @@ name = "Crypto Heaven Official"
 id = -1002173116014
 name = "Crypto Alerts"
 
-# --- Additional groups the client joined (2026-04-18) ---
-
 [[groups]]
-id = -1001935772577
-name = "Cryptonus Trade"
+id = -1002973994121
+name = "CRYPTO LEAGUE"
 
-[[groups]]
-id = -1002531544802
-name = "Wolf of Trading ViP"
-
-[[groups]]
-id = -1003763669185
-name = "MEXC Futures Signal"
-
-[[groups]]
-id = -1002625944679
-name = "Panda Traders"
-
-[[groups]]
-id = -1002696002183
-name = "RAVEN Signals Pro"
-
-[[groups]]
-id = -1002447010635
-name = "El Rey Rentable"
-
-[[groups]]
-id = -1003838312107
-name = "Nick Cassese"
-
-[[groups]]
-id = -1003847321863
-name = "ODES Crypto"
-
-[[groups]]
-id = -1003827542383
-name = "MEG Crypto Trading Team"
-
-[[groups]]
-id = -1003448341901
-name = "Axper Crypto Free"
-
-[[groups]]
-id = -1003500375042
-name = "Blockchain Bulls Official"
-
-[[groups]]
-id = -1003229348922
-name = "Crypto Expert"
-
-[[groups]]
-id = -1003642493783
-name = "Ali Khan Crypto"
-
-[[groups]]
-id = -1002899568541
-name = "Crypto Live Trading Signals"
-
-[[groups]]
-id = -1003802324369
-name = "Experttrader Channel"
-
-[[groups]]
-id = -1003763469840
-name = "Binance Futures Pumps Signals"
-
-[[groups]]
-id = -1003805161954
-name = "Economic Mike"
-
-[[groups]]
-id = -1003858786614
-name = "Yulius"
-
-[[groups]]
-id = -1003859912312
-name = "Crypto Premium Signals"
-
-[[groups]]
-id = -1003181750276
-name = "The Lord of Trading"
