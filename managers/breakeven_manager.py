@@ -163,12 +163,24 @@ class BreakevenManager:
                 trade_id=trade.id,
             )
 
-        # --- Notify via Telegram ---
-        await self._safe_notify(
-            f"[BE] {symbol} {direction}\n"
-            f"SL flyttad till break-even: {be_price}\n"
-            f"Avg entry: {avg_entry} | Rorelse: +{move_pct:.2f}%"
-        )
+        # --- Notify via Telegram using the BREAK-EVEN JUSTERAD
+        # structured template per Meddelande telegram.docx.
+        try:
+            await self._notifier.break_even_adjusted(
+                trade=trade,
+                new_sl=be_price,
+                current_move_pct=move_pct,
+            )
+        except Exception:
+            log.exception(
+                "breakeven.notify_template_failed", trade_id=trade.id,
+            )
+            # Fall back to raw message so the event is still surfaced.
+            await self._safe_notify(
+                f"[BE] {symbol} {direction}\n"
+                f"SL flyttad till break-even: {be_price}\n"
+                f"Avg entry: {avg_entry} | Rorelse: +{move_pct:.2f}%"
+            )
 
         log.info(
             "breakeven.applied",

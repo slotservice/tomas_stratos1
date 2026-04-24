@@ -981,22 +981,150 @@ class TelegramNotifier:
         result_pct_total: float,
         result_usdt_total: float,
     ) -> str:
-        """Full position closed."""
+        """Full position closed (generic — TP, external, near-entry, etc).
+
+        Per Meddelande telegram.docx:
+            ✅ POSITION STÄNGD   by tp 1 2 3 4 ore SL
+            🕒 Tid: ...
+            📢 Från kanal: ...
+            📊 Symbol: #...
+            📈 Riktning: ...
+            📍 Typ: swing / dynamic / fixed
+            💵 Stängd kvantitet: ... (100%)
+            📚 Underlag ink. alla delsteg: bot / bybit
+            📍 Exit: ...
+            📊 Resultat (prisrörelse): ... % with leverage!
+            💰 Resultat (USDT): ... USDT
+        """
         signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         text = (
-            f"<b>✅ POSITION STÄNGD</b>\n"
+            f"✅ POSITION STÄNGD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Exit-pris: {exit_price}\n"
-            f"   Qty: {qty}\n"
-            f"   Totalt resultat: {_pct(result_pct_total)}\n"
-            f"   Totalt USDT: {_pnl_sign(result_usdt_total)} USDT\n"
+            f"💵 Stängd kvantitet: {qty} (100%)\n"
+            f"📍 Exit: {exit_price}\n"
+            f"📊 Resultat (prisrörelse): {_pct(result_pct_total)} with leverage\n"
+            f"💰 Resultat (USDT): {_pnl_sign(result_usdt_total)} USDT\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"📚 Underlag (BOT/Bybit): {trade.id} / {bybit_ids}\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
+        )
+        return await self._send_notify(text)
+
+    async def stop_loss_hit(
+        self,
+        trade,
+        sl_price: float,
+        qty: float,
+        result_pct: float,
+        result_usdt: float,
+    ) -> str:
+        """Dedicated STOP LOSS TRÄFFAD template.
+
+        Per Meddelande telegram.docx. Fires when the trade closes
+        because its SL was triggered on Bybit. Distinct from the
+        generic POSITION STÄNGD so the client can quickly identify
+        SL events in the feed.
+        """
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        text = (
+            f"🚩 STOP LOSS TRÄFFAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
+            f"\n"
+            f"📍 SL: {sl_price}\n"
+            f"💵 Stängd kvantitet: {qty} (100%)\n"
+            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
+            f"\n"
+            f"🔁 Återinträdeslogik: aktiverad – ny signal tas vid bekräftad trendvändning\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
+        )
+        return await self._send_notify(text)
+
+    async def break_even_adjusted(
+        self,
+        trade,
+        new_sl: float,
+        current_move_pct: float,
+    ) -> str:
+        """BREAK-EVEN JUSTERAD — SL moved to entry + buffer.
+
+        Fires when either (a) TP2 hit triggers the IZZU offset-2 rule
+        moving SL to entry + 0.15%, or (b) the +2.3% fallback BE
+        mechanism fires on its own before TP2. Both routes map to
+        this template per the client's Meddelande telegram.docx spec.
+        """
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        text = (
+            f"⚖️ BREAK-EVEN JUSTERAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
+            f"\n"
+            f"📍 SL flyttad till: {new_sl}\n"
+            f"📍 Rörelse från entry: {_pct(current_move_pct)}\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
+        )
+        return await self._send_notify(text)
+
+    async def take_profit_hit(
+        self,
+        trade,
+        tp_level: int,
+        tp_price: float,
+        tp_pct: float,
+        closed_qty: float,
+        closed_pct: float,
+        result_pct: float,
+        result_usdt: float,
+    ) -> str:
+        """TAKE PROFIT {N} TAGEN — per-TP partial-close notification.
+
+        Fires each time a partial TP conditional order fills on Bybit.
+        Per Meddelande telegram.docx spec.
+        """
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        entry = trade.avg_entry or (signal.entry if signal else 0)
+        leverage = trade.leverage if trade.leverage else 0.0
+        text = (
+            f"✅ TAKE PROFIT {tp_level} TAGEN\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
+            f"\n"
+            f"💥 Entry: {entry}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
+            f"🎯 TP{tp_level}: {tp_price} ({_pct(tp_pct)})\n"
+            f"💵 Stängd kvantitet: {closed_qty} ({closed_pct:.1f}% av positionen)\n"
+            f"\n"
+            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
+            f"\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 

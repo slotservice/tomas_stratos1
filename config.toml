@@ -13,6 +13,7 @@ db_path = "stratos1.db"
 bot_wallet = 402.1                # Fixed internal theoretical wallet (USDT)
 risk_pct = 0.02                   # 2% risk per trade
 initial_margin = 20.0             # 20 USDT initial margin per trade
+max_loss_usdt = 4.0               # Absolute hard loss cap per trade (client Option 4, 2026-04-24)
 
 [leverage]
 min_leverage = 6.0                # Below this -> set to this value

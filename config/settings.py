@@ -75,6 +75,13 @@ class WalletSettings(BaseModel):
     bot_wallet: float = 402.1
     risk_pct: float = 0.02
     initial_margin: float = 20.0
+    # Hard per-trade absolute loss cap. If unrealized PnL of the
+    # main leg (plus hedge if one is open) falls to or below this
+    # negative value, bot force-closes the trade at market — even
+    # if SL/hedge haven't fired yet. Clamps the very-worst-case
+    # loss per trade regardless of leverage or signal SL placement.
+    # Set to 0 or negative-zero to disable.
+    max_loss_usdt: float = 4.0
 
 
 class LeverageSettings(BaseModel):

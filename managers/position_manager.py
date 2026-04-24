@@ -1230,6 +1230,17 @@ class PositionManager:
             await self._reentry_mgr.check_and_activate(trade, current_price)
             return
 
+        # --- Absolute max-loss cap (client Option 4, 2026-04-24) ---
+        # Hard ceiling on worst-case per-trade loss regardless of hedge
+        # state or signal SL distance. Fires if unrealized PnL in USDT
+        # falls to or below -max_loss_usdt. Catches the cases where
+        # hedge didn't/couldn't open AND SL is still far away AND the
+        # trade is bleeding. Runs before every other manager so it
+        # short-circuits the whole pipeline.
+        closed = await self._check_max_loss_cap(trade, current_price)
+        if closed:
+            return
+
         # --- Verify position still exists on Bybit (every 30s) ---
         # Prevents error spam when the position was closed externally
         # (TP hit on exchange / liquidation) but the bot didn't catch
@@ -1396,15 +1407,42 @@ class PositionManager:
         # Remove from active map.
         self._active_trades.pop(trade_id, None)
 
-        # Notify.
-        pnl_str = f"{pnl_pct:+.2f}%" if pnl_pct is not None else "N/A"
-        usdt_str = f"{pnl_usdt:+.2f} USDT" if pnl_usdt is not None else ""
-        await self._safe_notify(
-            f"[STANGD] {symbol} {direction}\n"
-            f"Anledning: {reason}\n"
-            f"Exit: {exit_price}\n"
-            f"PnL: {pnl_str} {usdt_str}"
-        )
+        # Notify — pick the right structured template per close reason.
+        # Client Meddelande telegram.docx spec (2026-04-24): STOP LOSS
+        # TRÄFFAD gets its own template; everything else uses
+        # POSITION STÄNGD. Fall back to a raw message on any error.
+        try:
+            sl_reasons = {"sl_hit"}
+            qty_for_msg = trade.quantity or 0
+            if reason in sl_reasons:
+                await self._notifier.stop_loss_hit(
+                    trade=trade,
+                    sl_price=trade.sl_price or exit_price,
+                    qty=qty_for_msg,
+                    result_pct=pnl_pct if pnl_pct is not None else 0.0,
+                    result_usdt=pnl_usdt if pnl_usdt is not None else 0.0,
+                )
+            else:
+                await self._notifier.position_closed(
+                    trade=trade,
+                    exit_price=exit_price,
+                    qty=qty_for_msg,
+                    result_pct_total=pnl_pct if pnl_pct is not None else 0.0,
+                    result_usdt_total=pnl_usdt if pnl_usdt is not None else 0.0,
+                )
+        except Exception:
+            log.exception(
+                "close_trade.template_failed", trade_id=trade_id, reason=reason,
+            )
+            # Fall back to raw message so operator still gets a close notification.
+            pnl_str = f"{pnl_pct:+.2f}%" if pnl_pct is not None else "N/A"
+            usdt_str = f"{pnl_usdt:+.2f} USDT" if pnl_usdt is not None else ""
+            await self._safe_notify(
+                f"[STANGD] {symbol} {direction}\n"
+                f"Anledning: {reason}\n"
+                f"Exit: {exit_price}\n"
+                f"PnL: {pnl_str} {usdt_str}"
+            )
 
         log.info(
             "trade.closed",
@@ -1603,6 +1641,89 @@ class PositionManager:
         if order_id and order_id not in self._fill_events:
             self._fill_events[order_id] = asyncio.Event()
 
+    async def _check_max_loss_cap(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> bool:
+        """Force-close trade if unrealized PnL USDT ≤ -max_loss_usdt.
+
+        Client Option 4, 2026-04-24: absolute safety ceiling that
+        fires even when no hedge is open. Returns True if the cap
+        fired (caller should short-circuit other checks).
+        """
+        cap = self._settings.wallet.max_loss_usdt
+        if not cap or cap <= 0:
+            return False
+        if trade.avg_entry is None or trade.avg_entry <= 0:
+            return False
+        if not trade.quantity or trade.quantity <= 0:
+            return False
+        if trade.signal is None:
+            return False
+
+        direction = trade.signal.direction
+        qty = trade.quantity
+        avg_entry = trade.avg_entry
+
+        # Main-leg unrealized USDT PnL (no leverage multiplier: qty
+        # IS already the leveraged notional quantity, so price * qty
+        # is the real USDT value exposed).
+        if direction == "LONG":
+            main_pnl = (current_price - avg_entry) * qty
+        else:
+            main_pnl = (avg_entry - current_price) * qty
+
+        # If a hedge is open, include its unrealized PnL too — the
+        # cap applies to the combined exposure, not just one leg.
+        hedge_pnl = 0.0
+        if trade.hedge_trade_id:
+            try:
+                hedge_row = await self._db.get_trade(int(trade.hedge_trade_id))
+            except (ValueError, Exception):
+                hedge_row = None
+            if hedge_row:
+                h_entry = float(hedge_row.get("avg_entry") or 0)
+                h_qty = float(hedge_row.get("quantity") or qty)
+                if h_entry > 0:
+                    if direction == "LONG":
+                        # Hedge is SHORT (opposite direction).
+                        hedge_pnl = (h_entry - current_price) * h_qty
+                    else:
+                        hedge_pnl = (current_price - h_entry) * h_qty
+
+        combined = main_pnl + hedge_pnl
+        if combined > -abs(cap):
+            return False
+
+        log.warning(
+            "trade.max_loss_cap_hit",
+            trade_id=trade.id,
+            symbol=trade.signal.symbol,
+            main_pnl=round(main_pnl, 4),
+            hedge_pnl=round(hedge_pnl, 4),
+            combined=round(combined, 4),
+            cap=cap,
+            current_price=current_price,
+        )
+        await self._safe_notify(
+            f"[MAX LOSS CAP] {trade.signal.symbol} {direction}\n"
+            f"Forlust {combined:.2f} USDT har natt granssen "
+            f"-{cap:.2f} USDT.\n"
+            f"Stanger positionen for att begransa forlusten."
+        )
+        try:
+            await self.close_trade(
+                trade_id=str(trade.id),
+                reason="max_loss_cap",
+                exit_price=current_price,
+            )
+        except Exception:
+            log.exception(
+                "trade.max_loss_cap_close_failed", trade_id=trade.id,
+            )
+        return True
+
     async def _check_tp_progression(
         self,
         trade: Trade,
@@ -1643,17 +1764,61 @@ class PositionManager:
         if touched_count <= prev_hits:
             return  # No new TP hit yet.
 
-        # New TP(s) hit. Update tp_hits for bookkeeping.
+        # New TP(s) hit. Update tp_hits for bookkeeping and fire the
+        # dedicated "TAKE PROFIT N TAGEN" template for each one so the
+        # client sees every partial close in real time.
+        num_valid_tps = len(tp_list)
+        qty_total = trade.quantity or 0
+        # Position-close share per placed TP — TP1 is NOT closed
+        # (client IZZU rule), so the live slices are TP2 onwards.
+        placed_slices = max(1, num_valid_tps - 1) if num_valid_tps > 1 else 1
         for i in range(prev_hits, touched_count):
             tp_price = tp_list[i]
+            tp_num_local = i + 1
             trade.tp_hits.append(tp_price)
             log.info(
                 "trade.tp_hit",
                 trade_id=trade.id,
                 symbol=trade.signal.symbol,
-                tp_index=i + 1,
+                tp_index=tp_num_local,
                 tp_price=tp_price,
             )
+            # Per-TP notification: TP1 gets no partial close order
+            # but still fires as "informational" so the client sees
+            # the price reached TP1. For TP2+, closed_qty reflects
+            # the actual slice that filled on Bybit.
+            try:
+                if tp_num_local == 1:
+                    closed_qty = 0
+                    closed_pct = 0.0
+                else:
+                    closed_qty = (qty_total / placed_slices) if placed_slices else 0
+                    closed_pct = (100.0 / placed_slices) if placed_slices else 0.0
+                if direction == "LONG":
+                    tp_pct = (tp_price - entry) / entry * 100.0 if entry else 0
+                else:
+                    tp_pct = (entry - tp_price) / entry * 100.0 if entry else 0
+                leverage = trade.leverage or 1.0
+                result_pct = tp_pct * leverage
+                # Slice of margin this TP represents.
+                slice_fraction = closed_pct / 100.0 if closed_pct else 0.0
+                slice_margin = (trade.margin or 0) * slice_fraction
+                result_usdt = slice_margin * (result_pct / 100.0)
+                await self._notifier.take_profit_hit(
+                    trade=trade,
+                    tp_level=tp_num_local,
+                    tp_price=tp_price,
+                    tp_pct=tp_pct,
+                    closed_qty=closed_qty,
+                    closed_pct=closed_pct,
+                    result_pct=result_pct,
+                    result_usdt=result_usdt,
+                )
+            except Exception:
+                log.exception(
+                    "notify.take_profit_hit_failed",
+                    trade_id=trade.id, tp_level=tp_num_local,
+                )
 
         # Determine new SL from the latest-hit TP (TP-2 offset).
         latest_hit_idx = touched_count - 1  # zero-based index
@@ -1701,14 +1866,35 @@ class PositionManager:
             except Exception:
                 pass
 
-            await self._safe_notify(
-                f"🔒 TP{latest_hit_idx + 1} TAGEN - SL flyttad\n"
-                f"🕒 Tid: {self._now_fmt()}\n"
-                f"📊 Symbol: #{trade.signal.symbol}\n"
-                f"📈 Riktning: {direction}\n"
-                f"📍 Ny SL: {new_sl}\n"
-                f"📍 Last TP hit: TP{latest_hit_idx + 1} @ {tp_list[latest_hit_idx]}"
-            )
+            # Pick the right template: TP2 (SL -> entry + buffer) =
+            # BREAK-EVEN JUSTERAD per the client's spec; TP3+ move SL
+            # to an earlier TP level, stays as the generic "SL
+            # advanced after TP" notice.
+            try:
+                if tp_num == 2:
+                    if direction == "LONG":
+                        move_pct = (current_price - entry) / entry * 100.0
+                    else:
+                        move_pct = (entry - current_price) / entry * 100.0
+                    await self._notifier.break_even_adjusted(
+                        trade=trade,
+                        new_sl=new_sl,
+                        current_move_pct=move_pct,
+                    )
+                else:
+                    await self._safe_notify(
+                        f"🔒 TP{tp_num} TAGEN - SL flyttad\n"
+                        f"🕒 Tid: {self._now_fmt()}\n"
+                        f"📊 Symbol: #{trade.signal.symbol}\n"
+                        f"📈 Riktning: {direction}\n"
+                        f"📍 Ny SL: {new_sl}\n"
+                        f"📍 SL nu på: TP{tp_num - 2} @ {tp_list[tp_num - 3]}"
+                    )
+            except Exception:
+                log.exception(
+                    "notify.sl_progress_failed",
+                    trade_id=trade.id,
+                )
             log.info(
                 "trade.sl_advanced_after_tp",
                 trade_id=trade.id,
