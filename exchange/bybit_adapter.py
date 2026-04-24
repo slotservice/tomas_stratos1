@@ -710,6 +710,72 @@ class BybitAdapter:
         )
         return result
 
+    async def place_conditional_open(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        trigger_price: float,
+        position_idx: int,
+        trigger_direction: int,
+        trigger_by: str = "LastPrice",
+    ) -> dict:
+        """Place a conditional market order that OPENS a new position.
+
+        Unlike place_conditional_close this is NOT reduceOnly — when
+        the trigger fires, Bybit opens a fresh position in the given
+        direction. Used for pre-arming the hedge on Bybit so the
+        hedge fires autonomously at the trigger price even if the
+        bot is offline (client IZZU architecture requirement
+        2026-04-24).
+
+        Parameters
+        ----------
+        side:
+            ``"Buy"`` opens a LONG; ``"Sell"`` opens a SHORT.
+        position_idx:
+            1 for LONG (Buy-side hedge slot), 2 for SHORT
+            (Sell-side hedge slot) in hedge mode.
+        trigger_direction:
+            1 = trigger when price RISES to trigger_price,
+            2 = trigger when price FALLS to trigger_price.
+            For a hedge of a LONG main position (hedge SHORT), the
+            hedge fires when main-position price falls → direction 2.
+            For a hedge of a SHORT main (hedge LONG), main-position
+            price rising → direction 1.
+        trigger_by:
+            Price source — LastPrice / MarkPrice / IndexPrice.
+        """
+        qty_rounded = self.round_qty(qty, symbol)
+        price_rounded = self.round_price(trigger_price, symbol)
+        self._log.info(
+            "placing_conditional_open",
+            symbol=symbol, side=side, qty=qty_rounded,
+            trigger_price=price_rounded, trigger_by=trigger_by,
+            trigger_direction=trigger_direction,
+            position_idx=position_idx,
+        )
+        resp = await self._call_with_retry(
+            self._rest.place_order,
+            category=CATEGORY,
+            symbol=symbol,
+            side=side,
+            orderType="Market",
+            qty=str(qty_rounded),
+            triggerPrice=str(price_rounded),
+            triggerBy=trigger_by,
+            triggerDirection=trigger_direction,
+            positionIdx=position_idx,
+            reduceOnly=False,
+        )
+        result = resp.get("result", {})
+        self._log.info(
+            "conditional_open_placed",
+            symbol=symbol, order_id=result.get("orderId", ""),
+            trigger_price=price_rounded,
+        )
+        return result
+
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         """Cancel an open order by ``orderId``."""
         self._log.info("cancelling_order", symbol=symbol, order_id=order_id)
