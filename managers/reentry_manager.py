@@ -166,14 +166,30 @@ class ReentryManager:
         except Exception:
             log.exception("reentry.db_error", trade_id=trade.id)
 
-        # --- Notify ---
-        await self._safe_notify(
-            f"[REENTRY] {trade.signal.symbol} {direction}\n"
-            f"Reentry #{trade.reentry_count} aktiverad vid {current_price}\n"
-            f"Ny trade skapad fran samma signal.\n"
-            f"Kvarvarande reentries: "
-            f"{self._settings.max_reentries - trade.reentry_count}"
-        )
+        # --- Notify via structured RE-ENTRY AKTIVERAD template per
+        # Meddelande telegram.docx. Falls back to the raw [REENTRY]
+        # line if the template fires an exception so the event is
+        # always surfaced.
+        try:
+            new_leverage = new_trade.leverage if new_trade.leverage else 0.0
+            new_margin = new_trade.margin if new_trade.margin else 0.0
+            await self._notifier.reentry_activated(
+                trade=new_trade,
+                signal=trade.signal,
+                leverage=new_leverage,
+                im=new_margin,
+            )
+        except Exception:
+            log.exception(
+                "reentry.template_notify_failed", trade_id=trade.id,
+            )
+            await self._safe_notify(
+                f"[REENTRY] {trade.signal.symbol} {direction}\n"
+                f"Reentry #{trade.reentry_count} aktiverad vid {current_price}\n"
+                f"Ny trade skapad fran samma signal.\n"
+                f"Kvarvarande reentries: "
+                f"{self._settings.max_reentries - trade.reentry_count}"
+            )
 
         log.info(
             "reentry.activated",
@@ -299,11 +315,19 @@ class ReentryManager:
         except Exception:
             log.exception("reentry.exhausted_db_error", trade_id=trade.id)
 
-        await self._safe_notify(
-            f"[REENTRY SLUT] {symbol}\n"
-            f"Alla {self._settings.max_reentries} reentries forbrukade.\n"
-            f"Signalen ar helt avslutad."
-        )
+        # Use the structured RE-ENTRY AVSTÄNGT template from Meddelande
+        # telegram.docx; fall back to raw on any exception.
+        try:
+            await self._notifier.reentry_exhausted(trade=trade)
+        except Exception:
+            log.exception(
+                "reentry.exhausted_template_failed", trade_id=trade.id,
+            )
+            await self._safe_notify(
+                f"[REENTRY SLUT] {symbol}\n"
+                f"Alla {self._settings.max_reentries} reentries forbrukade.\n"
+                f"Signalen ar helt avslutad."
+            )
 
     async def _safe_notify(self, message: str) -> None:
         """Send a Telegram notification, swallowing errors."""
