@@ -958,12 +958,20 @@ class PositionManager:
                     f"Manuell atgard kan kravas."
                 )
 
-        # ---------- Place PARTIAL TPs - one reduce-only conditional
-        # order per TP level so each TP locks its slice of profit ----------
-        # 3 TPs -> 33/33/34%, 4 TPs -> 25/25/25/25%, 5 TPs -> 20 each, etc.
+        # ---------- Place PARTIAL TPs — one reduce-only conditional
+        # order per TP level (from TP2 onwards). Client IZZU
+        # 2026-04-24: "TP1 'block' — no move, no profit." TP1 is
+        # informational only; no order placed, no quantity slice
+        # reserved. For a 3-TP signal that means 50/50 at TP2/TP3;
+        # a 5-TP signal -> 25% at TP2/TP3/TP4/TP5. SL progression
+        # continues to use all TP levels (TP-2 offset) — TP1 is
+        # simply not closed.
         tp_order_ids: list[str] = []
-        if valid_tps and trade.quantity and trade.quantity > 0:
-            num_tps = len(valid_tps)
+        # Keep TP1 in valid_tps for SL-progression tracking, but
+        # skip it when placing partial-close orders.
+        tps_for_closes = valid_tps[1:] if len(valid_tps) > 1 else []
+        if tps_for_closes and trade.quantity and trade.quantity > 0:
+            num_tps = len(tps_for_closes)
             total_qty = trade.quantity
             # Portion per TP (remainder goes to last TP to avoid leftover).
             base_qty = total_qty / num_tps
@@ -971,7 +979,7 @@ class PositionManager:
             close_side = "Sell" if direction == "LONG" else "Buy"
 
             placed_qty = 0.0
-            for i, tp_price in enumerate(valid_tps):
+            for i, tp_price in enumerate(tps_for_closes):
                 is_last = (i == num_tps - 1)
                 # Last TP closes any remainder; others use base slice.
                 if is_last:
@@ -995,17 +1003,19 @@ class PositionManager:
                     if oid:
                         tp_order_ids.append(oid)
                     placed_qty += this_qty_rounded
+                    # i+2 because we skipped TP1 — first placed TP is
+                    # signal TP2.
                     log.info(
                         "trade.partial_tp_placed",
                         trade_id=trade.id, symbol=symbol,
-                        tp_index=i + 1, tp_price=tp_price,
+                        tp_index=i + 2, tp_price=tp_price,
                         qty=this_qty_rounded, order_id=oid,
                     )
                 except Exception:
                     log.exception(
                         "trade.partial_tp_error",
                         trade_id=trade.id, symbol=symbol,
-                        tp_index=i + 1, tp_price=tp_price,
+                        tp_index=i + 2, tp_price=tp_price,
                     )
 
             # Persist TP order IDs on the trade for later cancel/tracking.

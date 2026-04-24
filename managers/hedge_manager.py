@@ -95,10 +95,28 @@ class HedgeManager:
             direction, avg_entry, current_price
         )
 
-        # trigger_pct is stored as a negative number (e.g. -2.0).
-        trigger = abs(self._settings.trigger_pct)
+        # Base trigger is the configured fixed value (e.g. 2.0%).
+        # Client IZZU 2026-04-24: on tight-SL scalping signals (SL
+        # under 2% from entry), the fixed 2% trigger fires AFTER SL —
+        # hedge never gets a chance. Make the effective trigger the
+        # closer of fixed OR (SL distance - small buffer) so the
+        # hedge always fires before SL, with a 0.3% buffer to avoid
+        # near-simultaneous firing.
+        fixed_trigger = abs(self._settings.trigger_pct)
+        pre_sl_buffer_pct = 0.3
+        effective_trigger = fixed_trigger
+        sl_price = trade.sl_price
+        if sl_price and avg_entry and avg_entry > 0:
+            if direction == "LONG":
+                sl_distance_pct = (avg_entry - sl_price) / avg_entry * 100.0
+            else:
+                sl_distance_pct = (sl_price - avg_entry) / avg_entry * 100.0
+            if sl_distance_pct > 0:
+                pre_sl_trigger = max(0.5, sl_distance_pct - pre_sl_buffer_pct)
+                if pre_sl_trigger < effective_trigger:
+                    effective_trigger = pre_sl_trigger
 
-        if adverse_pct < trigger:
+        if adverse_pct < effective_trigger:
             return False
 
         log.info(
@@ -107,7 +125,9 @@ class HedgeManager:
             symbol=symbol,
             direction=direction,
             adverse_pct=round(adverse_pct, 4),
-            trigger_pct=trigger,
+            trigger_pct=round(effective_trigger, 4),
+            fixed_trigger=fixed_trigger,
+            source=("pre_sl" if effective_trigger < fixed_trigger else "fixed"),
         )
 
         # --- Determine hedge parameters ---

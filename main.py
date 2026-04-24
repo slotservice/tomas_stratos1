@@ -341,6 +341,68 @@ async def main() -> None:
     )
 
     # ---------------------------------------------------------------
+    # 10b. Purge WishingBell notification channel on every restart.
+    # Client IZZU 2026-04-24: clean slate for the channel so the
+    # operator isn't staring at stale history from a previous run.
+    # Runs only when both env flags are satisfied:
+    #   TG_SESSION_STRING set (user session with admin rights), AND
+    #   STRATOS1_PURGE_ON_RESTART not explicitly "0" / "false"
+    # Errors are swallowed — purge is best-effort and must never
+    # block startup.
+    # ---------------------------------------------------------------
+    purge_enabled = os.environ.get(
+        "STRATOS1_PURGE_ON_RESTART", "1",
+    ).strip().lower() not in ("0", "false", "no", "off")
+    if purge_enabled and session_string:
+        try:
+            from telethon import TelegramClient as _TC
+            from telethon.sessions import StringSession as _SS
+            _purge_client = _TC(
+                _SS(session_string),
+                int(settings.telegram.api_id),
+                settings.telegram.api_hash,
+            )
+            await _purge_client.connect()
+            if await _purge_client.is_user_authorized():
+                try:
+                    _entity = await _purge_client.get_entity(
+                        settings.telegram.notify_channel_id,
+                    )
+                    _batch: list[int] = []
+                    _total = 0
+                    async for _msg in _purge_client.iter_messages(
+                        _entity, limit=None,
+                    ):
+                        _batch.append(_msg.id)
+                        if len(_batch) >= 100:
+                            try:
+                                await _purge_client.delete_messages(
+                                    _entity, _batch, revoke=True,
+                                )
+                                _total += len(_batch)
+                            except Exception:
+                                log.exception("purge.batch_error")
+                            _batch.clear()
+                    if _batch:
+                        try:
+                            await _purge_client.delete_messages(
+                                _entity, _batch, revoke=True,
+                            )
+                            _total += len(_batch)
+                        except Exception:
+                            log.exception("purge.final_batch_error")
+                    log.info(
+                        "startup.channel_purged",
+                        channel_id=settings.telegram.notify_channel_id,
+                        messages_deleted=_total,
+                    )
+                except Exception:
+                    log.exception("startup.channel_purge_failed")
+            await _purge_client.disconnect()
+        except Exception:
+            log.exception("startup.channel_purge_setup_failed")
+
+    # ---------------------------------------------------------------
     # 11. Run startup health checks
     # ---------------------------------------------------------------
     results = await health_checker.run_startup_checks()
@@ -552,6 +614,93 @@ async def main() -> None:
             except Exception:
                 log.exception("price_poll.error")
 
+    async def _periodic_position_reconciliation() -> None:
+        """Poll Bybit every 30s for every non-terminal trade's position.
+
+        When the bot's local state drifts from Bybit (trade marked
+        POSITION_OPEN in the DB but size=0 on Bybit — e.g. LINKUSDT 48,
+        2026-04-24), the trade becomes a ghost: SL/TP progression
+        keeps running against a position that no longer exists, double
+        notifications fire when the drift is eventually caught, and
+        the DB fills with stuck state.
+
+        This loop is independent of the WebSocket price feed — if
+        a symbol's ticker goes quiet, the check still runs.
+        """
+        reconcile_interval = 30
+        while not shutdown.is_shutting_down:
+            try:
+                await asyncio.sleep(reconcile_interval)
+                if shutdown.is_shutting_down:
+                    break
+
+                active = dict(getattr(position_mgr, "_active_trades", {}))
+                for trade_id, trade in active.items():
+                    try:
+                        if trade.is_terminal:
+                            continue
+                        # Skip pre-fill states — nothing to reconcile.
+                        if trade.state.value in (
+                            "PENDING", "ENTRY1_PLACED", "ENTRY1_FILLED",
+                            "ENTRY2_PLACED", "ENTRY2_FILLED",
+                        ):
+                            continue
+                        if trade.signal is None:
+                            continue
+
+                        side = "Buy" if trade.signal.direction == "LONG" else "Sell"
+                        pos = await bybit.get_position(trade.signal.symbol, side)
+                        size = 0.0
+                        if pos:
+                            try:
+                                size = float(pos.get("size") or 0)
+                            except (TypeError, ValueError):
+                                size = 0.0
+
+                        if size == 0.0:
+                            # Position closed externally on Bybit. Close
+                            # the trade on our side using the last known
+                            # mark price as exit (best available).
+                            exit_price = trade.avg_entry or 0.0
+                            try:
+                                ticker = await bybit.get_ticker(
+                                    trade.signal.symbol,
+                                )
+                                if ticker:
+                                    mp = float(
+                                        ticker.get("markPrice") or
+                                        ticker.get("lastPrice") or
+                                        0
+                                    )
+                                    if mp > 0:
+                                        exit_price = mp
+                            except Exception:
+                                pass
+
+                            log.warning(
+                                "reconcile.ghost_trade_closed",
+                                trade_id=trade.id,
+                                symbol=trade.signal.symbol,
+                                state=trade.state.value,
+                                exit_price=exit_price,
+                            )
+                            await position_mgr.close_trade(
+                                trade_id=str(trade.id),
+                                reason="reconciled_external_close",
+                                exit_price=exit_price,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        log.exception(
+                            "reconcile.trade_error",
+                            trade_id=trade_id,
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("reconcile.loop_error")
+
     async def _periodic_order_cleanup() -> None:
         """Clean up timed-out unfilled orders every 1 hour."""
         while not shutdown.is_shutting_down:
@@ -612,6 +761,10 @@ async def main() -> None:
     cleanup_task = asyncio.create_task(_periodic_order_cleanup())
     background_tasks.add(cleanup_task)
     cleanup_task.add_done_callback(background_tasks.discard)
+
+    reconcile_task = asyncio.create_task(_periodic_position_reconciliation())
+    background_tasks.add(reconcile_task)
+    reconcile_task.add_done_callback(background_tasks.discard)
 
     # ---------------------------------------------------------------
     # 15. Run forever

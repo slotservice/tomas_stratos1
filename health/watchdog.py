@@ -492,6 +492,59 @@ class HealthChecker:
             count=len(db_trades),
         )
 
+        # 1b. Sweep any "stuck" pre-fill states — PENDING, ENTRY1_PLACED,
+        # ENTRY2_PLACED — that have lingered across a restart. These
+        # represent trades that never made it to POSITION_OPEN; the
+        # entry order either never fired, timed out, or errored and
+        # the cleanup path failed. They can't be "recovered" because
+        # there's no live position to attach to, so mark them
+        # CANCELLED and remove from the active set so the rest of the
+        # recovery loop processes only real positions.
+        stuck_pre_fill_states = {
+            "PENDING", "ENTRY1_PLACED", "ENTRY2_PLACED",
+            "ENTRY1_FILLED", "ENTRY2_FILLED",
+        }
+        pending_cleaned = 0
+        filtered_trades = []
+        for trade in db_trades:
+            state = (trade.get("state") or "").upper()
+            if state in stuck_pre_fill_states:
+                pending_cleaned += 1
+                tid = trade.get("id")
+                try:
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    await self._db.update_trade(
+                        tid,
+                        state="CANCELLED",
+                        close_reason="stuck_pre_fill_on_restart",
+                        closed_at=now_iso,
+                    )
+                    await self._db.log_event(
+                        trade_id=tid,
+                        event_type="stuck_pre_fill_cancelled",
+                        details={"previous_state": state},
+                    )
+                    log.warning(
+                        "state_recovery.stuck_pre_fill_cancelled",
+                        trade_id=tid,
+                        previous_state=state,
+                    )
+                except Exception:
+                    log.exception(
+                        "state_recovery.pre_fill_cleanup_failed",
+                        trade_id=tid,
+                    )
+            else:
+                filtered_trades.append(trade)
+        db_trades = filtered_trades
+        if pending_cleaned:
+            counts["stuck_pre_fill_cleaned"] = pending_cleaned
+            log.info(
+                "state_recovery.stuck_pre_fill_sweep",
+                cleaned=pending_cleaned,
+                remaining=len(db_trades),
+            )
+
         # 2. Build a set of live exchange positions (keyed by symbol+side).
         live_positions: Dict[str, dict] = {}
         symbols_seen: set[str] = set()
