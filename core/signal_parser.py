@@ -127,6 +127,13 @@ _ENTRY_PATTERNS = [
         r"entry\s+" + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
+    # Benjamin Cowen format: "$BIRB add long @ 0.14509" — "@" acts
+    # as the separator, "add long" / "add short" is the direction
+    # phrase, the price follows. Covers both `@ 0.145` and `@0.145`.
+    re.compile(
+        r"add\s+(?:long|short)\s*(?:at|around|@)\s*" + _PRICE_RE,
+        re.IGNORECASE,
+    ),
 ]
 
 # TP patterns - match TP1/T1/Target 1/Take Profit 1 etc.

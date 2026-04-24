@@ -302,6 +302,33 @@ async def main() -> None:
     shutdown.register(tg_notifier)
 
     # ---------------------------------------------------------------
+    # 6b. Initialize report scheduler (daily + weekly group reports).
+    # Client IZZU 2026-04-24: wants the daily/weekly per-group
+    # reports from Meddelande telegram.docx active. The
+    # ReportScheduler class has existed but was never started from
+    # main. Hook it up here.
+    # ---------------------------------------------------------------
+    try:
+        from reporting.scheduler import ReportScheduler
+        report_scheduler = ReportScheduler(
+            settings=settings.reporting,
+            db=db,
+            notifier=tg_notifier,
+            groups=settings.telegram_groups,
+            timezone=settings.general.timezone,
+        )
+        await report_scheduler.start()
+        shutdown.register(report_scheduler)
+        log.info(
+            "report_scheduler.wired",
+            daily_hour=settings.reporting.daily_report_hour,
+            weekly_day=settings.reporting.weekly_report_day,
+            weekly_hour=settings.reporting.weekly_report_hour,
+        )
+    except Exception:
+        log.exception("report_scheduler.startup_failed")
+
+    # ---------------------------------------------------------------
     # 7. Initialize duplicate detector
     # ---------------------------------------------------------------
     dup_detector = C["DuplicateDetector"](
