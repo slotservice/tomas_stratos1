@@ -1080,6 +1080,19 @@ class PositionManager:
             leverage=leverage,
         )
 
+        # Phase 3 — pre-arm the hedge on Bybit as a conditional market
+        # order so the hedge fires autonomously even if the bot is
+        # offline at the moment price crosses the trigger. Failure
+        # here is non-fatal: bot-side check_and_activate remains as a
+        # backup path.
+        try:
+            await self._hedge_mgr.pre_arm_on_bybit(trade)
+        except Exception:
+            log.exception(
+                "trade.hedge_pre_arm_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+
         return trade
 
     # ==================================================================
@@ -1354,6 +1367,19 @@ class PositionManager:
         # --- Close any open hedge ---
         if trade.hedge_trade_id is not None:
             await self._hedge_mgr.close_hedge(trade, exit_price)
+        # Phase 3 — if the hedge was pre-armed on Bybit but never
+        # fired (main trade closed via TP / SL / manual / max-loss
+        # cap before the hedge trigger was reached), cancel the
+        # pending conditional so it doesn't fire after the main
+        # trade is gone and open an unwanted position.
+        if trade.hedge_conditional_order_id is not None:
+            try:
+                await self._hedge_mgr.cancel_pre_armed(trade)
+            except Exception:
+                log.exception(
+                    "close_trade.hedge_pre_arm_cancel_failed",
+                    trade_id=trade.id,
+                )
 
         # --- Compute PnL ---
         pnl_pct: Optional[float] = None

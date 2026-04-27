@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS trades (
     be_price             REAL,
     trailing_sl          REAL,
     hedge_trade_id       INTEGER,
+    hedge_conditional_order_id TEXT,           -- Bybit orderId of pre-armed hedge conditional (Phase 3)
     reentry_count        INTEGER DEFAULT 0,
     scaling_step         INTEGER DEFAULT 0,
     tp_hits              TEXT,              -- JSON array of hit TP indices
@@ -202,6 +203,24 @@ class Database:
         # Enforce foreign-key constraints.
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.executescript(_CREATE_TABLES)
+        # Lightweight migrations — add new columns on existing DBs
+        # without dropping data. Each one is idempotent: try to add,
+        # ignore "duplicate column" errors.
+        for ddl in (
+            "ALTER TABLE trades ADD COLUMN hedge_conditional_order_id TEXT",
+        ):
+            try:
+                await self._db.execute(ddl)
+            except Exception as e:
+                # 'duplicate column name' is the expected case on
+                # already-migrated DBs. Anything else is logged but
+                # not fatal — startup continues.
+                msg = str(e).lower()
+                if "duplicate column" not in msg and "already exists" not in msg:
+                    logger.warning(
+                        "database.migration_skipped",
+                        ddl=ddl, error=str(e)[:120],
+                    )
         await self._db.commit()
         logger.info("database.ready")
 

@@ -287,6 +287,139 @@ class HedgeManager:
         return True
 
     # ------------------------------------------------------------------
+    # Phase 3: pre-arm hedge as Bybit conditional market order
+    # ------------------------------------------------------------------
+
+    async def pre_arm_on_bybit(
+        self,
+        trade: Trade,
+    ) -> Optional[str]:
+        """Pre-arm the hedge as a Bybit conditional market order.
+
+        Once placed on Bybit, the hedge fires autonomously when price
+        crosses the trigger — the bot does NOT need to be online for
+        the hedge to open. Bot-side check_and_activate remains as a
+        backup path, but in normal operation Bybit's conditional
+        engine does the work.
+
+        Called once after a trade opens (after SL/TPs are armed).
+        Returns the Bybit orderId of the conditional, or None if the
+        arm failed for any reason (bot-side path will still fire).
+        """
+        if not self._settings.enabled:
+            return None
+        if trade.hedge_conditional_order_id is not None:
+            return trade.hedge_conditional_order_id  # already armed
+        if trade.hedge_trade_id is not None:
+            return None  # hedge already opened, nothing to pre-arm
+        if trade.signal is None or not trade.avg_entry or not trade.quantity:
+            return None
+
+        avg_entry = trade.avg_entry
+        direction = trade.signal.direction
+        symbol = trade.signal.symbol
+
+        # Use the same dynamic-trigger rule as check_and_activate so
+        # the conditional fires at exactly the same price level the
+        # bot-side path would have fired at.
+        fixed_trigger = abs(self._settings.trigger_pct)
+        pre_sl_buffer_pct = 0.3
+        effective_trigger = fixed_trigger
+        sl_price = trade.sl_price
+        if sl_price and avg_entry > 0:
+            if direction == "LONG":
+                sl_distance_pct = (avg_entry - sl_price) / avg_entry * 100.0
+            else:
+                sl_distance_pct = (sl_price - avg_entry) / avg_entry * 100.0
+            if sl_distance_pct > 0:
+                pre_sl_trigger = max(0.5, sl_distance_pct - pre_sl_buffer_pct)
+                if pre_sl_trigger < effective_trigger:
+                    effective_trigger = pre_sl_trigger
+
+        # Trigger PRICE: how far is effective_trigger% from avg_entry,
+        # in the adverse direction?
+        if direction == "LONG":
+            trigger_price = avg_entry * (1 - effective_trigger / 100.0)
+            trigger_direction = 2  # rising-to-falling: fires when price falls to trigger
+            hedge_side = "Sell"   # opening a SHORT hedge
+            hedge_position_idx = 2
+        else:
+            trigger_price = avg_entry * (1 + effective_trigger / 100.0)
+            trigger_direction = 1  # falling-to-rising: fires when price rises to trigger
+            hedge_side = "Buy"    # opening a LONG hedge
+            hedge_position_idx = 1
+
+        try:
+            result = await self._bybit.place_conditional_open(
+                symbol=symbol,
+                side=hedge_side,
+                qty=trade.quantity,
+                trigger_price=trigger_price,
+                position_idx=hedge_position_idx,
+                trigger_direction=trigger_direction,
+                trigger_by="LastPrice",
+            )
+            order_id = result.get("orderId", "")
+            if order_id:
+                trade.hedge_conditional_order_id = order_id
+                try:
+                    await self._db.update_trade(
+                        int(trade.id),
+                        hedge_conditional_order_id=order_id,
+                    )
+                except Exception:
+                    pass
+                log.info(
+                    "hedge.pre_armed_on_bybit",
+                    trade_id=trade.id, symbol=symbol,
+                    trigger_price=round(trigger_price, 8),
+                    trigger_pct=round(effective_trigger, 4),
+                    order_id=order_id,
+                )
+                return order_id
+        except Exception:
+            log.exception(
+                "hedge.pre_arm_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+        return None
+
+    async def cancel_pre_armed(
+        self,
+        trade: Trade,
+    ) -> None:
+        """Cancel the pre-armed hedge conditional on Bybit.
+
+        Called when the main trade closes before the hedge trigger
+        fires — leaves the conditional armed otherwise it would
+        eventually fire and open an unwanted position.
+        """
+        oid = trade.hedge_conditional_order_id
+        if not oid or trade.signal is None:
+            return
+        try:
+            await self._bybit.cancel_order(trade.signal.symbol, oid)
+            log.info(
+                "hedge.pre_armed_cancelled",
+                trade_id=trade.id, symbol=trade.signal.symbol,
+                order_id=oid,
+            )
+        except Exception:
+            log.exception(
+                "hedge.pre_arm_cancel_failed",
+                trade_id=trade.id, symbol=trade.signal.symbol,
+                order_id=oid,
+            )
+        trade.hedge_conditional_order_id = None
+        try:
+            await self._db.update_trade(
+                int(trade.id),
+                hedge_conditional_order_id=None,
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Delayed SL adjustment on the original trade
     # ------------------------------------------------------------------
 

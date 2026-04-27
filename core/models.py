@@ -144,6 +144,12 @@ class Trade:
 
     # --- Hedge / re-entry ---
     hedge_trade_id: Optional[str] = None
+    # Bybit orderId of the conditional that pre-arms the hedge on the
+    # exchange (Phase 3 client IZZU 2026-04-27). Set after trade
+    # opens, cleared on hedge fire OR on main-trade close (cancelled).
+    # Lets the hedge fire autonomously if the bot is offline at the
+    # moment price crosses the trigger.
+    hedge_conditional_order_id: Optional[str] = None
     reentry_count: int = 0
 
     # --- Scaling ---

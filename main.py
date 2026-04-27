@@ -787,15 +787,27 @@ async def main() -> None:
                         break
 
                 # Set of (symbol, side) currently tracked by the bot.
+                # Phase 3 (2026-04-27): also pre-track the hedge side
+                # for any trade that has pre-armed a hedge conditional
+                # on Bybit. When that conditional fires, the resulting
+                # hedge position would otherwise look like an orphan
+                # to this loop and get force-closed. Mapping
+                # pre_armed_hedges keeps the parent trade reference so
+                # we can arm the hedge's TP/SL when it appears.
                 tracked: set[tuple[str, str]] = set()
+                pre_armed_hedges: dict[tuple[str, str], object] = {}
                 for tr in getattr(position_mgr, "_active_trades", {}).values():
                     if tr.signal and tr.signal.symbol and not tr.is_terminal:
                         tracked_side = "Buy" if tr.signal.direction == "LONG" else "Sell"
                         tracked.add((tr.signal.symbol, tracked_side))
-                        # Also track the hedge side if hedge is active.
-                        if tr.hedge_trade_id:
-                            hedge_side = "Sell" if tr.signal.direction == "LONG" else "Buy"
+                        hedge_side = "Sell" if tr.signal.direction == "LONG" else "Buy"
+                        # Track the hedge side if hedge is already
+                        # active OR if a hedge has been pre-armed.
+                        if tr.hedge_trade_id or tr.hedge_conditional_order_id:
                             tracked.add((tr.signal.symbol, hedge_side))
+                            if (tr.hedge_conditional_order_id
+                                    and not tr.hedge_trade_id):
+                                pre_armed_hedges[(tr.signal.symbol, hedge_side)] = tr
 
                 orphan_count = 0
                 for p in all_positions:
@@ -808,6 +820,82 @@ async def main() -> None:
                         position_idx = int(p.get("positionIdx") or 0)
                         if not sym or not side:
                             continue
+
+                        # Phase 3: a tracked-but-not-yet-fired hedge
+                        # conditional just fired and opened a hedge
+                        # position. Arm its TP/SL and link to parent.
+                        if (sym, side) in pre_armed_hedges:
+                            parent = pre_armed_hedges.pop((sym, side))
+                            avg_price = float(p.get("avgPrice") or 0)
+                            try:
+                                hedge_sl = parent.signal.entry  # original entry
+                                hedge_tp = parent.sl_price  # main SL becomes hedge TP
+                                if hedge_tp:
+                                    await bybit.set_trading_stop(
+                                        symbol=sym,
+                                        position_idx=position_idx,
+                                        take_profit=hedge_tp,
+                                        stop_loss=hedge_sl,
+                                    )
+                                # Persist hedge link on parent trade.
+                                hedge_trade_db_id = None
+                                try:
+                                    hedge_trade_db_id = await db.save_trade({
+                                        "signal_id": None,
+                                        "state": "HEDGE_ACTIVE",
+                                        "avg_entry": avg_price,
+                                        "quantity": size,
+                                        "leverage": parent.leverage,
+                                        "margin": parent.margin,
+                                        "sl_price": hedge_sl,
+                                    })
+                                except Exception:
+                                    log.exception(
+                                        "reverse_reconcile.hedge_db_save_failed",
+                                        symbol=sym,
+                                    )
+                                parent.hedge_trade_id = (
+                                    str(hedge_trade_db_id)
+                                    if hedge_trade_db_id is not None
+                                    else "fired"
+                                )
+                                parent.hedge_conditional_order_id = None
+                                try:
+                                    await db.update_trade(
+                                        int(parent.id),
+                                        hedge_trade_id=parent.hedge_trade_id,
+                                        hedge_conditional_order_id=None,
+                                    )
+                                except Exception:
+                                    pass
+                                from core.models import TradeState
+                                parent.transition(TradeState.HEDGE_ACTIVE)
+                                log.info(
+                                    "reverse_reconcile.hedge_pre_armed_fired",
+                                    parent_trade_id=parent.id,
+                                    symbol=sym, side=side,
+                                    hedge_trade_id=parent.hedge_trade_id,
+                                    avg_price=avg_price,
+                                )
+                                try:
+                                    await tg_notifier._send_notify(
+                                        f"🛡️ HEDGE AKTIVERAD (Bybit-conditional)\n"
+                                        f"📊 Symbol: #{sym}\n"
+                                        f"📈 Hedge: {side}\n"
+                                        f"💥 Entry: {avg_price}\n"
+                                        f"🚩 Hedge SL: {hedge_sl}\n"
+                                        f"🎯 Hedge TP: {hedge_tp}"
+                                    )
+                                except Exception:
+                                    pass
+                            except Exception:
+                                log.exception(
+                                    "reverse_reconcile.hedge_arm_failed",
+                                    parent_trade_id=parent.id,
+                                    symbol=sym,
+                                )
+                            continue
+
                         if (sym, side) in tracked:
                             continue
                         # Orphan — the bot doesn't track this. Close it.
