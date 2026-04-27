@@ -80,10 +80,14 @@ _ENTRY_PATTERNS = [
         r"entry\s+market\s+price\s*\(\s*" + _PRICE_RE + r"\s*\)",
         re.IGNORECASE,
     ),
-    # "ENTRY PRICE: 0.2050" - prioritise before numbered list to avoid 0. trap
+    # "ENTRY PRICE: 0.2050" - prioritise before numbered list to avoid
+    # the 0. trap. STRICTLY single-line: uses an inline price match
+    # without _PRICE_RE's leading \s* so the regex can't bleed across
+    # newlines and grab the "1" of a following "1) 0.907" ordinal
+    # (Pair: #QTUM regression 2026-04-25).
     re.compile(
-        r"entry\s+price\s*[:=@]?\s*" + _PRICE_RE
-        + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
+        r"entry\s+price[^\S\n]*[:=@]?[^\S\n]*(\d[\d,]*\.?\d*)"
+        + r"(?:[^\S\n]*[-–~][^\S\n]*(\d[\d,]*\.?\d*))?",
         re.IGNORECASE,
     ),
     # "ENTRY1: 0.4241" / "ENTRY 1: ..."
@@ -106,20 +110,31 @@ _ENTRY_PATTERNS = [
         + r"(?:[^\S\n]*\n[^\d\n]+(\d[\d,]*\.?\d*))?",
         re.IGNORECASE,
     ),
-    # Numbered list under "Entry:" header e.g. "Entry :\n1) 87.0700\n2) 84.4579"
+    # Numbered list under "Entry:" / "Entry Price:" / "Entries:" header.
+    # e.g. "Entry :\n1) 87.07\n2) 84.45" or "Pair: #QTUM Entry Price:\n1) 0.907\n2) 0.934".
+    # Keywords expanded with 'price', 'targets?', 'orders?', 'area' so
+    # variants like "Entry Price:" don't fall through to a generic
+    # pattern that swallows just the leading "1" from the ordinal.
     re.compile(
-        r"entry\s*(?:zone|orders?)?\s*[:=]?"
+        r"(?:entry|entries)\s*(?:zone|price|orders?|area|targets?)?\s*[:=]?"
         r"\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE
         + r"(?:\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
     # "Entry: 65000" / "Entry Zone: 3200-3250" / "Buy: 0.152" /
-    # "Entry Target: (0.07300)" (parenthesised single price).
+    # "Entry Target: (0.07300)" / "Entries: - 1.1480 - 1.10" /
+    # "ENTRY :- 0.0715 - 0.069" / "Buy Range: 0.009880 – 0.0096".
+    # IMPORTANT: uses [^\S\n] (whitespace excluding newline) instead of
+    # \s* before/after the separator so this pattern matches only on
+    # a SINGLE LINE. Without that, the leading \s* would bleed past
+    # the colon/blank line and capture the "1" of a following
+    # numbered-list ordinal (Pair: #QTUM regression 2026-04-24).
     re.compile(
-        r"(?:entry\s*(?:zone|price|area|orders?|targets?)?|"
-        r"buy(?:\s*(?:zone|price|area|at|around|@))?|"
-        r"open|limit|market\s*(?:buy|entry))\s*[:=@]\s*\(?\s*"
-        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?\s*\)?",
+        r"(?:(?:entry|entries)\s*(?:zone|price|area|orders?|targets?)?|"
+        r"buy(?:\s*(?:zone|price|area|range|at|around|@))?|"
+        r"open|limit|market\s*(?:buy|entry))"
+        r"[^\S\n]*[:=@]?[^\S\n]*-?[^\S\n]*\(?[^\S\n]*"
+        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?[^\S\n]*\)?",
         re.IGNORECASE,
     ),
     # Standalone "Entry 65000" without colon
@@ -147,19 +162,25 @@ _TP_PATTERNS = [
         re.IGNORECASE,
     ),
     # Numbered list under a "Targets :" / "Take Profits :" / "Take
-    # Profit Targets :" header. e.g. "Targets :\n1) 87.57\n2) 89.38"
-    # List markers must be "N)" or "N." followed by SPACE - not
-    # matching "0." in prices. The trailing "(?:\s+targets?)?"
-    # absorbs the extra word when the header is "Take Profit Targets".
+    # Profit Targets :" / "TARGET :-" header. e.g. "Targets :\n1) 87.57"
+    # or "TARGET :-\n1 : 0.074\n2 : 0.078" (WCT format). The list-marker
+    # accepts ")" "." ":" "-" with optional whitespace AROUND them so
+    # "1)0.5", "1) 0.5", "1 : 0.5", "1 - 0.5" all match. Trailing
+    # "(?:\s+targets?)?" absorbs the extra word in "Take Profit Targets".
     re.compile(
-        r"(?:targets?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?"
-        r"\s*\n\s*((?:\d+[\)\.]\s+[\d.]+\s*\n?\s*){1,8})",
+        r"(?:targets?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?\s*-?"
+        r"\s*\n\s*((?:\d+[^\d\n\w]{1,4}[\d.]+\s*\n?\s*){1,8})",
         re.IGNORECASE,
     ),
-    # "Targets: 3300/3400/3500" or "Targets: 3300, 3400, 3500" (comma/slash separated)
+    # "Targets: 3300/3400/3500" / "Targets: 3300, 3400, 3500" / "Targets:
+    # 🎯 1.20, 1.27, 1.36" — same-line list with optional emojis between
+    # the header and the first price (ENSO format). The "[^\d\n]*" gap
+    # absorbs emoji + spaces + bullet markers between the header and
+    # the digits. The captured class still excludes \n so the match
+    # can't bleed into a separate "Targets:\n1 : 0.074" numbered list.
     re.compile(
-        r"(?:targets?|tps?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?\s*"
-        r"([\d.,\s/|\-]+)",
+        r"(?:targets?|tps?|take[\s_-]*profits?(?:\s+targets?)?)[^\S\n]*[:=]?[^\d\n]*"
+        r"([\d.,/|\-•• ]+)",
         re.IGNORECASE,
     ),
 ]
@@ -393,9 +414,12 @@ def extract_prices(text: str) -> dict:
         m = _TP_PATTERNS[1].search(text)
         if m:
             block = m.group(1)
-            # Extract "N) price" or "N. price" pairs from the block
+            # Extract numbered TP entries from the block. Separator
+            # between the index and the price can be ")" "." ":" "-"
+            # with optional surrounding whitespace, so all of these
+            # match: "1)0.5", "1) 0.5", "1 : 0.5", "1 - 0.5", "1.0.5".
             for item in re.finditer(
-                r"(\d+)[\)\.]\s*([\d.]+)", block
+                r"(\d+)[^\d\n\w]{1,4}([\d.]+)", block
             ):
                 idx = int(item.group(1))
                 price = _parse_price(item.group(2))
@@ -422,13 +446,14 @@ def extract_prices(text: str) -> dict:
                 if price > 0:
                     collected_tps[i] = price
 
-    # Pattern 4: comma/slash-separated list ("Targets: 3300/3400/3500")
+    # Pattern 4: comma/slash/bullet-separated list on the header line
+    # ("Targets: 3300/3400/3500" / "Targets: 0.0101• 0.0107• 0.0115").
     if not collected_tps:
         m = _TP_PATTERNS[2].search(text)
         if m:
             raw_list = m.group(1)
-            # Split on / , | - or whitespace
-            parts = re.split(r"[/|,\-\s]+", raw_list.strip())
+            # Split on / , | - • • or whitespace
+            parts = re.split(r"[/|,\-\s•• ]+", raw_list.strip())
             for i, part in enumerate(parts, start=1):
                 price = _parse_price(part.rstrip(".,"))
                 if price > 0:
@@ -442,7 +467,13 @@ def extract_prices(text: str) -> dict:
     # characters after an optional bullet/index prefix is skipped
     # so that metadata lines (Leverage, etc.) don't get captured.
     if not collected_tps:
-        entry_line_re = re.compile(r"(?im)^.*\bentry\b.*$")
+        # Anchor on the first line that contains "entry", "entries",
+        # "buy range", or "buy zone" — so signals using "Buy Range:"
+        # as their entry-zone header (BANANAS31 format) also benefit
+        # from the positional fallback.
+        entry_line_re = re.compile(
+            r"(?im)^.*\b(?:entry|entries|buy[\s-]+(?:range|zone|area))\b.*$"
+        )
         sl_line_re = re.compile(
             r"(?im)^.*\b(?:sl|stop[-\s]*loss|stoploss|invalidation)\b.*$"
         )
@@ -451,12 +482,18 @@ def extract_prices(text: str) -> dict:
             sm = sl_line_re.search(text, em.end())
             end_pos = sm.start() if sm else len(text)
             block = text[em.end():end_pos]
-            # Ordinal prefix ("1)" / "1.") is optional. Require whitespace
-            # AFTER the separator so a decimal point (e.g. "0.02580") is
-            # never mistaken for an ordinal. Limit ordinal digits to 1-2
-            # so four-digit integer prices are never swallowed either.
+            # Normalise bullet separators "•" "·" inside the block to
+            # newlines so a single line like "0.0101• 0.0107• 0.0115"
+            # (BANANAS31 format) becomes three separate price-only
+            # lines that the per-line regex below can match.
+            block = re.sub(r"[•·]+", "\n", block)
+            # Ordinal prefix is optional. Accept "1)" / "1." / "1 :" / "1 -".
+            # Require whitespace AFTER the separator so a decimal point
+            # (e.g. "0.02580") is never mistaken for an ordinal. Limit
+            # ordinal digits to 1-2 so 4-digit integer prices aren't
+            # swallowed either.
             tp_line_re = re.compile(
-                r"^\s*\W*(?:\d{1,2}[)\.]\s+)?" + _PRICE_RE + r"\s*\W*$",
+                r"^\s*\W*(?:\d{1,2}\s*[)\.\:\-]\s+)?" + _PRICE_RE + r"\s*\W*$",
                 re.MULTILINE,
             )
             idx = 0
