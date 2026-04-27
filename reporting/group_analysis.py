@@ -214,7 +214,7 @@ class GroupAnalysisReporter:
             cur = await self._db._conn.execute(
                 """
                 SELECT id, source_channel_id, source_channel_name,
-                       received_at
+                       received_at, status
                 FROM signals
                 WHERE received_at >= ? AND received_at <= ?
                 """,
@@ -231,6 +231,7 @@ class GroupAnalysisReporter:
             sid = row.get("id")
             ch_id = row.get("source_channel_id") or 0
             ch_name = row.get("source_channel_name") or "?"
+            status = (row.get("status") or "").lower()
             signal_ids[sid] = ch_id
             if ch_id not in stats:
                 stats[ch_id] = ChannelStats(
@@ -239,6 +240,12 @@ class GroupAnalysisReporter:
                     configured=False,
                 )
             stats[ch_id].signals_count += 1
+            # Per-channel "copies / blocked signals" count: how many of
+            # this channel's signals were rejected because another
+            # channel already had the same trade open. Persisted at
+            # signal-save time with status='blocked_duplicate'.
+            if status == "blocked_duplicate":
+                stats[ch_id].blocked_duplicate += 1
 
         if not signal_ids:
             return stats
@@ -287,9 +294,7 @@ class GroupAnalysisReporter:
                 cs.open_count += 1
             cs.reentry_count += int(row.get("reentry_count") or 0)
             reason = (row.get("close_reason") or "").lower()
-            if "duplicate" in reason or "blocked" in reason:
-                cs.blocked_duplicate += 1
-            elif reason in ("error", "invalid"):
+            if reason in ("error", "invalid"):
                 cs.invalid_signals += 1
 
         return stats
@@ -416,15 +421,16 @@ class GroupAnalysisReporter:
             lines = [
                 "",
                 "📋 Per-grupp detaljer (sorterat efter |PnL|, top 20)",
-                f"{'Grupp':<28}{'Sig':>5} {'Tr':>4} {'W':>3} "
+                "Bl = blockerade kopior (signaler som dubblerade en annan kanal)",
+                f"{'Grupp':<28}{'Sig':>5} {'Bl':>4} {'Tr':>4} {'W':>3} "
                 f"{'L':>3} {'PnL':>9} {'WR%':>5}",
             ]
             for s in active[:20]:
                 wr_str = f"{s.win_rate*100:.0f}" if (s.wins + s.losses) else "-"
                 lines.append(
                     f"{s.channel_name[:27]:<28}"
-                    f"{s.signals_count:>5} {s.trades_count:>4} "
-                    f"{s.wins:>3} {s.losses:>3} "
+                    f"{s.signals_count:>5} {s.blocked_duplicate:>4} "
+                    f"{s.trades_count:>4} {s.wins:>3} {s.losses:>3} "
                     f"{s.net_pnl_usdt:>+9.2f} {wr_str:>5}"
                 )
             if len(active) > 20:

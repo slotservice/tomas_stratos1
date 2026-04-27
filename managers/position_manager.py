@@ -187,6 +187,37 @@ class PositionManager:
                 log.info("signal.duplicate_blocked", symbol=symbol,
                          reason=dup_result.reason)
                 existing = dup_result.existing_trade or {}
+                # Persist the blocked signal so the per-channel group
+                # analysis report can count "copies / blocked signals"
+                # against the source channel (client request 2026-04-27).
+                try:
+                    tp_list_blocked = (
+                        signal.tps if hasattr(signal, "tps")
+                        else signal.tp_list if hasattr(signal, "tp_list")
+                        else []
+                    )
+                    await self._db.save_signal({
+                        "symbol": symbol,
+                        "direction": direction,
+                        "entry_price": getattr(signal, "entry", 0),
+                        "sl_price": getattr(signal, "sl", None),
+                        "tp_prices": tp_list_blocked,
+                        "source_channel_id": getattr(signal, "channel_id", None)
+                            or getattr(signal, "source_channel_id", None),
+                        "source_channel_name": getattr(signal, "channel_name", None)
+                            or getattr(signal, "source_channel_name", None),
+                        "signal_type": getattr(signal, "signal_type", "dynamic"),
+                        "raw_text": getattr(signal, "raw_text", ""),
+                        "received_at": (
+                            signal.received_at.isoformat()
+                            if hasattr(signal, "received_at")
+                                and isinstance(signal.received_at, datetime)
+                            else None
+                        ),
+                        "status": "blocked_duplicate",
+                    })
+                except Exception:
+                    log.exception("signal.blocked_save_failed", symbol=symbol)
                 try:
                     await self._notifier.signal_blocked_duplicate(
                         signal=signal,
