@@ -678,7 +678,53 @@ class HealthChecker:
                 del live_positions[key]
 
             else:
-                # Trade in DB but not on exchange -- mark as closed.
+                # Trade in DB but not in the live_positions snapshot.
+                # CRITICAL (client IZZU 2026-04-27): the previous logic
+                # closed the DB trade on a single missed match. If the
+                # Bybit get_positions call had a transient issue (rate
+                # limit, network blip, caching), a still-open position
+                # got marked closed in the DB. Over many restarts this
+                # accumulated into 48 orphan positions on Bybit that
+                # the bot didn't know about and couldn't manage —
+                # losses bypassed the -4 USDT cap entirely.
+                #
+                # New rule: re-confirm with TWO additional direct
+                # get_position calls (one per side) before marking
+                # closed. Only if all three reads agree the position
+                # doesn't exist do we mark it CLOSED.
+                confirmed_closed = True
+                try:
+                    for side in ("Buy", "Sell"):
+                        for attempt in range(2):
+                            try:
+                                pos2 = await self._bybit.get_position(symbol, side)
+                                if pos2 and float(pos2.get("size", 0) or 0) > 0:
+                                    confirmed_closed = False
+                                    break
+                            except Exception:
+                                # API failure during re-check is treated
+                                # as a "not confirmed" — keep the trade
+                                # open in DB so the runtime reconciliation
+                                # loop deals with it later.
+                                confirmed_closed = False
+                                break
+                        if not confirmed_closed:
+                            break
+                except Exception:
+                    confirmed_closed = False
+
+                if not confirmed_closed:
+                    log.warning(
+                        "state_recovery.orphan_close_skipped_unconfirmed",
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        direction=direction,
+                        state=state,
+                    )
+                    counts.setdefault("orphan_close_skipped", 0)
+                    counts["orphan_close_skipped"] += 1
+                    continue
+
                 counts["orphan_db_closed"] += 1
                 log.warning(
                     "state_recovery.orphan_db_trade",

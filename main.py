@@ -728,6 +728,142 @@ async def main() -> None:
             except Exception:
                 log.exception("reconcile.loop_error")
 
+    async def _periodic_reverse_reconciliation() -> None:
+        """Detect Bybit-side orphan positions and auto-close them.
+
+        Inverse of _periodic_position_reconciliation. That loop catches
+        "DB has it but Bybit doesn't" and marks the DB closed. THIS
+        loop catches the OPPOSITE drift — "Bybit has an open position
+        but the DB has no active trade" — by paginating Bybit's full
+        position list every 60 seconds and closing anything the bot
+        doesn't manage.
+
+        Why orphans accumulate in this direction: state recovery on
+        restart used to mark DB trades CLOSED on a single missed
+        Bybit lookup (rate-limited / racy / transient). The position
+        was actually still open; the DB just thought it wasn't.
+        Without this loop, those orphans would bleed indefinitely
+        because the -4 USDT cap and every other safety check runs
+        ONLY on trades the bot tracks. Discovered 2026-04-27 with 48
+        orphan positions on Bybit summing to -77 USDT unrealised.
+
+        Auto-closing matches the safety-net philosophy. If a position
+        has no managing trade in the DB, the bot has no SL/TP/hedge
+        plan for it — best to flatten and report rather than leave it
+        bleeding.
+        """
+        reconcile_interval = 60
+        while not shutdown.is_shutting_down:
+            try:
+                await asyncio.sleep(reconcile_interval)
+                if shutdown.is_shutting_down:
+                    break
+
+                # Pull every open position on Bybit, paginated.
+                all_positions: list = []
+                cursor = ""
+                page_attempts = 0
+                while page_attempts < 10:
+                    page_attempts += 1
+                    try:
+                        kwargs = {
+                            "category": "linear",
+                            "settleCoin": "USDT",
+                            "limit": 200,
+                        }
+                        if cursor:
+                            kwargs["cursor"] = cursor
+                        resp = await bybit._call_with_retry(
+                            bybit._rest.get_positions, **kwargs,
+                        )
+                        result = resp.get("result", {})
+                        chunk = result.get("list") or []
+                        all_positions.extend(chunk)
+                        cursor = result.get("nextPageCursor", "") or ""
+                        if not cursor or not chunk:
+                            break
+                    except Exception:
+                        log.exception("reverse_reconcile.page_fetch_failed")
+                        break
+
+                # Set of (symbol, side) currently tracked by the bot.
+                tracked: set[tuple[str, str]] = set()
+                for tr in getattr(position_mgr, "_active_trades", {}).values():
+                    if tr.signal and tr.signal.symbol and not tr.is_terminal:
+                        tracked_side = "Buy" if tr.signal.direction == "LONG" else "Sell"
+                        tracked.add((tr.signal.symbol, tracked_side))
+                        # Also track the hedge side if hedge is active.
+                        if tr.hedge_trade_id:
+                            hedge_side = "Sell" if tr.signal.direction == "LONG" else "Buy"
+                            tracked.add((tr.signal.symbol, hedge_side))
+
+                orphan_count = 0
+                for p in all_positions:
+                    try:
+                        size = float(p.get("size") or 0)
+                        if size <= 0:
+                            continue
+                        sym = p.get("symbol", "")
+                        side = p.get("side", "")
+                        position_idx = int(p.get("positionIdx") or 0)
+                        if not sym or not side:
+                            continue
+                        if (sym, side) in tracked:
+                            continue
+                        # Orphan — the bot doesn't track this. Close it.
+                        unreal = float(p.get("unrealisedPnl") or 0)
+                        log.warning(
+                            "reverse_reconcile.orphan_found",
+                            symbol=sym, side=side, size=size,
+                            unrealised_pnl=unreal,
+                            position_idx=position_idx,
+                        )
+                        close_side = "Sell" if side == "Buy" else "Buy"
+                        try:
+                            await bybit.place_market_order(
+                                symbol=sym,
+                                side=close_side,
+                                qty=size,
+                                position_idx=position_idx,
+                                reduce_only=True,
+                            )
+                            orphan_count += 1
+                            log.info(
+                                "reverse_reconcile.orphan_closed",
+                                symbol=sym, side=side, size=size,
+                                unrealised_pnl=unreal,
+                            )
+                            try:
+                                await tg_notifier._send_notify(
+                                    f"⚠️ ORPHAN POSITION STÄNGD\n"
+                                    f"📊 Symbol: #{sym}\n"
+                                    f"📈 Riktning: {side}\n"
+                                    f"💵 Storlek: {size}\n"
+                                    f"💰 PnL vid stängning: {unreal:.2f} USDT\n"
+                                    f"📍 Skäl: positionen fanns på Bybit men hade ingen aktiv trade i botens DB"
+                                )
+                            except Exception:
+                                pass
+                        except Exception:
+                            log.exception(
+                                "reverse_reconcile.close_failed",
+                                symbol=sym, side=side,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        log.exception("reverse_reconcile.position_error")
+
+                if orphan_count:
+                    log.info(
+                        "reverse_reconcile.cycle_complete",
+                        orphans_closed=orphan_count,
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("reverse_reconcile.loop_error")
+
     async def _periodic_order_cleanup() -> None:
         """Clean up timed-out unfilled orders every 1 hour."""
         while not shutdown.is_shutting_down:
@@ -792,6 +928,10 @@ async def main() -> None:
     reconcile_task = asyncio.create_task(_periodic_position_reconciliation())
     background_tasks.add(reconcile_task)
     reconcile_task.add_done_callback(background_tasks.discard)
+
+    reverse_reconcile_task = asyncio.create_task(_periodic_reverse_reconciliation())
+    background_tasks.add(reverse_reconcile_task)
+    reverse_reconcile_task.add_done_callback(background_tasks.discard)
 
     # ---------------------------------------------------------------
     # 15. Run forever
