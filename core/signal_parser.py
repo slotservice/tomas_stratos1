@@ -651,12 +651,14 @@ def parse_signal(
     # Strip zero-width characters and normalize whitespace slightly.
     # Also remove Markdown bold markers (**) — some channels (Coin
     # Bearu, Crypto Beast, CoinAura) post messages with literal '**'
-    # characters that confuse the symbol regex. Stripping them BEFORE
-    # parsing makes "SHORT BSB**/USDT" become "SHORT BSB/USDT" which
-    # the existing patterns handle cleanly. (Markdown italics '__'
-    # and inline-code '`' are left alone — they're rare in signals
-    # and removing them risks dropping intended characters.)
-    clean = text.replace("**", "").strip()
+    # characters that confuse the symbol regex. Same for inline-code
+    # backticks (`) used by AI Felix Crypto and similar to wrap prices
+    # like "Entry: `449.33`" — the backticks confuse the entry regex.
+    # Stripping them BEFORE parsing lets the existing patterns handle
+    # the content cleanly. Markdown italics '__' are left alone; they
+    # are rare in signals and removing them risks dropping legitimate
+    # characters.
+    clean = text.replace("**", "").replace("`", "").strip()
 
     # --- Symbol ---
     symbol = _extract_symbol(clean)
