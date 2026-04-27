@@ -1472,6 +1472,51 @@ class PositionManager:
                     trade_id=trade.id,
                 )
 
+        # Sweep any leftover bot-placed conditional orders on this
+        # symbol/side. Bybit doesn't auto-cancel untriggered Stop /
+        # conditional orders when the position closes via trailing or
+        # native TP/SL — without this sweep they accumulate (see
+        # incident 2026-04-28 where 29 orphan orders piled up across
+        # closed trades). In hedge mode there is exactly one position
+        # per (symbol, positionIdx), so cancelling all orders matching
+        # this trade's positionIdx is safe.
+        if trade.signal:
+            try:
+                close_position_idx = 1 if direction == "LONG" else 2
+                leftover = await self._bybit.get_open_orders(symbol=symbol)
+                cancelled = 0
+                for od in leftover:
+                    try:
+                        o_pidx = int(od.get("positionIdx") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if o_pidx != close_position_idx:
+                        continue
+                    oid = od.get("orderId")
+                    if not oid:
+                        continue
+                    try:
+                        await self._bybit.cancel_order(
+                            symbol=symbol, order_id=oid,
+                        )
+                        cancelled += 1
+                    except Exception:
+                        log.exception(
+                            "close_trade.order_cancel_failed",
+                            trade_id=trade.id, symbol=symbol, order_id=oid,
+                        )
+                if cancelled:
+                    log.info(
+                        "close_trade.leftover_orders_swept",
+                        trade_id=trade.id, symbol=symbol,
+                        position_idx=close_position_idx, cancelled=cancelled,
+                    )
+            except Exception:
+                log.exception(
+                    "close_trade.order_sweep_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
+
         # --- Compute PnL ---
         pnl_pct: Optional[float] = None
         pnl_usdt: Optional[float] = None
