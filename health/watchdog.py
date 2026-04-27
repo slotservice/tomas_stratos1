@@ -678,83 +678,34 @@ class HealthChecker:
                 del live_positions[key]
 
             else:
-                # Trade in DB but not in the live_positions snapshot.
-                # CRITICAL (client IZZU 2026-04-27): the previous logic
-                # closed the DB trade on a single missed match. If the
-                # Bybit get_positions call had a transient issue (rate
-                # limit, network blip, caching), a still-open position
-                # got marked closed in the DB. Over many restarts this
-                # accumulated into 48 orphan positions on Bybit that
-                # the bot didn't know about and couldn't manage —
-                # losses bypassed the -4 USDT cap entirely.
+                # Trade in DB but not in the bulk live_positions snapshot.
+                # IMPORTANT (client IZZU 2026-04-27): we no longer mark
+                # the trade CLOSED here. Doing so on a racy bulk-fetch
+                # response wrongly closed still-open positions in the
+                # past, accumulating 48 orphan positions on Bybit. The
+                # earlier "re-confirm with extra API calls" approach
+                # was correct in principle but made startup glacial
+                # (1 trade/sec → 10+ min on a busy DB).
                 #
-                # New rule: re-confirm with TWO additional direct
-                # get_position calls (one per side) before marking
-                # closed. Only if all three reads agree the position
-                # doesn't exist do we mark it CLOSED.
-                confirmed_closed = True
-                try:
-                    for side in ("Buy", "Sell"):
-                        for attempt in range(2):
-                            try:
-                                pos2 = await self._bybit.get_position(symbol, side)
-                                if pos2 and float(pos2.get("size", 0) or 0) > 0:
-                                    confirmed_closed = False
-                                    break
-                            except Exception:
-                                # API failure during re-check is treated
-                                # as a "not confirmed" — keep the trade
-                                # open in DB so the runtime reconciliation
-                                # loop deals with it later.
-                                confirmed_closed = False
-                                break
-                        if not confirmed_closed:
-                            break
-                except Exception:
-                    confirmed_closed = False
-
-                if not confirmed_closed:
-                    log.warning(
-                        "state_recovery.orphan_close_skipped_unconfirmed",
-                        trade_id=trade_id,
-                        symbol=symbol,
-                        direction=direction,
-                        state=state,
-                    )
-                    counts.setdefault("orphan_close_skipped", 0)
-                    counts["orphan_close_skipped"] += 1
-                    continue
-
-                counts["orphan_db_closed"] += 1
-                log.warning(
-                    "state_recovery.orphan_db_trade",
+                # Cleaner architecture: state_recovery only LOADS DB
+                # trades into memory; it does NOT make close decisions.
+                # The runtime forward-reconciliation loop (30s, in
+                # main._periodic_position_reconciliation) closes any
+                # tracked trade whose position has size=0 on Bybit.
+                # The runtime reverse-reconciliation loop (60s, in
+                # main._periodic_reverse_reconciliation) closes any
+                # Bybit position the bot doesn't track. Together those
+                # two loops catch drift in both directions within
+                # ~60s of startup, without blocking startup itself.
+                counts.setdefault("orphan_close_skipped", 0)
+                counts["orphan_close_skipped"] += 1
+                log.info(
+                    "state_recovery.orphan_check_deferred_to_runtime",
                     trade_id=trade_id,
                     symbol=symbol,
                     direction=direction,
                     state=state,
                 )
-                try:
-                    now_iso = datetime.now(timezone.utc).isoformat()
-                    await self._db.update_trade(
-                        trade_id,
-                        state="CLOSED",
-                        close_reason="orphan_on_restart",
-                        closed_at=now_iso,
-                    )
-                    await self._db.log_event(
-                        trade_id=trade_id,
-                        event_type="orphan_closed_on_restart",
-                        details={
-                            "symbol": symbol,
-                            "direction": direction,
-                            "previous_state": state,
-                        },
-                    )
-                except Exception:
-                    log.exception(
-                        "state_recovery.orphan_close_failed",
-                        trade_id=trade_id,
-                    )
 
         # 6. Remaining live_positions entries are exchange positions not
         #    tracked in the DB -- log warnings.
