@@ -1176,25 +1176,40 @@ class PositionManager:
         symbol = data.get("symbol", "")
         size = float(data.get("size", 0) or 0)
         side = data.get("side", "")
+        # Bybit hedge mode: positionIdx 1 = Long side, 2 = Short side.
+        # The hedge side carries size=0 + side="" whenever no position
+        # exists there — including transient events emitted while the
+        # Phase 3 hedge pre-arm conditional is being placed and cancelled.
+        # Without an idx check, every such empty event matched the main
+        # trade and closed it ~1s after open (see incident 2026-04-27).
+        try:
+            position_idx = int(data.get("positionIdx") or 0)
+        except (TypeError, ValueError):
+            position_idx = 0
 
         log.debug(
             "ws.position_update",
             symbol=symbol,
             size=size,
             side=side,
+            position_idx=position_idx,
         )
 
-        if size == 0:
-            # Position fully closed -- find the matching active trade.
-            trade = self._find_trade_by_symbol_side(symbol, side)
-            if trade is not None:
-                exit_price = float(data.get("markPrice", 0) or 0)
-                close_reason = self._infer_close_reason(trade, exit_price)
-                await self.close_trade(
-                    trade_id=trade.id,
-                    reason=close_reason,
-                    exit_price=exit_price,
-                )
+        if size != 0 or position_idx not in (1, 2):
+            return
+
+        direction_for_idx = "LONG" if position_idx == 1 else "SHORT"
+        trade = self._find_trade_by_symbol_direction(symbol, direction_for_idx)
+        if trade is None:
+            return
+
+        exit_price = float(data.get("markPrice", 0) or 0)
+        close_reason = self._infer_close_reason(trade, exit_price)
+        await self.close_trade(
+            trade_id=trade.id,
+            reason=close_reason,
+            exit_price=exit_price,
+        )
 
     async def on_execution_update(self, data: dict) -> None:
         """Handle a WebSocket execution / fill update.
@@ -2149,20 +2164,26 @@ class PositionManager:
         # Cannot determine age -> allow through.
         return False
 
-    def _find_trade_by_symbol_side(
+    def _find_trade_by_symbol_direction(
         self,
         symbol: str,
-        side: str,
+        direction: str,
     ) -> Optional[Trade]:
-        """Find an active trade matching *symbol* and position *side*."""
+        """Find an active (non-terminal) trade for *symbol* + *direction*.
+
+        Used to translate a Bybit position-side close event back to the
+        corresponding bot trade. Direction must be ``"LONG"`` or ``"SHORT"``.
+        """
         for trade in self._active_trades.values():
+            if trade.is_terminal:
+                continue
             if trade.signal is None:
                 continue
             if trade.signal.symbol != symbol:
                 continue
-            trade_side = "Buy" if trade.signal.direction == "LONG" else "Sell"
-            if trade_side == side or not side:
-                return trade
+            if trade.signal.direction != direction:
+                continue
+            return trade
         return None
 
     def _infer_close_reason(self, trade: Trade, exit_price: float) -> str:
