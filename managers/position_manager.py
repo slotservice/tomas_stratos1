@@ -40,6 +40,27 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
+def _format_close_source(reason: str) -> str:
+    """Map an internal close-reason string (set by Bybit's order-fill
+    classifier) to the human-readable suffix shown in the
+    "POSITION CLOSED - X" Telegram header.
+    """
+    if reason == "stop_loss":
+        return "stop loss"
+    if reason == "trailing_stop":
+        return "trailing stop"
+    if reason == "liquidation":
+        return "liquidation"
+    if reason == "external_close":
+        return "external close"
+    if reason and reason.startswith("tp_"):
+        try:
+            return f"TP{int(reason.split('_', 1)[1])}"
+        except (IndexError, ValueError):
+            return reason
+    return reason or "unknown"
+
+
 class PositionManager:
     """Central trade management state machine.
 
@@ -1252,28 +1273,100 @@ class PositionManager:
             # Signal the event if someone is already waiting.
             if order_id in self._fill_events:
                 self._fill_events[order_id].set()
-            # Bybit-driven TP-hit notification (client 2026-04-28: every
-            # Telegram message except 'signal copied' must come from a
-            # Bybit event, never bot inference). If this fill is for one
-            # of our recorded partial-TP conditional orders, fire the
-            # "TAKE PROFIT N TAGEN" notification using the trigger price
-            # to look up which TP level it was.
-            await self._maybe_notify_tp_filled(order_id, data)
+            # Strict architecture (client 2026-04-28): every close
+            # notification and every close decision is driven by Bybit's
+            # order-fill event, never by bot inference. Classify this
+            # fill below — if it is a position-closing event (SL fire,
+            # trailing fire, partial-TP fill, liquidation), record the
+            # close reason on the trade. on_position_update will read
+            # that reason when Bybit reports size=0 and call close_trade.
+            await self._classify_bybit_close_fill(order_id, data)
 
-    async def _maybe_notify_tp_filled(self, order_id: str, data: dict) -> None:
-        """Fire the per-TP Swedish notification when Bybit reports a fill
-        for one of our recorded partial-TP conditional orders.
+    async def _classify_bybit_close_fill(
+        self, order_id: str, data: dict,
+    ) -> None:
+        """Classify a Bybit Filled order to record the close reason on the
+        matching active trade and fire the matching Bybit-driven Telegram
+        notification.
 
-        The TP level (1, 2, 3, ...) is recovered by matching the order's
-        triggerPrice against ``trade.signal.tps``. Dedup is per-order so
-        a re-sent WS Filled event does not produce duplicate messages.
+        Strict architecture (client 2026-04-28): the bot must never guess
+        why a position closed. Bybit's ``stopOrderType`` on the filling
+        order is the authoritative answer:
+
+          * ``StopLoss``     → position-level SL fired   → reason ``stop_loss``
+          * ``TrailingStop`` → native trailing fired     → reason ``trailing_stop``
+          * ``Stop`` + matches one of our recorded ``tp_order_ids`` →
+            partial TP fill → record reason ``tp_N`` (N from triggerPrice
+            ↔ signal.tps lookup) and emit the TAKE PROFIT N TAGEN message.
+
+        ``execType=Liquidation`` is also classified as ``liquidation``.
+
+        The recorded reason is later picked up by on_position_update when
+        Bybit confirms size=0, which is when ``close_trade`` actually runs.
         """
-        if not order_id or order_id in self._tp_notified:
+        try:
+            position_idx = int(data.get("positionIdx") or 0)
+        except (TypeError, ValueError):
+            position_idx = 0
+        if position_idx not in (1, 2):
+            return
+
+        symbol = data.get("symbol", "")
+        if not symbol:
+            return
+
+        sot = data.get("stopOrderType", "") or ""
+        exec_type = data.get("execType", "") or ""
+        reduce_only = bool(data.get("reduceOnly", False))
+
+        # Match the trade by symbol + side derived from positionIdx.
+        direction = "LONG" if position_idx == 1 else "SHORT"
+        trade = self._find_trade_by_symbol_direction(symbol, direction)
+        if trade is None or trade.is_terminal or trade.signal is None:
+            return
+
+        # Position-closing event types.
+        if reduce_only and sot == "StopLoss":
+            trade._pending_close_reason = "stop_loss"
+            log.info(
+                "ws.classified_close",
+                trade_id=trade.id, symbol=symbol,
+                kind="stop_loss", order_id=order_id,
+            )
+            return
+
+        if reduce_only and sot == "TrailingStop":
+            trade._pending_close_reason = "trailing_stop"
+            log.info(
+                "ws.classified_close",
+                trade_id=trade.id, symbol=symbol,
+                kind="trailing_stop", order_id=order_id,
+            )
+            return
+
+        if exec_type == "Liquidation":
+            trade._pending_close_reason = "liquidation"
+            log.warning(
+                "ws.classified_close",
+                trade_id=trade.id, symbol=symbol,
+                kind="liquidation", order_id=order_id,
+            )
+            return
+
+        # Partial-TP fill (one of our recorded conditional close orders).
+        if reduce_only and sot == "Stop" and order_id in (trade.tp_order_ids or []):
+            await self._notify_tp_filled(trade, order_id, data)
+
+    async def _notify_tp_filled(
+        self, trade: "Trade", order_id: str, data: dict,
+    ) -> None:
+        """Emit the TAKE PROFIT N TAGEN message and record ``tp_N`` as the
+        pending close reason in case this fill happens to take the position
+        to size=0 (i.e. the last TP closes everything)."""
+        if order_id in self._tp_notified:
             return
 
         trigger_price_str = data.get("triggerPrice", "")
-        if not trigger_price_str:
-            return
         try:
             trigger_price = float(trigger_price_str)
         except (TypeError, ValueError):
@@ -1281,36 +1374,24 @@ class PositionManager:
         if trigger_price <= 0:
             return
 
-        match_trade = None
-        for t in self._active_trades.values():
-            if order_id in (t.tp_order_ids or []):
-                match_trade = t
-                break
-        if match_trade is None or match_trade.signal is None:
-            return
-
         tp_list = (
-            match_trade.signal.tps if hasattr(match_trade.signal, "tps")
-            else getattr(match_trade.signal, "tp_list", []) or []
+            trade.signal.tps if hasattr(trade.signal, "tps")
+            else getattr(trade.signal, "tp_list", []) or []
         )
         tp_level: Optional[int] = None
         for i, tp in enumerate(tp_list):
             if not tp:
                 continue
-            # Use a tight relative tolerance; trigger and tp are both
-            # stored as the original signal price.
             if abs(tp - trigger_price) / max(abs(tp), 1e-12) < 1e-4:
                 tp_level = i + 1
                 break
         if tp_level is None:
             return
 
-        # Mark notified BEFORE emitting so concurrent re-entries can't
-        # double-fire even on tight WS retransmits.
         self._tp_notified.add(order_id)
 
-        avg_entry = match_trade.avg_entry or 0.0
-        direction = match_trade.signal.direction
+        avg_entry = trade.avg_entry or 0.0
+        direction = trade.signal.direction
         if avg_entry > 0:
             if direction == "LONG":
                 tp_pct = (trigger_price - avg_entry) / avg_entry * 100.0
@@ -1323,16 +1404,16 @@ class PositionManager:
             closed_qty = float(data.get("cumExecQty") or 0)
         except (TypeError, ValueError):
             closed_qty = 0.0
-        total_qty = match_trade.quantity or 0.0
+        total_qty = trade.quantity or 0.0
         closed_pct = (closed_qty / total_qty * 100.0) if total_qty > 0 else 0.0
-        leverage = match_trade.leverage or 1.0
+        leverage = trade.leverage or 1.0
         result_pct = tp_pct * leverage
-        slice_margin = (match_trade.margin or 0.0) * (closed_pct / 100.0)
+        slice_margin = (trade.margin or 0.0) * (closed_pct / 100.0)
         result_usdt = slice_margin * (result_pct / 100.0)
 
         try:
             await self._notifier.take_profit_hit(
-                trade=match_trade,
+                trade=trade,
                 tp_level=tp_level,
                 tp_price=trigger_price,
                 tp_pct=tp_pct,
@@ -1341,11 +1422,15 @@ class PositionManager:
                 result_pct=result_pct,
                 result_usdt=result_usdt,
             )
-            match_trade.tp_hits.append(trigger_price)
+            trade.tp_hits.append(trigger_price)
+            # Record as pending close reason so if this fill takes the
+            # position to size=0 (last TP), the POSITION CLOSED message
+            # reads "POSITION CLOSED - TP{N}".
+            trade._pending_close_reason = f"tp_{tp_level}"
             log.info(
                 "trade.tp_hit",
-                trade_id=match_trade.id,
-                symbol=match_trade.signal.symbol,
+                trade_id=trade.id,
+                symbol=trade.signal.symbol,
                 tp_level=tp_level,
                 tp_price=trigger_price,
                 closed_qty=closed_qty,
@@ -1353,7 +1438,7 @@ class PositionManager:
         except Exception:
             log.exception(
                 "notify.take_profit_hit_failed",
-                trade_id=match_trade.id, tp_level=tp_level,
+                trade_id=trade.id, tp_level=tp_level,
             )
 
     async def on_position_update(self, data: dict) -> None:
@@ -1393,12 +1478,15 @@ class PositionManager:
             return
 
         exit_price = float(data.get("markPrice", 0) or 0)
-        # Strict architecture: never infer the close reason. Bybit
-        # closed the position; we just record that, with the exit
-        # price. PnL is derived from price + qty, no labels invented.
+        # Use the close reason classified by on_order_update (the Bybit
+        # fill event told us WHAT closed the position). If nothing was
+        # classified, this is a truly external close (manual action on
+        # the Bybit UI, instrument delisting, etc.) — label as
+        # ``external_close``. No bot inference of price-vs-SL/TP.
+        reason = getattr(trade, "_pending_close_reason", None) or "external_close"
         await self.close_trade(
             trade_id=trade.id,
-            reason="external_close",
+            reason=reason,
             exit_price=exit_price,
         )
 
@@ -1462,70 +1550,39 @@ class PositionManager:
         trade: Trade,
         current_price: float,
     ) -> None:
-        """Run management checks on a single trade at the given price.
+        """Run the only remaining tick-driven action: hedge pre-arm.
 
-        Strict architecture (client IZZU 2026-04-28): the bot does not
-        decide closes, move SLs, or guess outcomes. Bybit owns those
-        decisions through native TP / SL / trailing-stop / conditional
-        orders set at trade open. The only management actions left in
-        the bot are:
+        Strict architecture (client IZZU 2026-04-28): every close decision
+        and every Telegram notification (except "signal copied") is
+        triggered by a verified Bybit event. The bot does not poll,
+        infer, guess, or decide. The price-tick loop only places the
+        hedge pre-arm conditional once at the configured trigger — Bybit
+        then fires it autonomously, just like SL / TP / trailing.
 
-          - re-entry monitoring (REENTRY_WAITING),
-          - external-close detection (mirroring Bybit state into the DB),
-          - hedge activation (placing a Bybit conditional that Bybit
-            triggers autonomously),
-          - hedge-state reconciliation (reading what Bybit did).
+        Removed (one path, one solution):
+          * 30-second position poll — duplicate of WS on_position_update
+          * 15-second hedge poll    — duplicate of WS on_position_update
+          * BE / Trailing / TP-progression bot-side decisions (deleted
+            in the strict refactor)
+          * max_loss_cap, combined_loss_cap (bot deciding to close)
+          * Re-entry polling — re-entry now fires from close_trade when
+            Bybit reports the SL fill.
         """
         state = trade.state
 
-        # Skip trades that are not yet fully open.
+        # Skip trades that are not yet fully open or are awaiting re-entry
+        # (the re-entry trigger is Bybit-event-driven inside close_trade).
         if state in (
             TradeState.PENDING,
             TradeState.ENTRY1_PLACED,
             TradeState.ENTRY1_FILLED,
             TradeState.ENTRY2_PLACED,
             TradeState.ENTRY2_FILLED,
+            TradeState.REENTRY_WAITING,
         ):
             return
 
-        # --- Re-entry monitoring (REENTRY_WAITING state) ---
-        if state == TradeState.REENTRY_WAITING:
-            await self._reentry_mgr.check_and_activate(trade, current_price)
-            return
-
-        # --- Verify position still exists on Bybit (every 30s) ---
-        # Reactive — we read what Bybit shows. If size==0 there, the
-        # position was closed by Bybit's TP/SL/trailing/liquidation;
-        # we just mirror that into our DB. No reason inference.
-        import time as _time
-        now = _time.monotonic()
-        last_check = getattr(trade, "_last_pos_check", 0)
-        if now - last_check > 30:
-            trade._last_pos_check = now
-            try:
-                if trade.signal:
-                    side = "Buy" if trade.signal.direction == "LONG" else "Sell"
-                    pos = await self._bybit.get_position(
-                        trade.signal.symbol, side,
-                    )
-                    pos_size = float(pos.get("size", 0) or 0) if pos else 0
-                    if pos_size == 0:
-                        log.info(
-                            "trade.position_closed_externally",
-                            trade_id=trade.id,
-                            symbol=trade.signal.symbol,
-                        )
-                        await self.close_trade(
-                            trade.id, "external_close", current_price,
-                        )
-                        return
-            except Exception:
-                log.exception(
-                    "trade.position_check_error", trade_id=trade.id,
-                )
-
-        # --- Scaling check (gated by [scaling].enabled; off by default
-        # for the basic bot). ---
+        # --- Scaling check (gated by [scaling].enabled; off in M1). ---
         if (
             self._settings.scaling.enabled
             and trade.scaling_step < len(self._settings.scaling.steps)
@@ -1536,15 +1593,9 @@ class PositionManager:
             if applied:
                 return
 
-        # --- Hedge: place pre-arm or reconcile state with Bybit ---
+        # --- Hedge: place the Bybit conditional pre-arm if not yet placed.
         if trade.hedge_trade_id is None:
             await self._hedge_mgr.check_and_activate(trade, current_price)
-        else:
-            # Reconcile hedge lifecycle against what Bybit reports —
-            # no combined-loss bot-side close decision here anymore.
-            await self._hedge_mgr.check_linked_closure(
-                trade, current_price,
-            )
 
     # ==================================================================
     # Trade closure
@@ -1693,41 +1744,26 @@ class PositionManager:
         # Remove from active map.
         self._active_trades.pop(trade_id, None)
 
-        # Notify — pick the right structured template per close reason.
-        # Client Meddelande telegram.docx spec (2026-04-24): STOP LOSS
-        # TRÄFFAD gets its own template; everything else uses
-        # POSITION STÄNGD. Fall back to a raw message on any error.
+        # Notify — single template, with the close source appended to the
+        # header so the operator sees exactly what Bybit did:
+        #   POSITION CLOSED - stop loss
+        #   POSITION CLOSED - trailing stop
+        #   POSITION CLOSED - TP3
+        #   POSITION CLOSED - liquidation
+        #   POSITION CLOSED - external close
         try:
-            sl_reasons = {"sl_hit"}
             qty_for_msg = trade.quantity or 0
-            if reason in sl_reasons:
-                await self._notifier.stop_loss_hit(
-                    trade=trade,
-                    sl_price=trade.sl_price or exit_price,
-                    qty=qty_for_msg,
-                    result_pct=pnl_pct if pnl_pct is not None else 0.0,
-                    result_usdt=pnl_usdt if pnl_usdt is not None else 0.0,
-                )
-            else:
-                await self._notifier.position_closed(
-                    trade=trade,
-                    exit_price=exit_price,
-                    qty=qty_for_msg,
-                    result_pct_total=pnl_pct if pnl_pct is not None else 0.0,
-                    result_usdt_total=pnl_usdt if pnl_usdt is not None else 0.0,
-                )
+            await self._notifier.position_closed(
+                trade=trade,
+                exit_price=exit_price,
+                qty=qty_for_msg,
+                result_pct_total=pnl_pct if pnl_pct is not None else 0.0,
+                result_usdt_total=pnl_usdt if pnl_usdt is not None else 0.0,
+                close_source=_format_close_source(reason),
+            )
         except Exception:
             log.exception(
                 "close_trade.template_failed", trade_id=trade_id, reason=reason,
-            )
-            # Fall back to raw message so operator still gets a close notification.
-            pnl_str = f"{pnl_pct:+.2f}%" if pnl_pct is not None else "N/A"
-            usdt_str = f"{pnl_usdt:+.2f} USDT" if pnl_usdt is not None else ""
-            await self._safe_notify(
-                f"[STANGD] {symbol} {direction}\n"
-                f"Anledning: {reason}\n"
-                f"Exit: {exit_price}\n"
-                f"PnL: {pnl_str} {usdt_str}"
             )
 
         log.info(
@@ -1738,18 +1774,18 @@ class PositionManager:
             pnl_pct=pnl_pct,
         )
 
-        # --- Check re-entry eligibility ---
-        if reason in ("sl_hit", "be_hit", "breakeven_hit", "stop_loss"):
+        # --- Re-entry: triggered ONLY by a Bybit-classified SL fill,
+        # never by polling. close_trade fires re-entry directly so
+        # Bybit's order-fill event drives the new trade. ---
+        if reason == "stop_loss":
             if trade.reentry_count < self._settings.reentry.max_reentries:
-                trade.transition(TradeState.REENTRY_WAITING)
-                self._active_trades[trade.id] = trade  # Re-add for monitoring.
                 try:
-                    await self._db.update_trade(
-                        int(trade.id),
-                        state=trade.state.value,
-                    )
+                    await self._reentry_mgr.activate_after_sl(trade)
                 except Exception:
-                    log.exception("close_trade.reentry_state_error", trade_id=trade_id)
+                    log.exception(
+                        "close_trade.reentry_activate_failed",
+                        trade_id=trade.id,
+                    )
 
     # ==================================================================
     # Active trades accessor

@@ -68,7 +68,6 @@ def test_config():
     _ok(f"Bybit demo: {settings.bybit.demo}")
     _ok(f"Telegram groups: {len(settings.telegram_groups)}")
     _ok(f"Timezone: {settings.general.timezone}")
-    _ok(f"BE trigger: {settings.breakeven.trigger_pct}%")
     _ok(f"Trailing: {settings.trailing_stop.activation_pct}% / {settings.trailing_stop.trailing_distance_pct}%")
     _ok(f"Hedge: {settings.hedge.trigger_pct}%")
     _ok(f"Re-entry: max {settings.reentry.max_reentries}")

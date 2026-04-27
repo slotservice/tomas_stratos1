@@ -844,26 +844,6 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
-    async def hedge_denied(
-        self,
-        trade,
-        reason: str,
-    ) -> str:
-        """Hedge denied (conditions not met)."""
-        signal = trade.signal
-        text = (
-            f"<b>🛡️ HEDGE NEKAD</b>\n"
-            f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Anledning: {reason}\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
-        )
-        return await self._send_notify(text)
-
     # ===================================================================
     # RE-ENTRY TEMPLATES
     # ===================================================================
@@ -946,33 +926,6 @@ class TelegramNotifier:
     # SL / CLOSE TEMPLATES
     # ===================================================================
 
-    async def stop_loss_hit(
-        self,
-        trade,
-        sl_price: float,
-        qty: float,
-        result_pct: float,
-        result_usdt: float,
-    ) -> str:
-        """Stop-loss triggered."""
-        signal = trade.signal
-        text = (
-            f"<b>🚩 STOP LOSS TRÄFFAD</b>\n"
-            f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   SL-pris: {sl_price}\n"
-            f"   Qty: {qty}\n"
-            f"   Resultat: {_pct(result_pct)}\n"
-            f"   Resultat USDT: {_pnl_sign(result_usdt)} USDT\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
-        )
-        return await self._send_notify(text)
-
     async def position_closed(
         self,
         trade,
@@ -980,27 +933,24 @@ class TelegramNotifier:
         qty: float,
         result_pct_total: float,
         result_usdt_total: float,
+        close_source: str = "",
     ) -> str:
-        """Full position closed (generic — TP, external, near-entry, etc).
+        """Full position closed.
 
-        Per Meddelande telegram.docx:
-            ✅ POSITION STÄNGD   by tp 1 2 3 4 ore SL
-            🕒 Tid: ...
-            📢 Från kanal: ...
-            📊 Symbol: #...
-            📈 Riktning: ...
-            📍 Typ: swing / dynamic / fixed
-            💵 Stängd kvantitet: ... (100%)
-            📚 Underlag ink. alla delsteg: bot / bybit
-            📍 Exit: ...
-            📊 Resultat (prisrörelse): ... % with leverage!
-            💰 Resultat (USDT): ... USDT
+        ``close_source`` is the human-readable suffix shown in the
+        header — driven by the Bybit fill event that closed the
+        position (client 2026-04-28: "POSITION CLOSED - stop loss",
+        "POSITION CLOSED - TP3", "POSITION CLOSED - trailing stop",
+        "POSITION CLOSED - liquidation", "POSITION CLOSED - external
+        close"). The bot never invents this value — it comes from
+        ``stopOrderType`` / ``execType`` on the order-update event.
         """
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        header_suffix = f" - {close_source}" if close_source else ""
         text = (
-            f"✅ POSITION STÄNGD\n"
+            f"✅ POSITION CLOSED{header_suffix}\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1013,114 +963,6 @@ class TelegramNotifier:
             f"💰 Resultat (USDT): {_pnl_sign(result_usdt_total)} USDT\n"
             f"\n"
             f"📚 Underlag (BOT/Bybit): {trade.id} / {bybit_ids}\n"
-            f"🔑 Order-ID BOT: {trade.id}\n"
-            f"🔑 Order-ID Bybit: {bybit_ids}"
-        )
-        return await self._send_notify(text)
-
-    async def stop_loss_hit(
-        self,
-        trade,
-        sl_price: float,
-        qty: float,
-        result_pct: float,
-        result_usdt: float,
-    ) -> str:
-        """Dedicated STOP LOSS TRÄFFAD template.
-
-        Per Meddelande telegram.docx. Fires when the trade closes
-        because its SL was triggered on Bybit. Distinct from the
-        generic POSITION STÄNGD so the client can quickly identify
-        SL events in the feed.
-        """
-        signal = trade.signal
-        lev_type = signal.signal_type if signal else "dynamic"
-        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
-        text = (
-            f"🚩 STOP LOSS TRÄFFAD\n"
-            f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
-            f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
-            f"\n"
-            f"📍 SL: {sl_price}\n"
-            f"💵 Stängd kvantitet: {qty} (100%)\n"
-            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
-            f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
-            f"\n"
-            f"🔁 Återinträdeslogik: aktiverad – ny signal tas vid bekräftad trendvändning\n"
-            f"🔑 Order-ID BOT: {trade.id}\n"
-            f"🔑 Order-ID Bybit: {bybit_ids}"
-        )
-        return await self._send_notify(text)
-
-    async def break_even_adjusted(
-        self,
-        trade,
-        new_sl: float,
-        current_move_pct: float,
-    ) -> str:
-        """BREAK-EVEN JUSTERAD — SL moved to entry + buffer.
-
-        Fires when either (a) TP2 hit triggers the IZZU offset-2 rule
-        moving SL to entry + 0.15%, or (b) the +2.3% fallback BE
-        mechanism fires on its own before TP2. Both routes map to
-        this template per the client's Meddelande telegram.docx spec.
-        """
-        signal = trade.signal
-        lev_type = signal.signal_type if signal else "dynamic"
-        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
-        text = (
-            f"⚖️ BREAK-EVEN JUSTERAD\n"
-            f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
-            f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
-            f"\n"
-            f"📍 SL flyttad till: {new_sl}\n"
-            f"📍 Rörelse från entry: {_pct(current_move_pct)}\n"
-            f"🔑 Order-ID BOT: {trade.id}\n"
-            f"🔑 Order-ID Bybit: {bybit_ids}"
-        )
-        return await self._send_notify(text)
-
-    async def sl_moved(
-        self,
-        trade,
-        new_sl: float,
-        reason: str = "",
-        move_pct: float = 0.0,
-    ) -> str:
-        """Generic 'STOP LOSS FLYTTAD' template — client IZZU 2026-04-27.
-
-        Used by:
-          - TP-progression for TP3+ (where TP{N} hit moves SL to TP{N-2})
-          - Safety-ladder steps (+4% → +1.5%, +5% → +2.5%)
-          - Any other ad-hoc SL advancement that isn't the dedicated
-            BREAK-EVEN JUSTERAD path
-
-        Args:
-            new_sl: the new SL price set on the exchange
-            reason: short human-readable reason (e.g. "TP3 hit — SL till TP1")
-            move_pct: optional favourable-move % at the moment of the move
-        """
-        signal = trade.signal
-        lev_type = signal.signal_type if signal else "dynamic"
-        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
-        move_line = f"📍 Rörelse: {_pct(move_pct)}\n" if move_pct else ""
-        reason_line = f"📍 Skäl: {reason}\n" if reason else ""
-        text = (
-            f"🛡️ STOP LOSS FLYTTAD\n"
-            f"🕒 Tid: {_ts()}\n"
-            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
-            f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
-            f"\n"
-            f"📍 Ny SL: {new_sl}\n"
-            f"{reason_line}{move_line}"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
         )

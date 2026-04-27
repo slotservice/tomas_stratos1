@@ -75,9 +75,7 @@ build.bat
 | wallet.bot_wallet | 402.1 | Theoretical wallet (USDT) |
 | wallet.risk_pct | 0.02 | 2% risk per trade |
 | wallet.initial_margin | 20.0 | 20 USDT per trade |
-| breakeven.trigger_pct | 2.3 | Move SL to BE at +2.3% |
-| breakeven.buffer_pct | 0.15 | BE + 0.15% buffer |
-| trailing_stop.activation_pct | 6.1 | Trailing at 6.1% or highest TP |
+| trailing_stop.activation_pct | 6.1 | Trailing at min(highest TP, +6.1%) |
 | trailing_stop.trailing_distance_pct | 2.5 | 2.5% trailing distance |
 | hedge.trigger_pct | -2.0 | Hedge at -2% |
 | reentry.max_reentries | 2 | Max 2 re-entries |

@@ -1,17 +1,21 @@
 """
 Stratos1 - Re-entry Manager
 -----------------------------
-After a trade is stopped out (by SL or BE + buffer), the re-entry manager
-monitors price for a return to the original signal entry.  If price
-reaches that level and re-entries have not been exhausted, a completely
-new trade is created from the same signal with fresh parameters.
+Bybit-driven re-entry. The trigger is a verified Bybit event: when the
+position-level stop-loss order fires, ``PositionManager.close_trade``
+labels the close with ``reason == "stop_loss"`` and immediately invokes
+``activate_after_sl`` on this manager.
 
-Rules:
-    - Max ``max_reentries`` attempts per signal (default 2).
-    - Each re-entry recalculates leverage, resets BE / scaling / trailing
-      / hedge flags, and starts as a brand-new trade.
-    - Once all re-entries are exhausted the signal is marked as fully
-      completed.
+Strict architecture (client IZZU 2026-04-28):
+    The bot must never poll prices, infer movement, or decide on its own
+    when to re-enter. Re-entry is opened at market the moment Bybit
+    confirms the SL fill. Bybit then manages the new position's TP / SL /
+    trailing exactly as it does for any first-attempt trade.
+
+Limits:
+    * ``settings.max_reentries`` attempts per signal (default 2).
+    * Each re-entry is a brand-new trade — leverage, hedge, trailing,
+      and TPs are recomputed from the same signal.
 """
 
 from __future__ import annotations
@@ -29,23 +33,7 @@ log = structlog.get_logger(__name__)
 
 
 class ReentryManager:
-    """Monitor stopped-out trades and re-enter when price returns to entry.
-
-    Parameters
-    ----------
-    settings:
-        ``ReentrySettings`` with ``enabled`` and ``max_reentries``.
-    bybit:
-        Exchange adapter (unused directly, but required for completeness;
-        the ``position_manager`` drives actual order placement).
-    notifier:
-        Telegram notifier.
-    db:
-        Database instance.
-    position_manager:
-        Reference to the ``PositionManager`` so a fresh trade can be
-        created via ``process_signal``.
-    """
+    """Open a fresh trade from the same signal when Bybit confirms an SL."""
 
     def __init__(
         self,
@@ -61,203 +49,28 @@ class ReentryManager:
         self._db = db
         self._position_manager = position_manager
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    async def activate_after_sl(self, original_trade: "Trade") -> None:
+        """Fire a re-entry off a Bybit-confirmed SL hit.
 
-    async def check_and_activate(
-        self,
-        trade: Trade,
-        current_price: float,
-    ) -> bool:
-        """Check whether *trade* qualifies for re-entry.
-
-        This should be called for trades in ``REENTRY_WAITING`` state
-        (or trades that were just stopped out).
-
-        Returns ``True`` if a new trade was opened on this call,
-        ``False`` otherwise.
+        Called by ``close_trade`` when ``reason == "stop_loss"``. Opens a
+        fresh trade from the same signal at market through
+        ``PositionManager.process_signal`` and emits the
+        RE-ENTRY AKTIVERAD Telegram template. If max re-entries is
+        already reached, emits RE-ENTRY AVSTÄNGT and stops.
         """
         if not self._settings.enabled:
-            return False
+            return
+        if original_trade.signal is None:
+            return
 
-        if trade.signal is None:
-            return False
+        if original_trade.reentry_count >= self._settings.max_reentries:
+            await self._handle_exhausted(original_trade)
+            return
 
-        # --- Determine eligibility ---
-        # The trade must have been closed by SL or BE hit.
-        if not self._is_eligible_for_reentry(trade):
-            return False
-
-        # --- Check re-entry count limit ---
-        if trade.reentry_count >= self._settings.max_reentries:
-            await self._handle_exhausted(trade)
-            return False
-
-        # --- Transition to REENTRY_WAITING if not already ---
-        from core.models import TradeState
-        if trade.state != TradeState.REENTRY_WAITING:
-            trade.transition(TradeState.REENTRY_WAITING)
-            try:
-                await self._db.update_trade(
-                    int(trade.id),
-                    state=trade.state.value,
-                )
-            except Exception:
-                log.exception("reentry.state_update_error", trade_id=trade.id)
-
-        # --- Check if price has returned to the original signal entry ---
-        original_entry = trade.signal.entry
-        direction = trade.signal.direction
-
-        if not self._price_at_entry(direction, original_entry, current_price):
-            return False
-
-        log.info(
-            "reentry.price_reached",
-            trade_id=trade.id,
-            symbol=trade.signal.symbol,
-            original_entry=original_entry,
-            current_price=current_price,
-            reentry_count=trade.reentry_count,
-        )
-
-        # --- Create a completely new trade from the same signal ---
-        new_trade = await self._open_new_trade(trade)
-
-        if new_trade is None:
-            log.warning(
-                "reentry.new_trade_failed",
-                trade_id=trade.id,
-                symbol=trade.signal.symbol,
-            )
-            # Throttle error notifications - only once per 5 minutes
-            # per trade to avoid spam when conditions don't improve.
-            import time as _time
-            last_notify = getattr(trade, "_last_reentry_error_notify", 0)
-            if _time.monotonic() - last_notify > 300:
-                trade._last_reentry_error_notify = _time.monotonic()
-                await self._safe_notify(
-                    f"[REENTRY ERROR] {trade.signal.symbol}: "
-                    f"kunde inte oppna ny trade vid reentry. Se loggar."
-                )
-            return False
-
-        # --- Update the original trade ---
-        trade.reentry_count += 1
-        trade.transition(TradeState.CLOSED)
-        try:
-            await self._db.update_trade(
-                int(trade.id),
-                reentry_count=trade.reentry_count,
-                state=trade.state.value,
-                close_reason="reentry_triggered",
-            )
-            await self._db.log_event(
-                trade_id=int(trade.id),
-                event_type="reentry_activated",
-                details={
-                    "new_trade_id": new_trade.id,
-                    "reentry_count": trade.reentry_count,
-                    "original_entry": original_entry,
-                    "current_price": current_price,
-                },
-            )
-        except Exception:
-            log.exception("reentry.db_error", trade_id=trade.id)
-
-        # --- Notify via structured RE-ENTRY AKTIVERAD template per
-        # Meddelande telegram.docx. Falls back to the raw [REENTRY]
-        # line if the template fires an exception so the event is
-        # always surfaced.
-        try:
-            new_leverage = new_trade.leverage if new_trade.leverage else 0.0
-            new_margin = new_trade.margin if new_trade.margin else 0.0
-            await self._notifier.reentry_activated(
-                trade=new_trade,
-                signal=trade.signal,
-                leverage=new_leverage,
-                im=new_margin,
-            )
-        except Exception:
-            log.exception(
-                "reentry.template_notify_failed", trade_id=trade.id,
-            )
-            await self._safe_notify(
-                f"[REENTRY] {trade.signal.symbol} {direction}\n"
-                f"Reentry #{trade.reentry_count} aktiverad vid {current_price}\n"
-                f"Ny trade skapad fran samma signal.\n"
-                f"Kvarvarande reentries: "
-                f"{self._settings.max_reentries - trade.reentry_count}"
-            )
-
-        log.info(
-            "reentry.activated",
-            trade_id=trade.id,
-            symbol=trade.signal.symbol,
-            new_trade_id=new_trade.id,
-            reentry_count=trade.reentry_count,
-        )
-        return True
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _is_eligible_for_reentry(self, trade: Trade) -> bool:
-        """Return True if the trade was closed by SL or BE hit."""
-        from core.models import TradeState
-
-        # Already waiting for reentry -> eligible.
-        if trade.state == TradeState.REENTRY_WAITING:
-            return True
-
-        # Must be closed.
-        if trade.state != TradeState.CLOSED:
-            return False
-
-        # Only SL-hit or BE-hit closures are eligible.
-        eligible_reasons = {"sl_hit", "be_hit", "breakeven_hit", "stop_loss"}
-        reason = (trade.close_reason or "").lower()
-
-        return reason in eligible_reasons
-
-    @staticmethod
-    def _price_at_entry(
-        direction: str,
-        original_entry: float,
-        current_price: float,
-        tolerance_pct: float = 0.5,
-    ) -> bool:
-        """Check if current price has RETURNED to within tolerance of
-        the original signal entry.
-
-        Re-entry should fire only when price is close to the original
-        entry again (symmetric band around entry), not when price is
-        still far away on either side.
-
-        A wider slippage guard in process_signal will still reject
-        obviously stale re-entries, but this symmetric check prevents
-        the re-entry manager from firing hundreds of times per minute
-        when price is nowhere near the original entry.
-        """
-        if original_entry <= 0:
-            return False
-        diff_pct = abs(current_price - original_entry) / original_entry * 100
-        return diff_pct <= tolerance_pct
-
-    async def _open_new_trade(self, original_trade: Trade) -> Optional[Any]:
-        """Create a fresh trade from the original trade's signal.
-
-        Delegates entirely to ``PositionManager.process_signal`` so all
-        logic (leverage calc, BE, scaling, hedge, trailing) is reset.
-        The signal's ``parsed_at`` is refreshed so it passes stale checks.
-        """
         signal = original_trade.signal
-        if signal is None:
-            return None
-
-        # Refresh the timestamp so the signal is not rejected as stale.
+        # Refresh timestamps so the signal passes stale-price guards in
+        # the entry pipeline (the signal might be many minutes old by the
+        # time SL fires).
         if hasattr(signal, "parsed_at"):
             signal.parsed_at = time.time()
         if hasattr(signal, "received_at"):
@@ -270,20 +83,63 @@ class ReentryManager:
                 is_reentry=True,
                 parent_reentry_count=original_trade.reentry_count + 1,
             )
-            return new_trade
         except Exception:
             log.exception(
                 "reentry.process_signal_error",
                 trade_id=original_trade.id,
-                symbol=signal.symbol if hasattr(signal, "symbol") else "?",
+                symbol=getattr(signal, "symbol", "?"),
             )
-            return None
+            return
 
-    async def _handle_exhausted(self, trade: Trade) -> None:
+        if new_trade is None:
+            log.warning(
+                "reentry.new_trade_failed",
+                trade_id=original_trade.id,
+                symbol=getattr(signal, "symbol", "?"),
+            )
+            return
+
+        original_trade.reentry_count += 1
+        try:
+            await self._db.update_trade(
+                int(original_trade.id),
+                reentry_count=original_trade.reentry_count,
+            )
+            await self._db.log_event(
+                trade_id=int(original_trade.id),
+                event_type="reentry_activated",
+                details={
+                    "new_trade_id": new_trade.id,
+                    "reentry_count": original_trade.reentry_count,
+                },
+            )
+        except Exception:
+            log.exception("reentry.db_error", trade_id=original_trade.id)
+
+        try:
+            await self._notifier.reentry_activated(
+                trade=new_trade,
+                signal=signal,
+                leverage=new_trade.leverage or 0.0,
+                im=new_trade.margin or 0.0,
+            )
+        except Exception:
+            log.exception(
+                "reentry.notify_failed", trade_id=original_trade.id,
+            )
+
+        log.info(
+            "reentry.activated",
+            trade_id=original_trade.id,
+            symbol=getattr(signal, "symbol", "?"),
+            new_trade_id=new_trade.id,
+            reentry_count=original_trade.reentry_count,
+        )
+
+    async def _handle_exhausted(self, trade: "Trade") -> None:
         """Mark the signal as fully completed when re-entries are used up."""
         if trade.signal is None:
             return
-
         symbol = trade.signal.symbol
         log.info(
             "reentry.exhausted",
@@ -292,18 +148,7 @@ class ReentryManager:
             reentry_count=trade.reentry_count,
             max_reentries=self._settings.max_reentries,
         )
-
-        # Mark the original trade's signal as completed in the DB.
         try:
-            from core.models import TradeState
-            if trade.state == TradeState.REENTRY_WAITING:
-                trade.transition(TradeState.CLOSED)
-                trade.close_reason = "reentries_exhausted"
-                await self._db.update_trade(
-                    int(trade.id),
-                    state=trade.state.value,
-                    close_reason="reentries_exhausted",
-                )
             await self._db.log_event(
                 trade_id=int(trade.id),
                 event_type="reentry_exhausted",
@@ -314,24 +159,9 @@ class ReentryManager:
             )
         except Exception:
             log.exception("reentry.exhausted_db_error", trade_id=trade.id)
-
-        # Use the structured RE-ENTRY AVSTÄNGT template from Meddelande
-        # telegram.docx; fall back to raw on any exception.
         try:
             await self._notifier.reentry_exhausted(trade=trade)
         except Exception:
             log.exception(
-                "reentry.exhausted_template_failed", trade_id=trade.id,
+                "reentry.exhausted_notify_failed", trade_id=trade.id,
             )
-            await self._safe_notify(
-                f"[REENTRY SLUT] {symbol}\n"
-                f"Alla {self._settings.max_reentries} reentries forbrukade.\n"
-                f"Signalen ar helt avslutad."
-            )
-
-    async def _safe_notify(self, message: str) -> None:
-        """Send a Telegram notification, swallowing errors."""
-        try:
-            await self._notifier._send_notify(message)
-        except Exception:
-            log.exception("reentry.notify_error", message=message[:80])

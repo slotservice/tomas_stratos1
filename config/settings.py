@@ -75,13 +75,6 @@ class WalletSettings(BaseModel):
     bot_wallet: float = 402.1
     risk_pct: float = 0.02
     initial_margin: float = 20.0
-    # Hard per-trade absolute loss cap. If unrealized PnL of the
-    # main leg (plus hedge if one is open) falls to or below this
-    # negative value, bot force-closes the trade at market — even
-    # if SL/hedge haven't fired yet. Clamps the very-worst-case
-    # loss per trade regardless of leverage or signal SL placement.
-    # Set to 0 or negative-zero to disable.
-    max_loss_usdt: float = 4.0
 
 
 class LeverageSettings(BaseModel):
@@ -99,28 +92,6 @@ class EntrySettings(BaseModel):
     num_entry_orders: int = 2
     slippage_tolerance_pct: float = 0.5
     entry_timeout_seconds: int = 30
-
-
-class SafetyLadderStep(BaseModel):
-    """A single step of the no-TP profit-protection ladder."""
-    trigger_pct: float
-    sl_lock_pct: float
-
-
-class BreakevenSettings(BaseModel):
-    """Breakeven stop-loss activation rules."""
-    trigger_pct: float = 2.3
-    buffer_pct: float = 0.15
-    # Profit-protection ladder that runs AFTER the +2.3% BE trigger
-    # for trades whose TP-progression isn't carrying the SL forward
-    # on its own (sparse / wide TPs, or signals with no TPs at all).
-    # Each step advances SL only if the new level is more protective
-    # than the current SL — never relaxes a tighter stop. Client
-    # IZZU 2026-04-27 rule: at +4% lock 1.5%, at +5% lock 2.5%.
-    safety_ladder: List[SafetyLadderStep] = Field(default_factory=lambda: [
-        SafetyLadderStep(trigger_pct=4.0, sl_lock_pct=1.5),
-        SafetyLadderStep(trigger_pct=5.0, sl_lock_pct=2.5),
-    ])
 
 
 class ScalingStep(BaseModel):
@@ -158,7 +129,6 @@ class HedgeSettings(BaseModel):
     enabled: bool = True
     trigger_pct: float = -2.0
     max_hedge_count: int = 1
-    max_combined_loss_usdt: float = 4.0
 
 
 class ReentrySettings(BaseModel):
@@ -238,7 +208,6 @@ class AppSettings(BaseModel):
     wallet: WalletSettings = Field(default_factory=WalletSettings)
     leverage: LeverageSettings = Field(default_factory=LeverageSettings)
     entry: EntrySettings = Field(default_factory=EntrySettings)
-    breakeven: BreakevenSettings = Field(default_factory=BreakevenSettings)
     scaling: ScalingSettings = Field(default_factory=ScalingSettings)
     trailing_stop: TrailingStopSettings = Field(default_factory=TrailingStopSettings)
     hedge: HedgeSettings = Field(default_factory=HedgeSettings)
@@ -317,7 +286,6 @@ def load_settings(
     wallet = WalletSettings(**config_data.get("wallet", {}))
     leverage = LeverageSettings(**config_data.get("leverage", {}))
     entry = EntrySettings(**config_data.get("entry", {}))
-    breakeven = BreakevenSettings(**config_data.get("breakeven", {}))
     scaling = ScalingSettings(**config_data.get("scaling", {}))
     trailing_stop = TrailingStopSettings(**config_data.get("trailing_stop", {}))
     hedge = HedgeSettings(**config_data.get("hedge", {}))
@@ -340,7 +308,6 @@ def load_settings(
         wallet=wallet,
         leverage=leverage,
         entry=entry,
-        breakeven=breakeven,
         scaling=scaling,
         trailing_stop=trailing_stop,
         hedge=hedge,
