@@ -648,11 +648,44 @@ def parse_signal(
     if not text or not text.strip():
         return None
 
-    # Strip zero-width characters and normalize whitespace slightly
-    clean = text.strip()
+    # Strip zero-width characters and normalize whitespace slightly.
+    # Also remove Markdown bold markers (**) — some channels (Coin
+    # Bearu, Crypto Beast, CoinAura) post messages with literal '**'
+    # characters that confuse the symbol regex. Stripping them BEFORE
+    # parsing makes "SHORT BSB**/USDT" become "SHORT BSB/USDT" which
+    # the existing patterns handle cleanly. (Markdown italics '__'
+    # and inline-code '`' are left alone — they're rare in signals
+    # and removing them risks dropping intended characters.)
+    clean = text.replace("**", "").strip()
 
     # --- Symbol ---
     symbol = _extract_symbol(clean)
+    # Post-process: some channels send messages where SHORT/LONG is
+    # concatenated to the ticker with no separator — e.g. Coin Bearu's
+    # "SHORTBAS**/USDT" becomes "SHORTBAS/USDT" after the strip above,
+    # and the regex captures "SHORTBAS" as the ticker. Detect that
+    # and strip the SHORT/LONG prefix so BAS/BSB/etc. resolve.
+    if symbol:
+        upper = symbol.upper()
+        for prefix in ("SHORT", "LONG"):
+            if upper.startswith(prefix) and len(upper) > len(prefix) + 4:
+                # +4 because USDT is appended; rest must be a real ticker
+                stripped = upper[len(prefix):]
+                # Re-strip USDT, validate the remainder, re-append.
+                if stripped.endswith("USDT"):
+                    base = stripped[:-4]
+                else:
+                    base = stripped
+                if 2 <= len(base) <= 15 and base.isalnum():
+                    symbol = base + "USDT"
+                    log.info(
+                        "signal_parse.symbol_prefix_stripped",
+                        original=upper,
+                        stripped_prefix=prefix,
+                        result=symbol,
+                        channel_name=channel_name,
+                    )
+                break
     if not symbol:
         log.debug(
             "signal_parse_no_symbol",
