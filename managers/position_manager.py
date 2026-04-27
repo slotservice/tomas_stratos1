@@ -28,11 +28,9 @@ import structlog
 
 from core.leverage import calculate_leverage
 from core.models import OrderRecord, Trade, TradeState
-from managers.breakeven_manager import BreakevenManager
 from managers.hedge_manager import HedgeManager
 from managers.reentry_manager import ReentryManager
 from managers.scaling_manager import ScalingManager
-from managers.trailing_manager import TrailingManager
 
 if TYPE_CHECKING:
     from config.settings import AppSettings
@@ -89,21 +87,16 @@ class PositionManager:
         self._symbol_locks: Dict[str, asyncio.Lock] = {}
 
         # --- Sub-managers ---
-        self._be_mgr = BreakevenManager(
-            settings=settings.breakeven,
-            bybit=bybit,
-            notifier=notifier,
-            db=db,
-        )
+        # Strict architecture (client IZZU 2026-04-28): the bot must not
+        # think, assume, guess, or infer anything — every close decision
+        # comes from Bybit. We removed BreakevenManager and TrailingManager
+        # (bot-side polling that decided when to move SL or activate
+        # trailing) in favour of Bybit's native trailing stop set once
+        # at trade open. Same applies to the loss caps and the close-
+        # reason inferrer — see the gutted close path below.
         self._scaling_mgr = ScalingManager(
             settings=settings.scaling,
             leverage_settings=settings.leverage,
-            bybit=bybit,
-            notifier=notifier,
-            db=db,
-        )
-        self._trailing_mgr = TrailingManager(
-            settings=settings.trailing_stop,
             bybit=bybit,
             notifier=notifier,
             db=db,
@@ -114,9 +107,6 @@ class PositionManager:
             notifier=notifier,
             db=db,
         )
-        # Give hedge manager a way to force-close the main leg when the
-        # combined-loss cap is hit (no-double-loss contract).
-        self._hedge_mgr.bind_close_main_callback(self.close_trade)
         self._reentry_mgr = ReentryManager(
             settings=settings.reentry,
             bybit=bybit,
@@ -1095,6 +1085,50 @@ class PositionManager:
             )
 
         # ----------------------------------------------------------
+        # 14b. Bybit-native trailing stop, set ONCE at trade open.
+        # ----------------------------------------------------------
+        # Strict architecture (client IZZU 2026-04-28): the bot does
+        # not poll prices to decide when to activate a trailing or
+        # move SL to break-even. Instead we hand the entire post-
+        # entry management to Bybit by setting `trailingStop` +
+        # `activePrice` on the position now. Bybit will:
+        #   1. Hold the static SL until price reaches activePrice
+        #      (= avg_entry shifted by the configured activation %).
+        #   2. Once activated, trail behind the favourable price
+        #      direction by `trailingStop` distance, autonomously.
+        # No bot intervention, no inferred close reasons.
+        try:
+            ts_settings = self._settings.trailing_stop
+            activation_pct = ts_settings.activation_pct / 100.0
+            distance_pct = ts_settings.trailing_distance_pct / 100.0
+            if avg_entry and avg_entry > 0 and activation_pct > 0 and distance_pct > 0:
+                if direction == "LONG":
+                    activation_price = round(avg_entry * (1 + activation_pct), 8)
+                else:
+                    activation_price = round(avg_entry * (1 - activation_pct), 8)
+                trailing_distance = round(avg_entry * distance_pct, 8)
+                await self._bybit.set_trading_stop(
+                    symbol=symbol,
+                    position_idx=position_idx,
+                    trailing_stop=trailing_distance,
+                    active_price=activation_price,
+                )
+                trade.trailing_sl = trailing_distance
+                log.info(
+                    "trade.trailing_armed_at_open",
+                    trade_id=trade.id, symbol=symbol,
+                    activation_price=activation_price,
+                    trailing_distance=trailing_distance,
+                    activation_pct=ts_settings.activation_pct,
+                    distance_pct=ts_settings.trailing_distance_pct,
+                )
+        except Exception:
+            log.exception(
+                "trade.trailing_arm_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+
+        # ----------------------------------------------------------
         # 15. Transition to POSITION_OPEN.
         # ----------------------------------------------------------
         trade.transition(TradeState.POSITION_OPEN)
@@ -1235,10 +1269,12 @@ class PositionManager:
             return
 
         exit_price = float(data.get("markPrice", 0) or 0)
-        close_reason = self._infer_close_reason(trade, exit_price)
+        # Strict architecture: never infer the close reason. Bybit
+        # closed the position; we just record that, with the exit
+        # price. PnL is derived from price + qty, no labels invented.
         await self.close_trade(
             trade_id=trade.id,
-            reason=close_reason,
+            reason="external_close",
             exit_price=exit_price,
         )
 
@@ -1302,7 +1338,20 @@ class PositionManager:
         trade: Trade,
         current_price: float,
     ) -> None:
-        """Run all management checks on a single trade at the given price."""
+        """Run management checks on a single trade at the given price.
+
+        Strict architecture (client IZZU 2026-04-28): the bot does not
+        decide closes, move SLs, or guess outcomes. Bybit owns those
+        decisions through native TP / SL / trailing-stop / conditional
+        orders set at trade open. The only management actions left in
+        the bot are:
+
+          - re-entry monitoring (REENTRY_WAITING),
+          - external-close detection (mirroring Bybit state into the DB),
+          - hedge activation (placing a Bybit conditional that Bybit
+            triggers autonomously),
+          - hedge-state reconciliation (reading what Bybit did).
+        """
         state = trade.state
 
         # Skip trades that are not yet fully open.
@@ -1320,21 +1369,10 @@ class PositionManager:
             await self._reentry_mgr.check_and_activate(trade, current_price)
             return
 
-        # --- Absolute max-loss cap (client Option 4, 2026-04-24) ---
-        # Hard ceiling on worst-case per-trade loss regardless of hedge
-        # state or signal SL distance. Fires if unrealized PnL in USDT
-        # falls to or below -max_loss_usdt. Catches the cases where
-        # hedge didn't/couldn't open AND SL is still far away AND the
-        # trade is bleeding. Runs before every other manager so it
-        # short-circuits the whole pipeline.
-        closed = await self._check_max_loss_cap(trade, current_price)
-        if closed:
-            return
-
         # --- Verify position still exists on Bybit (every 30s) ---
-        # Prevents error spam when the position was closed externally
-        # (TP hit on exchange / liquidation) but the bot didn't catch
-        # the close event because public WS is down.
+        # Reactive — we read what Bybit shows. If size==0 there, the
+        # position was closed by Bybit's TP/SL/trailing/liquidation;
+        # we just mirror that into our DB. No reason inference.
         import time as _time
         now = _time.monotonic()
         last_check = getattr(trade, "_last_pos_check", 0)
@@ -1348,7 +1386,6 @@ class PositionManager:
                     )
                     pos_size = float(pos.get("size", 0) or 0) if pos else 0
                     if pos_size == 0:
-                        # Position no longer exists on Bybit - mark closed.
                         log.info(
                             "trade.position_closed_externally",
                             trade_id=trade.id,
@@ -1363,44 +1400,8 @@ class PositionManager:
                     "trade.position_check_error", trade_id=trade.id,
                 )
 
-        # SL-management runs in priority order. The first rule that
-        # advances SL wins; later rules only kick in if earlier ones
-        # didn't protect enough. The "SL only moves towards profit"
-        # invariant is enforced at every step so a later rule can
-        # never relax a tighter stop set by an earlier rule.
-        #
-        #   1. TP progression (TP-2 offset, client IZZU rule):
-        #        TP2 hit  -> SL moves to entry + 0.15 % buffer (BE)
-        #        TP3 hit  -> SL moves to TP1
-        #        TP4 hit  -> SL moves to TP2
-        #        TP5 hit  -> SL moves to TP3
-        #        ...TPn hit (n>=2) -> SL moves to TP(n-2), or
-        #                              entry+buffer if n==2.
-        #   2. Break-even fallback at +2.3 % (only if no TP fired
-        #      and trade has no TP hits yet).
-        #   3. Safety ladder fallback (only if neither of the above
-        #      already moved SL further into profit):
-        #        +4 % move -> SL locked at +1.5 %
-        #        +5 % move -> SL locked at +2.5 %
-        await self._check_tp_progression(trade, current_price)
-
-        if trade.be_price is None and len(trade.tp_hits) == 0:
-            applied = await self._be_mgr.check_and_apply(trade, current_price)
-            if applied:
-                return
-
-        try:
-            await self._be_mgr.check_safety_ladder(trade, current_price)
-        except Exception:
-            log.exception(
-                "trade.safety_ladder_error",
-                trade_id=trade.id,
-                symbol=trade.signal.symbol if trade.signal else "?",
-            )
-
-        # --- Scaling check (next pending step). Gated by the
-        # [scaling].enabled config flag — when disabled the entire
-        # pyramid pipeline is bypassed (basic-bot mode). ---
+        # --- Scaling check (gated by [scaling].enabled; off by default
+        # for the basic bot). ---
         if (
             self._settings.scaling.enabled
             and trade.scaling_step < len(self._settings.scaling.steps)
@@ -1411,27 +1412,15 @@ class PositionManager:
             if applied:
                 return
 
-        # --- Trailing stop activation ---
-        if trade.trailing_sl is None:
-            applied = await self._trailing_mgr.check_and_activate(
-                trade, current_price
-            )
-            if applied:
-                return
-
-        # --- Hedge trigger ---
+        # --- Hedge: place pre-arm or reconcile state with Bybit ---
         if trade.hedge_trade_id is None:
             await self._hedge_mgr.check_and_activate(trade, current_price)
         else:
-            # Pending delayed SL move after a hedge has opened?
-            await self._hedge_mgr.check_pending_sl_move(trade, current_price)
-            # No-double-loss guard: reconcile hedge lifecycle + cap
-            # combined unrealized loss. Returns True if main was closed.
-            closed = await self._hedge_mgr.check_linked_closure(
+            # Reconcile hedge lifecycle against what Bybit reports —
+            # no combined-loss bot-side close decision here anymore.
+            await self._hedge_mgr.check_linked_closure(
                 trade, current_price,
             )
-            if closed:
-                return
 
     # ==================================================================
     # Trade closure
@@ -1769,281 +1758,6 @@ class PositionManager:
         if order_id and order_id not in self._fill_events:
             self._fill_events[order_id] = asyncio.Event()
 
-    async def _check_max_loss_cap(
-        self,
-        trade: Trade,
-        current_price: float,
-    ) -> bool:
-        """Force-close trade if unrealized PnL USDT ≤ -max_loss_usdt.
-
-        Client Option 4, 2026-04-24: absolute safety ceiling that
-        fires even when no hedge is open. Returns True if the cap
-        fired (caller should short-circuit other checks).
-        """
-        cap = self._settings.wallet.max_loss_usdt
-        if not cap or cap <= 0:
-            return False
-        if trade.avg_entry is None or trade.avg_entry <= 0:
-            return False
-        if not trade.quantity or trade.quantity <= 0:
-            return False
-        if trade.signal is None:
-            return False
-
-        direction = trade.signal.direction
-        qty = trade.quantity
-        avg_entry = trade.avg_entry
-
-        # Main-leg unrealized USDT PnL (no leverage multiplier: qty
-        # IS already the leveraged notional quantity, so price * qty
-        # is the real USDT value exposed).
-        if direction == "LONG":
-            main_pnl = (current_price - avg_entry) * qty
-        else:
-            main_pnl = (avg_entry - current_price) * qty
-
-        # If a hedge is open, include its unrealized PnL too — the
-        # cap applies to the combined exposure, not just one leg.
-        hedge_pnl = 0.0
-        if trade.hedge_trade_id:
-            try:
-                hedge_row = await self._db.get_trade(int(trade.hedge_trade_id))
-            except (ValueError, Exception):
-                hedge_row = None
-            if hedge_row:
-                h_entry = float(hedge_row.get("avg_entry") or 0)
-                h_qty = float(hedge_row.get("quantity") or qty)
-                if h_entry > 0:
-                    if direction == "LONG":
-                        # Hedge is SHORT (opposite direction).
-                        hedge_pnl = (h_entry - current_price) * h_qty
-                    else:
-                        hedge_pnl = (current_price - h_entry) * h_qty
-
-        combined = main_pnl + hedge_pnl
-        if combined > -abs(cap):
-            return False
-
-        log.warning(
-            "trade.max_loss_cap_hit",
-            trade_id=trade.id,
-            symbol=trade.signal.symbol,
-            main_pnl=round(main_pnl, 4),
-            hedge_pnl=round(hedge_pnl, 4),
-            combined=round(combined, 4),
-            cap=cap,
-            current_price=current_price,
-        )
-        await self._safe_notify(
-            f"[MAX LOSS CAP] {trade.signal.symbol} {direction}\n"
-            f"Forlust {combined:.2f} USDT har natt granssen "
-            f"-{cap:.2f} USDT.\n"
-            f"Stanger positionen for att begransa forlusten."
-        )
-        try:
-            await self.close_trade(
-                trade_id=str(trade.id),
-                reason="max_loss_cap",
-                exit_price=current_price,
-            )
-        except Exception:
-            log.exception(
-                "trade.max_loss_cap_close_failed", trade_id=trade.id,
-            )
-        return True
-
-    async def _check_tp_progression(
-        self,
-        trade: Trade,
-        current_price: float,
-    ) -> None:
-        """Detect TP fills by price crossing and advance SL.
-
-        TP-2 offset progression (client spec 2026-04-24):
-          TP1 hit -> no SL change (too early to lock)
-          TP2 hit -> SL moves to entry + buffer (zero loss locked)
-          TP3 hit -> SL moves to TP1
-          TP4 hit -> SL moves to TP2
-          TP5 hit -> SL moves to TP3
-          ...TPn hit (n >= 2) -> SL moves to TP(n-2), or entry+buffer if n == 2.
-        """
-        if trade.signal is None or trade.avg_entry is None:
-            return
-        tp_list = getattr(trade.signal, "tps", None) or []
-        if not tp_list:
-            return
-
-        direction = trade.signal.direction
-        entry = trade.avg_entry
-
-        # Determine how many TPs have now been touched by the market.
-        touched_count = 0
-        if direction == "LONG":
-            for tp in tp_list:
-                if tp and current_price >= tp:
-                    touched_count += 1
-        else:
-            for tp in tp_list:
-                if tp and 0 < tp and current_price <= tp:
-                    touched_count += 1
-
-        # Compare against how many we've already recorded.
-        prev_hits = len(trade.tp_hits)
-        if touched_count <= prev_hits:
-            return  # No new TP hit yet.
-
-        # New TP(s) hit. Update tp_hits for bookkeeping and fire the
-        # dedicated "TAKE PROFIT N TAGEN" template for each one so the
-        # client sees every partial close in real time.
-        num_valid_tps = len(tp_list)
-        qty_total = trade.quantity or 0
-        # Position-close share per placed TP — TP1 is NOT closed
-        # (client IZZU rule), so the live slices are TP2 onwards.
-        placed_slices = max(1, num_valid_tps - 1) if num_valid_tps > 1 else 1
-        for i in range(prev_hits, touched_count):
-            tp_price = tp_list[i]
-            tp_num_local = i + 1
-            trade.tp_hits.append(tp_price)
-            log.info(
-                "trade.tp_hit",
-                trade_id=trade.id,
-                symbol=trade.signal.symbol,
-                tp_index=tp_num_local,
-                tp_price=tp_price,
-            )
-            # Per-TP notification: TP1 gets no partial close order
-            # but still fires as "informational" so the client sees
-            # the price reached TP1. For TP2+, closed_qty reflects
-            # the actual slice that filled on Bybit.
-            try:
-                if tp_num_local == 1:
-                    closed_qty = 0
-                    closed_pct = 0.0
-                else:
-                    closed_qty = (qty_total / placed_slices) if placed_slices else 0
-                    closed_pct = (100.0 / placed_slices) if placed_slices else 0.0
-                if direction == "LONG":
-                    tp_pct = (tp_price - entry) / entry * 100.0 if entry else 0
-                else:
-                    tp_pct = (entry - tp_price) / entry * 100.0 if entry else 0
-                leverage = trade.leverage or 1.0
-                result_pct = tp_pct * leverage
-                # Slice of margin this TP represents.
-                slice_fraction = closed_pct / 100.0 if closed_pct else 0.0
-                slice_margin = (trade.margin or 0) * slice_fraction
-                result_usdt = slice_margin * (result_pct / 100.0)
-                await self._notifier.take_profit_hit(
-                    trade=trade,
-                    tp_level=tp_num_local,
-                    tp_price=tp_price,
-                    tp_pct=tp_pct,
-                    closed_qty=closed_qty,
-                    closed_pct=closed_pct,
-                    result_pct=result_pct,
-                    result_usdt=result_usdt,
-                )
-            except Exception:
-                log.exception(
-                    "notify.take_profit_hit_failed",
-                    trade_id=trade.id, tp_level=tp_num_local,
-                )
-
-        # Determine new SL from the latest-hit TP (TP-2 offset).
-        latest_hit_idx = touched_count - 1  # zero-based index
-        tp_num = latest_hit_idx + 1          # 1-based TP number
-
-        if tp_num < 2:
-            # TP1 hit alone - do not move SL yet.
-            return
-        elif tp_num == 2:
-            # TP2 hit -> SL moves to entry + buffer.
-            buffer_pct = self._settings.breakeven.buffer_pct / 100.0
-            if direction == "LONG":
-                new_sl = round(entry * (1 + buffer_pct), 8)
-            else:
-                new_sl = round(entry * (1 - buffer_pct), 8)
-        else:
-            # TPn hit (n >= 3) -> SL moves to TP(n-2).
-            new_sl = tp_list[latest_hit_idx - 2]
-
-        # Only move SL if the new level is MORE protective than current.
-        current_sl = trade.sl_price or 0
-        better = False
-        if direction == "LONG" and new_sl > current_sl:
-            better = True
-        if direction == "SHORT" and (current_sl == 0 or new_sl < current_sl):
-            better = True
-        if not better:
-            return
-
-        try:
-            position_idx = 1 if direction == "LONG" else 2
-            await self._bybit.set_trading_stop(
-                symbol=trade.signal.symbol,
-                stop_loss=new_sl,
-                position_idx=position_idx,
-            )
-            trade.sl_price = new_sl
-            if tp_num == 2:
-                # SL now at break-even after TP2 hit.
-                trade.be_price = new_sl
-            try:
-                await self._db.update_trade(
-                    int(trade.id), sl_price=new_sl, be_price=trade.be_price,
-                )
-            except Exception:
-                pass
-
-            # Pick the right template: TP2 (SL -> entry + buffer) =
-            # BREAK-EVEN JUSTERAD per the client's spec; TP3+ move SL
-            # to an earlier TP level, stays as the generic "SL
-            # advanced after TP" notice.
-            try:
-                if tp_num == 2:
-                    if direction == "LONG":
-                        move_pct = (current_price - entry) / entry * 100.0
-                    else:
-                        move_pct = (entry - current_price) / entry * 100.0
-                    await self._notifier.break_even_adjusted(
-                        trade=trade,
-                        new_sl=new_sl,
-                        current_move_pct=move_pct,
-                    )
-                else:
-                    # TP3+ progression — use the structured
-                    # STOP LOSS FLYTTAD template (client IZZU
-                    # 2026-04-27 update from yesterday's templates).
-                    if direction == "LONG":
-                        move_pct_now = (current_price - entry) / entry * 100.0 if entry else 0
-                    else:
-                        move_pct_now = (entry - current_price) / entry * 100.0 if entry else 0
-                    await self._notifier.sl_moved(
-                        trade=trade,
-                        new_sl=new_sl,
-                        reason=(
-                            f"TP{tp_num} träffad — SL flyttad till "
-                            f"TP{tp_num - 2} ({tp_list[tp_num - 3]})"
-                        ),
-                        move_pct=move_pct_now,
-                    )
-            except Exception:
-                log.exception(
-                    "notify.sl_progress_failed",
-                    trade_id=trade.id,
-                )
-            log.info(
-                "trade.sl_advanced_after_tp",
-                trade_id=trade.id,
-                symbol=trade.signal.symbol,
-                tp_index=latest_hit_idx + 1,
-                new_sl=new_sl,
-            )
-        except Exception:
-            log.exception(
-                "trade.sl_advance_error",
-                trade_id=trade.id,
-            )
-
     def _now_fmt(self) -> str:
         from core.time_utils import format_time, now_utc
         return format_time(now_utc())
@@ -2216,61 +1930,6 @@ class PositionManager:
                 continue
             return trade
         return None
-
-    def _infer_close_reason(self, trade: Trade, exit_price: float) -> str:
-        """Infer why a position was closed based on exit price vs SL/TP.
-
-        Tolerance is widened to ~1% because LastPrice-triggered SL/TP
-        closes routinely slip a few basis points past the trigger level,
-        and partial-TP progression moves the SL to earlier TP prices —
-        so 'near a moved SL' is a far more common exit than 'exactly at
-        the original SL'.
-        """
-        if trade.signal is None:
-            return "external_close"
-
-        tol_pct = 1.0  # match window in %
-
-        def _near(a: float, b: float) -> bool:
-            return b > 0 and abs(a - b) / b * 100.0 <= tol_pct
-
-        # 1) Trailing stop takes priority — once armed, SL is the trail.
-        if trade.trailing_sl is not None and _near(exit_price, trade.trailing_sl):
-            return "trailing_stop"
-
-        # 2) Break-even: SL was moved to entry + buffer.
-        if trade.be_price is not None and _near(exit_price, trade.be_price):
-            return "be_hit"
-
-        # 3) TP progression: SL was advanced to a previously-hit TP
-        #    level (TP2 hit -> SL moved to TP0 reference, etc.). If the
-        #    exit is near any hit TP, call it a progressed SL.
-        for tp in trade.tp_hits or []:
-            if _near(exit_price, tp):
-                return "tp_progression_sl_hit"
-
-        # 4) Current active SL on the trade record.
-        if trade.sl_price and _near(exit_price, trade.sl_price):
-            return "sl_hit"
-
-        # 5) Any signal TP level hit.
-        tp_list = (
-            trade.signal.tps if hasattr(trade.signal, "tps")
-            else trade.signal.tp_list if hasattr(trade.signal, "tp_list")
-            else []
-        )
-        for tp in tp_list:
-            if tp and _near(exit_price, tp):
-                return "tp_hit"
-
-        # 6) Compare against avg_entry — near-entry exits are almost
-        #    always BE/progressed-SL fills that drifted past tolerance.
-        if trade.avg_entry and _near(exit_price, trade.avg_entry):
-            return "near_entry_close"
-
-        # 7) Last resort: flag as external close rather than "unknown"
-        #    so the operator knows the bot didn't originate it.
-        return "external_close"
 
     async def _update_report_stats(
         self,

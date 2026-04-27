@@ -510,7 +510,7 @@ class HedgeManager:
             trade._hedge_sl_move_pending = False
 
     # ------------------------------------------------------------------
-    # Combined-loss guard + hedge lifecycle reconciliation
+    # Hedge lifecycle reconciliation (read-only, mirrors Bybit state)
     # ------------------------------------------------------------------
 
     async def check_linked_closure(
@@ -518,20 +518,16 @@ class HedgeManager:
         trade: Trade,
         current_price: float,
     ) -> bool:
-        """Enforce the no-double-loss contract between main leg and hedge.
+        """Mirror Bybit-side hedge state into the DB. No bot-side close.
 
-        Two responsibilities:
-          1. Poll the hedge position on Bybit (every ~15s). If it has
-             been externally closed by its own TP or SL, reconcile: mark
-             the hedge trade closed in the DB and evaluate whether the
-             main leg should also be closed.
-          2. Compute combined unrealized PnL across main + hedge. If
-             the net sits at or below ``-max_combined_loss_usdt``, force
-             close the main leg at market so the pair can never tip
-             further into double loss.
+        Strict architecture (client IZZU 2026-04-28): the bot does not
+        decide closes. This method polls the hedge position on Bybit
+        every ~15s; if Bybit shows the hedge is gone (its own TP/SL
+        fired), we update the DB to reflect that. We do NOT compute
+        combined unrealized PnL or force-close the main — Bybit's
+        SL/trailing on the main position handle that.
 
-        Returns True if this call triggered a close of the main trade
-        (caller should short-circuit the rest of the trigger pipeline).
+        Always returns False (this method never closes anything).
         """
         if trade.hedge_trade_id is None:
             return False
@@ -542,8 +538,7 @@ class HedgeManager:
         now = _time.monotonic()
         last = getattr(trade, "_last_hedge_pos_check", 0.0)
         if now - last < 15:
-            # Still do the cheap combined-PnL guard on every tick.
-            return await self._combined_loss_guard(trade, current_price)
+            return False
         trade._last_hedge_pos_check = now
 
         direction = trade.signal.direction
@@ -604,101 +599,7 @@ class HedgeManager:
                 current_price=current_price,
             )
 
-        return await self._combined_loss_guard(trade, current_price)
-
-    async def _combined_loss_guard(
-        self,
-        trade: Trade,
-        current_price: float,
-    ) -> bool:
-        """Force-close main leg if combined unrealized PnL is too negative."""
-        cap = getattr(self._settings, "max_combined_loss_usdt", 0.0)
-        if not cap or cap <= 0:
-            return False
-        if trade.signal is None or trade.avg_entry is None or not trade.quantity:
-            return False
-
-        direction = trade.signal.direction
-        main_qty = trade.quantity or 0.0
-        avg_entry = trade.avg_entry
-
-        # Main leg unrealized PnL (USDT).
-        if direction == "LONG":
-            main_pnl = (current_price - avg_entry) * main_qty
-        else:
-            main_pnl = (avg_entry - current_price) * main_qty
-
-        # Hedge leg PnL: if hedge still open, unrealized in opposite
-        # direction using same quantity and the price at which the hedge
-        # opened (stored as avg_entry on the hedge row). If hedge has
-        # already closed, treat as realized at the SL (worst case) so we
-        # don't under-count loss.
-        hedge_pnl = 0.0
-        try:
-            hedge_row = await self._db.get_trade(int(trade.hedge_trade_id))
-        except (ValueError, Exception):
-            hedge_row = None
-
-        if hedge_row:
-            hedge_entry = float(hedge_row.get("avg_entry", 0) or 0)
-            hedge_qty = float(hedge_row.get("quantity", 0) or main_qty)
-            hedge_state = hedge_row.get("state", "")
-            hedge_sl = float(hedge_row.get("sl_price", 0) or 0)
-            hedge_is_short = (direction == "LONG")  # hedge opposes main
-
-            if hedge_state == "CLOSED":
-                # Worst-case: assume hedge closed at its SL (= main entry).
-                # That's the defining loss scenario; TP-close is profit
-                # and already beneficial, so this bound is conservative.
-                if hedge_entry > 0 and hedge_sl > 0:
-                    if hedge_is_short:
-                        hedge_pnl = (hedge_entry - hedge_sl) * hedge_qty
-                    else:
-                        hedge_pnl = (hedge_sl - hedge_entry) * hedge_qty
-            else:
-                if hedge_is_short:
-                    hedge_pnl = (hedge_entry - current_price) * hedge_qty
-                else:
-                    hedge_pnl = (current_price - hedge_entry) * hedge_qty
-
-        combined = main_pnl + hedge_pnl
-        if combined <= -abs(cap):
-            log.warning(
-                "hedge.combined_loss_cap_hit",
-                trade_id=trade.id,
-                symbol=trade.signal.symbol,
-                main_pnl=round(main_pnl, 4),
-                hedge_pnl=round(hedge_pnl, 4),
-                combined=round(combined, 4),
-                cap=cap,
-            )
-            await self._safe_notify(
-                f"[LINKAD STANGNING] {trade.signal.symbol}\n"
-                f"Kombinerad forlust (main + hedge) {combined:.2f} USDT "
-                f"har natt granssen -{cap:.2f} USDT.\n"
-                f"Stanger huvudposition for att undvika dubbel forlust."
-            )
-            # Hand off to position manager via the injected callback.
-            close_cb = getattr(self, "_close_main_cb", None)
-            if close_cb is not None:
-                try:
-                    await close_cb(
-                        trade.id, "combined_loss_cap", current_price,
-                    )
-                    return True
-                except Exception:
-                    log.exception(
-                        "hedge.close_main_cb_error", trade_id=trade.id,
-                    )
         return False
-
-    def bind_close_main_callback(self, cb) -> None:
-        """Inject the PositionManager.close_trade bound method.
-
-        Called once during startup to break a circular import between
-        the hedge manager and the position manager.
-        """
-        self._close_main_cb = cb
 
     # ------------------------------------------------------------------
     # Close hedge
