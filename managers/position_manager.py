@@ -1317,25 +1317,32 @@ class PositionManager:
                     "trade.position_check_error", trade_id=trade.id,
                 )
 
-        # --- TP progression: every time a partial TP fills, advance SL
-        #     TP1 hit -> SL to entry + 0.15% buffer
-        #     TP2 hit -> SL to TP1 price
-        #     TP3 hit -> SL to TP2 price
-        #     TP4 hit -> SL to TP3 price
-        #     etc.
-        # (Fallback: +2.3% still moves SL to entry+buffer if TPs fail) ---
+        # SL-management runs in priority order. The first rule that
+        # advances SL wins; later rules only kick in if earlier ones
+        # didn't protect enough. The "SL only moves towards profit"
+        # invariant is enforced at every step so a later rule can
+        # never relax a tighter stop set by an earlier rule.
+        #
+        #   1. TP progression (TP-2 offset, client IZZU rule):
+        #        TP2 hit  -> SL moves to entry + 0.15 % buffer (BE)
+        #        TP3 hit  -> SL moves to TP1
+        #        TP4 hit  -> SL moves to TP2
+        #        TP5 hit  -> SL moves to TP3
+        #        ...TPn hit (n>=2) -> SL moves to TP(n-2), or
+        #                              entry+buffer if n==2.
+        #   2. Break-even fallback at +2.3 % (only if no TP fired
+        #      and trade has no TP hits yet).
+        #   3. Safety ladder fallback (only if neither of the above
+        #      already moved SL further into profit):
+        #        +4 % move -> SL locked at +1.5 %
+        #        +5 % move -> SL locked at +2.5 %
         await self._check_tp_progression(trade, current_price)
 
-        # --- Break-even fallback (only if not yet applied and no TP hit) ---
         if trade.be_price is None and len(trade.tp_hits) == 0:
             applied = await self._be_mgr.check_and_apply(trade, current_price)
             if applied:
                 return
 
-        # --- Safety ladder (client IZZU 2026-04-27): advance SL by
-        # configured fixed steps when price moves favourably (+4%
-        # → +1.5%, +5% → +2.5%) so trades whose TPs aren't pulling
-        # SL forward fast enough still lock incremental profit. ---
         try:
             await self._be_mgr.check_safety_ladder(trade, current_price)
         except Exception:
@@ -1345,8 +1352,13 @@ class PositionManager:
                 symbol=trade.signal.symbol if trade.signal else "?",
             )
 
-        # --- Scaling check (next pending step) ---
-        if trade.scaling_step < len(self._settings.scaling.steps):
+        # --- Scaling check (next pending step). Gated by the
+        # [scaling].enabled config flag — when disabled the entire
+        # pyramid pipeline is bypassed (basic-bot mode). ---
+        if (
+            self._settings.scaling.enabled
+            and trade.scaling_step < len(self._settings.scaling.steps)
+        ):
             applied = await self._scaling_mgr.check_and_apply(
                 trade, current_price
             )
