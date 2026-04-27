@@ -101,10 +101,26 @@ class EntrySettings(BaseModel):
     entry_timeout_seconds: int = 30
 
 
+class SafetyLadderStep(BaseModel):
+    """A single step of the no-TP profit-protection ladder."""
+    trigger_pct: float
+    sl_lock_pct: float
+
+
 class BreakevenSettings(BaseModel):
     """Breakeven stop-loss activation rules."""
     trigger_pct: float = 2.3
     buffer_pct: float = 0.15
+    # Profit-protection ladder that runs AFTER the +2.3% BE trigger
+    # for trades whose TP-progression isn't carrying the SL forward
+    # on its own (sparse / wide TPs, or signals with no TPs at all).
+    # Each step advances SL only if the new level is more protective
+    # than the current SL — never relaxes a tighter stop. Client
+    # IZZU 2026-04-27 rule: at +4% lock 1.5%, at +5% lock 2.5%.
+    safety_ladder: List[SafetyLadderStep] = Field(default_factory=lambda: [
+        SafetyLadderStep(trigger_pct=4.0, sl_lock_pct=1.5),
+        SafetyLadderStep(trigger_pct=5.0, sl_lock_pct=2.5),
+    ])
 
 
 class ScalingStep(BaseModel):
@@ -116,6 +132,11 @@ class ScalingStep(BaseModel):
 
 class ScalingSettings(BaseModel):
     """Position scaling / DCA configuration."""
+    # Master ON/OFF switch — flip to false to run the bot in
+    # "basic mode" with no scaling/pyramid logic at all (client
+    # IZZU 2026-04-27: alternative to forking a separate basic-bot
+    # process — same codebase, single config flag toggles the
+    # entire scaling pipeline).
     enabled: bool = True
     steps: List[ScalingStep] = Field(default_factory=lambda: [
         ScalingStep(trigger_pct=2.4, add_margin=20.0, set_leverage=50.0),

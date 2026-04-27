@@ -1086,6 +1086,46 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def sl_moved(
+        self,
+        trade,
+        new_sl: float,
+        reason: str = "",
+        move_pct: float = 0.0,
+    ) -> str:
+        """Generic 'STOP LOSS FLYTTAD' template — client IZZU 2026-04-27.
+
+        Used by:
+          - TP-progression for TP3+ (where TP{N} hit moves SL to TP{N-2})
+          - Safety-ladder steps (+4% → +1.5%, +5% → +2.5%)
+          - Any other ad-hoc SL advancement that isn't the dedicated
+            BREAK-EVEN JUSTERAD path
+
+        Args:
+            new_sl: the new SL price set on the exchange
+            reason: short human-readable reason (e.g. "TP3 hit — SL till TP1")
+            move_pct: optional favourable-move % at the moment of the move
+        """
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        move_line = f"📍 Rörelse: {_pct(move_pct)}\n" if move_pct else ""
+        reason_line = f"📍 Skäl: {reason}\n" if reason else ""
+        text = (
+            f"🛡️ STOP LOSS FLYTTAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
+            f"\n"
+            f"📍 Ny SL: {new_sl}\n"
+            f"{reason_line}{move_line}"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
+        )
+        return await self._send_notify(text)
+
     async def take_profit_hit(
         self,
         trade,

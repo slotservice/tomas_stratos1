@@ -31,6 +31,12 @@ entry_timeout_seconds = 30        # Timeout for fill confirmation
 [breakeven]
 trigger_pct = 2.3                 # Move SL to BE at +2.3%
 buffer_pct = 0.15                 # BE + 0.15% buffer
+# Safety ladder: runs after BE for trades whose TP-progression
+# isn't already locking profit faster. Client IZZU 2026-04-27.
+safety_ladder = [
+    { trigger_pct = 4.0, sl_lock_pct = 1.5 },
+    { trigger_pct = 5.0, sl_lock_pct = 2.5 },
+]
 
 [scaling]
 # Step 1: at +2.4%, leverage to x50 + add 20 USDT

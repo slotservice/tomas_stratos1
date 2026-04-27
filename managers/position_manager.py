@@ -966,27 +966,51 @@ class PositionManager:
         # a 5-TP signal -> 25% at TP2/TP3/TP4/TP5. SL progression
         # continues to use all TP levels (TP-2 offset) — TP1 is
         # simply not closed.
+        # Trailing-stop merge rule (client IZZU 2026-04-27):
+        #   TPs whose distance from entry is BELOW the trailing
+        #   activation level get individual partial-close orders.
+        #   TPs at/above the trailing activation are MERGED into
+        #   the trailing — no individual order is placed for them;
+        #   the trailing manages that slice of the position.
+        # Example with 4 TPs (avg_entry move): TP1 +2.5%, TP2 +4%,
+        # TP3 +8%, TP4 +12%, trailing activation 6.1%:
+        #   TP1, TP2 -> individual orders (25% each)
+        #   TP3, TP4 -> merged into trailing (50% combined)
+        # Slice sizing distributes the position equally across the
+        # TOTAL slice count (individual closes + 1 trailing slice
+        # if any TPs were merged).
+        trailing_activation_pct = self._settings.trailing_stop.activation_pct
+        below_trailing_tps: list[float] = []
+        merged_above_trailing_count = 0
+        for tp_price in valid_tps:
+            if avg_entry and avg_entry > 0:
+                if direction == "LONG":
+                    dist_pct = (tp_price - avg_entry) / avg_entry * 100.0
+                else:
+                    dist_pct = (avg_entry - tp_price) / avg_entry * 100.0
+                if dist_pct >= trailing_activation_pct:
+                    merged_above_trailing_count += 1
+                    continue
+            below_trailing_tps.append(tp_price)
+
+        # Total slice count = individual TPs below trailing + (1 if
+        # any TPs were merged into trailing else 0). The trailing's
+        # slice is intentionally NOT placed as a partial-close order
+        # here — the trailing manager's set_trading_stop call covers
+        # whatever quantity is still open at activation time.
+        merged_slot = 1 if merged_above_trailing_count > 0 else 0
+        num_slices = len(below_trailing_tps) + merged_slot
+
         tp_order_ids: list[str] = []
-        # Keep TP1 in valid_tps for SL-progression tracking, but
-        # skip it when placing partial-close orders.
-        tps_for_closes = valid_tps[1:] if len(valid_tps) > 1 else []
-        if tps_for_closes and trade.quantity and trade.quantity > 0:
-            num_tps = len(tps_for_closes)
+        if below_trailing_tps and trade.quantity and trade.quantity > 0 and num_slices > 0:
+            num_individual = len(below_trailing_tps)
             total_qty = trade.quantity
-            # Portion per TP (remainder goes to last TP to avoid leftover).
-            base_qty = total_qty / num_tps
-            # Close side is opposite of position.
+            base_qty = total_qty / num_slices
             close_side = "Sell" if direction == "LONG" else "Buy"
 
             placed_qty = 0.0
-            for i, tp_price in enumerate(tps_for_closes):
-                is_last = (i == num_tps - 1)
-                # Last TP closes any remainder; others use base slice.
-                if is_last:
-                    this_qty = total_qty - placed_qty
-                else:
-                    this_qty = base_qty
-
+            for i, tp_price in enumerate(below_trailing_tps):
+                this_qty = base_qty
                 try:
                     this_qty_rounded = self._bybit.round_qty(this_qty, symbol)
                     if this_qty_rounded <= 0:
@@ -1003,27 +1027,34 @@ class PositionManager:
                     if oid:
                         tp_order_ids.append(oid)
                     placed_qty += this_qty_rounded
-                    # i+2 because we skipped TP1 — first placed TP is
-                    # signal TP2.
                     log.info(
                         "trade.partial_tp_placed",
                         trade_id=trade.id, symbol=symbol,
-                        tp_index=i + 2, tp_price=tp_price,
+                        tp_index=i + 1, tp_price=tp_price,
                         qty=this_qty_rounded, order_id=oid,
                     )
                 except Exception:
                     log.exception(
                         "trade.partial_tp_error",
                         trade_id=trade.id, symbol=symbol,
-                        tp_index=i + 2, tp_price=tp_price,
+                        tp_index=i + 1, tp_price=tp_price,
                     )
 
-            # Persist TP order IDs on the trade for later cancel/tracking.
             trade.tp_order_ids = tp_order_ids
             log.info(
                 "trade.partial_tps_summary",
                 trade_id=trade.id, symbol=symbol,
-                placed=len(tp_order_ids), expected=num_tps,
+                placed=len(tp_order_ids),
+                individual=num_individual,
+                merged_into_trailing=merged_above_trailing_count,
+                trailing_activation_pct=trailing_activation_pct,
+            )
+        elif merged_above_trailing_count > 0:
+            log.info(
+                "trade.all_tps_merged_into_trailing",
+                trade_id=trade.id, symbol=symbol,
+                tps_merged=merged_above_trailing_count,
+                trailing_activation_pct=trailing_activation_pct,
             )
 
         if not valid_tps and not valid_sl:
@@ -1300,6 +1331,19 @@ class PositionManager:
             applied = await self._be_mgr.check_and_apply(trade, current_price)
             if applied:
                 return
+
+        # --- Safety ladder (client IZZU 2026-04-27): advance SL by
+        # configured fixed steps when price moves favourably (+4%
+        # → +1.5%, +5% → +2.5%) so trades whose TPs aren't pulling
+        # SL forward fast enough still lock incremental profit. ---
+        try:
+            await self._be_mgr.check_safety_ladder(trade, current_price)
+        except Exception:
+            log.exception(
+                "trade.safety_ladder_error",
+                trade_id=trade.id,
+                symbol=trade.signal.symbol if trade.signal else "?",
+            )
 
         # --- Scaling check (next pending step) ---
         if trade.scaling_step < len(self._settings.scaling.steps):
@@ -1908,13 +1952,21 @@ class PositionManager:
                         current_move_pct=move_pct,
                     )
                 else:
-                    await self._safe_notify(
-                        f"🔒 TP{tp_num} TAGEN - SL flyttad\n"
-                        f"🕒 Tid: {self._now_fmt()}\n"
-                        f"📊 Symbol: #{trade.signal.symbol}\n"
-                        f"📈 Riktning: {direction}\n"
-                        f"📍 Ny SL: {new_sl}\n"
-                        f"📍 SL nu på: TP{tp_num - 2} @ {tp_list[tp_num - 3]}"
+                    # TP3+ progression — use the structured
+                    # STOP LOSS FLYTTAD template (client IZZU
+                    # 2026-04-27 update from yesterday's templates).
+                    if direction == "LONG":
+                        move_pct_now = (current_price - entry) / entry * 100.0 if entry else 0
+                    else:
+                        move_pct_now = (entry - current_price) / entry * 100.0 if entry else 0
+                    await self._notifier.sl_moved(
+                        trade=trade,
+                        new_sl=new_sl,
+                        reason=(
+                            f"TP{tp_num} träffad — SL flyttad till "
+                            f"TP{tp_num - 2} ({tp_list[tp_num - 3]})"
+                        ),
+                        move_pct=move_pct_now,
                     )
             except Exception:
                 log.exception(

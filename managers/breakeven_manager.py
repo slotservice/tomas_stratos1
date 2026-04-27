@@ -193,6 +193,113 @@ class BreakevenManager:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    # Safety ladder — post-BE incremental SL advancement
+    # ------------------------------------------------------------------
+
+    async def check_safety_ladder(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> bool:
+        """Advance SL through the configured safety-ladder steps.
+
+        Client IZZU 2026-04-27: after BE has fired (or at any point
+        once price is in profit), continue tightening the SL using
+        a fixed ladder so a sudden retracement doesn't wipe the
+        accumulated favourable move on signals where the TP-
+        progression isn't carrying the SL forward by itself.
+
+        Default ladder: at +4% favourable move, lock SL at +1.5%;
+        at +5%, lock SL at +2.5%. Each step only RAISES the SL
+        toward profit — never relaxes a tighter stop.
+        """
+        if trade.signal is None or trade.avg_entry is None:
+            return False
+        ladder = getattr(self._settings, "safety_ladder", None) or []
+        if not ladder:
+            return False
+
+        avg_entry = trade.avg_entry
+        direction = trade.signal.direction
+        move_pct = self._calculate_move_pct(direction, avg_entry, current_price)
+
+        # Track which ladder steps have already fired on this trade.
+        applied = getattr(trade, "_safety_ladder_applied", set())
+        if not isinstance(applied, set):
+            applied = set()
+
+        # Find the highest step whose trigger has been crossed and
+        # which hasn't fired yet.
+        eligible = [
+            (i, step) for i, step in enumerate(ladder)
+            if move_pct >= step.trigger_pct and i not in applied
+        ]
+        if not eligible:
+            return False
+        # Apply the highest eligible step (skip lower ones).
+        idx, step = eligible[-1]
+
+        # Compute the locked SL price.
+        if direction == "LONG":
+            new_sl = round(avg_entry * (1 + step.sl_lock_pct / 100.0), 8)
+            better = (trade.sl_price or 0) < new_sl
+        else:
+            new_sl = round(avg_entry * (1 - step.sl_lock_pct / 100.0), 8)
+            better = (trade.sl_price is None or trade.sl_price > new_sl)
+        if not better:
+            # SL is already further into profit than this ladder step —
+            # mark the step applied and skip.
+            applied.add(idx)
+            trade._safety_ladder_applied = applied
+            return False
+
+        symbol = trade.signal.symbol
+        try:
+            position_idx = 1 if direction == "LONG" else 2
+            await self._bybit.set_trading_stop(
+                symbol=symbol,
+                stop_loss=new_sl,
+                position_idx=position_idx,
+            )
+            old_sl = trade.sl_price
+            trade.sl_price = new_sl
+            applied.add(idx)
+            trade._safety_ladder_applied = applied
+            try:
+                await self._db.update_trade(int(trade.id), sl_price=new_sl)
+            except Exception:
+                pass
+            log.info(
+                "breakeven.safety_ladder_applied",
+                trade_id=trade.id, symbol=symbol,
+                step_index=idx + 1,
+                trigger_pct=step.trigger_pct,
+                sl_lock_pct=step.sl_lock_pct,
+                old_sl=old_sl, new_sl=new_sl,
+                move_pct=round(move_pct, 4),
+            )
+            try:
+                await self._notifier.sl_moved(
+                    trade=trade,
+                    new_sl=new_sl,
+                    reason=(
+                        f"Skydd {step.sl_lock_pct:.1f}% (+{step.trigger_pct:.1f}%-trappa)"
+                    ),
+                    move_pct=move_pct,
+                )
+            except Exception:
+                log.exception(
+                    "breakeven.safety_ladder_notify_failed", trade_id=trade.id,
+                )
+            return True
+        except Exception:
+            log.exception(
+                "breakeven.safety_ladder_set_failed",
+                trade_id=trade.id, symbol=symbol, step_index=idx,
+            )
+            return False
+
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _calculate_move_pct(
