@@ -215,6 +215,15 @@ class ReportScheduler:
         self._tz_name = timezone
         self._tz = ZoneInfo(timezone)
         self._scheduler: Optional[AsyncIOScheduler] = None
+        # Lazy-import to avoid a circular: scheduler -> group_analysis
+        # -> back into reporting helpers.
+        from reporting.group_analysis import GroupAnalysisReporter
+        self._group_analysis = GroupAnalysisReporter(
+            db=db,
+            notifier=notifier,
+            groups=groups,
+            timezone=timezone,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -276,6 +285,30 @@ class ReportScheduler:
             ),
             id="weekly_error_report",
             name="Weekly error report",
+            replace_existing=True,
+        )
+
+        # Group analysis report (the deeper KEEP/REVIEW/DISABLE
+        # quality analysis from grupp ananlys.docx). Daily and
+        # weekly slots, offset 5 minutes after the simple summary
+        # reports so they don't overlap.
+        self._scheduler.add_job(
+            lambda: self._group_analysis.generate(period="daily"),
+            CronTrigger(hour=daily_hour, minute=25, timezone=self._tz_name),
+            id="daily_group_analysis",
+            name="Daily group quality analysis",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            lambda: self._group_analysis.generate(period="weekly"),
+            CronTrigger(
+                day_of_week=weekly_day,
+                hour=weekly_hour,
+                minute=30,
+                timezone=self._tz_name,
+            ),
+            id="weekly_group_analysis",
+            name="Weekly group quality analysis",
             replace_existing=True,
         )
 

@@ -43,7 +43,10 @@ safety_ladder = [
 # Step 2: at +4.0%, add 20 USDT
 # Step 3: at +6.0%, add 20 USDT
 # Step 4: at +8.0%, add 20 USDT
-enabled = true
+# Master ON/OFF switch. Set false for Milestone 1 ('basic bot')
+# operation — scaling/pyramid pipeline is bypassed entirely.
+# Set true for Milestone 2 ('basic + pyramid').
+enabled = false
 steps = [
     { trigger_pct = 2.4, add_margin = 20.0, set_leverage = 50.0 },
     { trigger_pct = 4.0, add_margin = 20.0 },
