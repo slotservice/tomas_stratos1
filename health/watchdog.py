@@ -674,6 +674,86 @@ class HealthChecker:
                             symbol=symbol,
                         )
 
+                # Re-hydrate this trade into the position manager's
+                # active_trades map so runtime managers (BE, scaling,
+                # trailing, hedge, re-entry, max-loss cap) can act on
+                # it again. Without this step, _active_trades is empty
+                # after every restart and no manager runs on existing
+                # trades — the reverse-reconcile loop would even
+                # mistake them for orphans and close them.
+                try:
+                    from core.models import Trade, TradeState, ParsedSignal
+                    import json as _json
+                    # Build a minimal ParsedSignal from the linked DB
+                    # signals row so downstream managers have their
+                    # symbol, direction, tps, sl. Anything we can't
+                    # rebuild is fine — managers tolerate None.
+                    sig_row = None
+                    if signal_id is not None:
+                        try:
+                            cursor = await self._db._conn.execute(
+                                "SELECT * FROM signals WHERE id = ?",
+                                (signal_id,),
+                            )
+                            r = await cursor.fetchone()
+                            sig_row = dict(r) if r else None
+                        except Exception:
+                            sig_row = None
+                    tps_raw = (sig_row or {}).get("tps", "[]")
+                    try:
+                        tps = _json.loads(tps_raw) if isinstance(tps_raw, str) else (tps_raw or [])
+                    except Exception:
+                        tps = []
+                    signal_obj = ParsedSignal(
+                        symbol=symbol,
+                        direction=direction,
+                        entry=float((sig_row or {}).get("entry") or trade.get("avg_entry") or 0),
+                        tp_list=[float(t) for t in tps if t],
+                        sl=float((sig_row or {}).get("sl") or 0) or None,
+                        source_channel_id=int((sig_row or {}).get("source_channel_id") or 0),
+                        source_channel_name=(sig_row or {}).get("source_channel_name") or "",
+                        raw_text=(sig_row or {}).get("raw_text") or "",
+                        signal_type=(sig_row or {}).get("signal_type") or "dynamic",
+                    )
+                    # Restore the Trade itself.
+                    state_str = (trade.get("state") or "POSITION_OPEN").upper()
+                    try:
+                        state_enum = TradeState[state_str]
+                    except KeyError:
+                        state_enum = TradeState.POSITION_OPEN
+                    tp_hits_raw = trade.get("tp_hits") or "[]"
+                    try:
+                        tp_hits = _json.loads(tp_hits_raw) if isinstance(tp_hits_raw, str) else (tp_hits_raw or [])
+                    except Exception:
+                        tp_hits = []
+                    restored_trade = Trade(
+                        signal=signal_obj,
+                        state=state_enum,
+                        entry1_fill_price=trade.get("entry1_fill_price"),
+                        entry2_fill_price=trade.get("entry2_fill_price"),
+                        avg_entry=trade.get("avg_entry"),
+                        quantity=trade.get("quantity"),
+                        leverage=trade.get("leverage"),
+                        margin=trade.get("margin"),
+                        sl_price=trade.get("sl_price"),
+                        be_price=trade.get("be_price"),
+                        trailing_sl=trade.get("trailing_sl"),
+                        hedge_trade_id=trade.get("hedge_trade_id"),
+                        reentry_count=int(trade.get("reentry_count") or 0),
+                        scaling_step=int(trade.get("scaling_step") or 0),
+                        tp_hits=[float(t) for t in tp_hits if t],
+                    )
+                    restored_trade.id = str(trade_id)
+                    position_manager._active_trades[restored_trade.id] = restored_trade
+                    counts.setdefault("trades_rehydrated", 0)
+                    counts["trades_rehydrated"] += 1
+                except Exception:
+                    log.exception(
+                        "state_recovery.rehydrate_failed",
+                        trade_id=trade_id,
+                        symbol=symbol,
+                    )
+
                 # Remove from live_positions so we can detect orphans.
                 del live_positions[key]
 

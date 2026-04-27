@@ -237,6 +237,76 @@ class ScalingManager:
                 trade_id=trade.id, symbol=symbol,
             )
 
+        # --- High-leverage SL floor (client IZZU 2026-04-27) ---
+        # Once leverage is at x25 or x50 a small price reversal blows
+        # large slices of margin. Enforce a minimum-protective SL
+        # level after every scaling step so a retracement to BE
+        # doesn't wipe the leveraged gains:
+        #   leverage  >= x50  -> SL must lock at least entry + 1.0 %
+        #   leverage  >= x25  -> SL must lock at least entry + 0.5 %
+        # If TP-progression / trailing already moved SL ABOVE this
+        # floor, leave it alone — the floor is a minimum, not a cap.
+        try:
+            current_leverage = trade.leverage or step.set_leverage or 0
+            entry = trade.avg_entry or 0
+            if entry > 0 and current_leverage >= 25:
+                if current_leverage >= 50:
+                    floor_pct = 1.0
+                else:
+                    floor_pct = 0.5
+                if direction == "LONG":
+                    floor_sl = entry * (1 + floor_pct / 100.0)
+                    needs_floor = (
+                        not trade.sl_price or trade.sl_price < floor_sl
+                    )
+                else:
+                    floor_sl = entry * (1 - floor_pct / 100.0)
+                    needs_floor = (
+                        not trade.sl_price or trade.sl_price > floor_sl
+                    )
+                if needs_floor:
+                    floor_sl = round(floor_sl, 8)
+                    log.warning(
+                        "scaling.high_leverage_sl_floor",
+                        trade_id=trade.id, symbol=symbol,
+                        old_sl=trade.sl_price,
+                        new_sl=floor_sl,
+                        leverage=current_leverage,
+                        floor_pct=floor_pct,
+                    )
+                    try:
+                        await self._bybit.set_trading_stop(
+                            symbol=symbol,
+                            position_idx=position_idx,
+                            stop_loss=floor_sl,
+                        )
+                        trade.sl_price = floor_sl
+                        try:
+                            await self._db.update_trade(
+                                int(trade.id), sl_price=floor_sl,
+                            )
+                        except Exception:
+                            pass
+                        await self._safe_notify(
+                            f"⚙️ HÖG-HÄVSTÅNG SL-GOLV\n"
+                            f"📊 Symbol: #{symbol}\n"
+                            f"📈 Riktning: {direction}\n"
+                            f"⚙️ Hävstång nu: x{current_leverage}\n"
+                            f"📍 SL höjd till: {floor_sl} (lås minst "
+                            f"+{floor_pct:.1f}% av entry vid hög "
+                            f"hävstång)"
+                        )
+                    except Exception:
+                        log.exception(
+                            "scaling.sl_floor_set_failed",
+                            trade_id=trade.id, symbol=symbol,
+                        )
+        except Exception:
+            log.exception(
+                "scaling.high_leverage_floor_check_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+
         # --- Update trade state ---
         trade.scaling_step = next_step_idx + 1
         if step.set_leverage is not None:
