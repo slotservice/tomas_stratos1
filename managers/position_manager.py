@@ -86,6 +86,10 @@ class PositionManager:
         # saved its trade to the DB. Key: symbol, Value: asyncio.Lock
         self._symbol_locks: Dict[str, asyncio.Lock] = {}
 
+        # TP-fill notification dedup: Bybit may re-send a Filled event,
+        # we only fire the per-TP Telegram notification once per order.
+        self._tp_notified: set[str] = set()
+
         # --- Sub-managers ---
         # Strict architecture (client IZZU 2026-04-28): the bot must not
         # think, assume, guess, or infer anything — every close decision
@@ -1091,21 +1095,32 @@ class PositionManager:
         # not poll prices to decide when to activate a trailing or
         # move SL to break-even. Instead we hand the entire post-
         # entry management to Bybit by setting `trailingStop` +
-        # `activePrice` on the position now. Bybit will:
-        #   1. Hold the static SL until price reaches activePrice
-        #      (= avg_entry shifted by the configured activation %).
-        #   2. Once activated, trail behind the favourable price
-        #      direction by `trailingStop` distance, autonomously.
-        # No bot intervention, no inferred close reasons.
+        # `activePrice` on the position now.
+        #
+        # Activation rule (client 2026-04-28): "Highest TP first,
+        # 6.1% second." All TP levels above 6.1% merge into the
+        # single trailing stop.
+        #   LONG:  activation = min(avg_entry × 1.061, highest TP)
+        #   SHORT: activation = max(avg_entry × 0.939, lowest TP)
+        # When the highest TP sits below 6.1% from entry, trailing
+        # activates at the highest TP instead of waiting for 6.1%.
         try:
             ts_settings = self._settings.trailing_stop
             activation_pct = ts_settings.activation_pct / 100.0
             distance_pct = ts_settings.trailing_distance_pct / 100.0
             if avg_entry and avg_entry > 0 and activation_pct > 0 and distance_pct > 0:
                 if direction == "LONG":
-                    activation_price = round(avg_entry * (1 + activation_pct), 8)
+                    pct_price = avg_entry * (1 + activation_pct)
+                    if valid_tps:
+                        activation_price = round(min(pct_price, max(valid_tps)), 8)
+                    else:
+                        activation_price = round(pct_price, 8)
                 else:
-                    activation_price = round(avg_entry * (1 - activation_pct), 8)
+                    pct_price = avg_entry * (1 - activation_pct)
+                    if valid_tps:
+                        activation_price = round(max(pct_price, min(valid_tps)), 8)
+                    else:
+                        activation_price = round(pct_price, 8)
                 trailing_distance = round(avg_entry * distance_pct, 8)
                 await self._bybit.set_trading_stop(
                     symbol=symbol,
@@ -1121,6 +1136,12 @@ class PositionManager:
                     trailing_distance=trailing_distance,
                     activation_pct=ts_settings.activation_pct,
                     distance_pct=ts_settings.trailing_distance_pct,
+                    highest_tp_used=(
+                        valid_tps and (
+                            (direction == "LONG" and max(valid_tps) < pct_price)
+                            or (direction == "SHORT" and min(valid_tps) > pct_price)
+                        )
+                    ),
                 )
         except Exception:
             log.exception(
@@ -1231,6 +1252,109 @@ class PositionManager:
             # Signal the event if someone is already waiting.
             if order_id in self._fill_events:
                 self._fill_events[order_id].set()
+            # Bybit-driven TP-hit notification (client 2026-04-28: every
+            # Telegram message except 'signal copied' must come from a
+            # Bybit event, never bot inference). If this fill is for one
+            # of our recorded partial-TP conditional orders, fire the
+            # "TAKE PROFIT N TAGEN" notification using the trigger price
+            # to look up which TP level it was.
+            await self._maybe_notify_tp_filled(order_id, data)
+
+    async def _maybe_notify_tp_filled(self, order_id: str, data: dict) -> None:
+        """Fire the per-TP Swedish notification when Bybit reports a fill
+        for one of our recorded partial-TP conditional orders.
+
+        The TP level (1, 2, 3, ...) is recovered by matching the order's
+        triggerPrice against ``trade.signal.tps``. Dedup is per-order so
+        a re-sent WS Filled event does not produce duplicate messages.
+        """
+        if not order_id or order_id in self._tp_notified:
+            return
+
+        trigger_price_str = data.get("triggerPrice", "")
+        if not trigger_price_str:
+            return
+        try:
+            trigger_price = float(trigger_price_str)
+        except (TypeError, ValueError):
+            return
+        if trigger_price <= 0:
+            return
+
+        match_trade = None
+        for t in self._active_trades.values():
+            if order_id in (t.tp_order_ids or []):
+                match_trade = t
+                break
+        if match_trade is None or match_trade.signal is None:
+            return
+
+        tp_list = (
+            match_trade.signal.tps if hasattr(match_trade.signal, "tps")
+            else getattr(match_trade.signal, "tp_list", []) or []
+        )
+        tp_level: Optional[int] = None
+        for i, tp in enumerate(tp_list):
+            if not tp:
+                continue
+            # Use a tight relative tolerance; trigger and tp are both
+            # stored as the original signal price.
+            if abs(tp - trigger_price) / max(abs(tp), 1e-12) < 1e-4:
+                tp_level = i + 1
+                break
+        if tp_level is None:
+            return
+
+        # Mark notified BEFORE emitting so concurrent re-entries can't
+        # double-fire even on tight WS retransmits.
+        self._tp_notified.add(order_id)
+
+        avg_entry = match_trade.avg_entry or 0.0
+        direction = match_trade.signal.direction
+        if avg_entry > 0:
+            if direction == "LONG":
+                tp_pct = (trigger_price - avg_entry) / avg_entry * 100.0
+            else:
+                tp_pct = (avg_entry - trigger_price) / avg_entry * 100.0
+        else:
+            tp_pct = 0.0
+
+        try:
+            closed_qty = float(data.get("cumExecQty") or 0)
+        except (TypeError, ValueError):
+            closed_qty = 0.0
+        total_qty = match_trade.quantity or 0.0
+        closed_pct = (closed_qty / total_qty * 100.0) if total_qty > 0 else 0.0
+        leverage = match_trade.leverage or 1.0
+        result_pct = tp_pct * leverage
+        slice_margin = (match_trade.margin or 0.0) * (closed_pct / 100.0)
+        result_usdt = slice_margin * (result_pct / 100.0)
+
+        try:
+            await self._notifier.take_profit_hit(
+                trade=match_trade,
+                tp_level=tp_level,
+                tp_price=trigger_price,
+                tp_pct=tp_pct,
+                closed_qty=closed_qty,
+                closed_pct=closed_pct,
+                result_pct=result_pct,
+                result_usdt=result_usdt,
+            )
+            match_trade.tp_hits.append(trigger_price)
+            log.info(
+                "trade.tp_hit",
+                trade_id=match_trade.id,
+                symbol=match_trade.signal.symbol,
+                tp_level=tp_level,
+                tp_price=trigger_price,
+                closed_qty=closed_qty,
+            )
+        except Exception:
+            log.exception(
+                "notify.take_profit_hit_failed",
+                trade_id=match_trade.id, tp_level=tp_level,
+            )
 
     async def on_position_update(self, data: dict) -> None:
         """Handle a WebSocket position update.
