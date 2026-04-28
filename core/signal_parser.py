@@ -97,15 +97,17 @@ _ENTRY_PATTERNS = [
         re.IGNORECASE,
     ),
     # Numbered list under "Entry:" / "Entry Price:" / "Entries:" /
-    # "Entry Zone:" header. e.g. "Entry :\n1) 87.07\n2) 84.45" or
+    # "Entry Zone:" / "BUY:" / "Buy Zone:" header. e.g.
+    # "Entry :\n1) 87.07\n2) 84.45" or
     # "Pair: #QTUM Entry Price:\n1) 0.907\n2) 0.934" or the CRYPTO
-    # WORLD UPTADES format "ENTRY ZONE:\n\n1) 0.02850". Tried BEFORE
-    # the emoji-prefix pattern below so a numbered list with a blank
-    # line between header and price doesn't end up grabbing just
-    # "1" as the entry (CRYPTO WORLD UPTADES ZKJ regression
-    # 2026-04-28).
+    # WORLD UPTADES format "ENTRY ZONE:\n\n1) 0.02850" or the
+    # American Crypto BUY format "BUY :\n\n1) 75610 - 76xxx".
+    # Tried BEFORE the emoji-prefix pattern below so a numbered list
+    # with a blank line between header and price doesn't end up
+    # grabbing just "1" as the entry (CRYPTO WORLD UPTADES ZKJ +
+    # American Crypto BTC regressions 2026-04-28).
     re.compile(
-        r"(?:entry|entries)\s*(?:zone|price|orders?|area|targets?)?\s*[:=]?"
+        r"(?:entry|entries|buy)\s*(?:zone|price|orders?|area|targets?|range)?\s*[:=]?"
         r"\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE
         + r"(?:\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE + r")?",
         re.IGNORECASE,
