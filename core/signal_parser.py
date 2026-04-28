@@ -197,14 +197,18 @@ _TP_PATTERNS = [
 
 # SL patterns
 _SL_PATTERNS = [
-    # Accepts "SL", "Stop Loss", "Stop-Loss", "StopLoss", "Stop loss",
-    # "stop" alone, "invalidation". Hyphen/space/none between the words.
+    # Accepts "SL", "Stop Loss" (any hyphen/space/none between the
+    # words), "Stoploss", "Invalidation". Bare "stop" is intentionally
+    # NOT accepted — it appears in commentary text ("don't stop", "1H
+    # stop", "stop trailing 1%") and the bounded gap below was grabbing
+    # whatever digit followed (Benjamin Cowen WET regression
+    # 2026-04-28: SL captured as 1.0 from a "1H Timeframe" line).
     # ``[^\d\n]{0,10}`` between the colon and the price absorbs an arrow
     # / bullet / emoji prefix on the next line ("STOP LOSS:\n→ 0.027",
     # CRYPTO WORLD UPTADES format) without crossing into a different
     # line of the message.
     re.compile(
-        r"(?:sl|stop[-\s]*loss|stop|stoploss|invalidation)\s*[:=]?\s*"
+        r"(?:sl|stop[-\s]*loss|stoploss|invalidation)\s*[:=]?\s*"
         r"[^\d\n]{0,10}" + _PRICE_RE,
         re.IGNORECASE,
     ),
