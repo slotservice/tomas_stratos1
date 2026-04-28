@@ -782,23 +782,36 @@ class TelegramNotifier:
         leverage: float,
         im: float,
     ) -> str:
-        """Hedge / reversal position activated."""
+        """🛡️ HEDGE / VÄNDNING AKTIVERAD — per Meddelande telegram.docx
+        (client 2026-04-28). Format note: the spec describes a reversal
+        ('SL flyttad till entry, TP till original SL, gammal position
+        stängd') but the bot currently runs hedges in PARALLEL — both
+        legs stay open and close on their own SL/TP. The template below
+        shows what actually happened on Bybit so the operator can
+        verify against the position list."""
         signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        old_side = signal.direction
+        new_side = "SHORT" if old_side == "LONG" else "LONG"
         text = (
-            f"<b>🛡️ HEDGE / VÄNDNING AKTIVERAD</b>\n"
+            f"🛡️ HEDGE / VÄNDNING AKTIVERAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {old_side}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning (hedge): {'SHORT' if signal.direction == 'LONG' else 'LONG'}\n"
-            f"   Hedge Entry: {hedge_entry}\n"
-            f"   Hedge SL: {hedge_sl}\n"
-            f"   Hedge TP: {hedge_tp}\n"
-            f"   Hävstång: x{leverage}\n"
-            f"   IM: {im:.2f} USDT\n"
+            f"📍 SL (hedge): {hedge_sl}\n"
+            f"📍 TP (hedge): {hedge_tp}\n"
+            f"📈 Tidigare position: {old_side}\n"
+            f"📉 Ny motriktad position: {new_side}\n"
+            f"💥 Entry (hedge): {hedge_entry}\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
+            f"💰 IM: {im:.2f} USDT (Bybit confirmed)\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
@@ -811,22 +824,30 @@ class TelegramNotifier:
         result_pct: float,
         result_usdt: float,
     ) -> str:
-        """Hedge / reversal position closed."""
+        """🛡️ HEDGE / VÄNDNING AVSLUTAD — hedge leg closed on its own
+        SL/TP. Per Meddelande telegram.docx (client 2026-04-28)."""
         signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        old_side = "SHORT" if signal.direction == "LONG" else "LONG"
         text = (
-            f"<b>🛡️ HEDGE / VÄNDNING AVSLUTAD</b>\n"
+            f"🛡️ HEDGE / VÄNDNING AVSLUTAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Exit-pris: {exit_price}\n"
-            f"   Qty: {qty}\n"
-            f"   Andel av position: {pct_of_position:.1f} %\n"
-            f"   Resultat: {_pct(result_pct)}\n"
-            f"   Resultat USDT: {_pnl_sign(result_usdt)} USDT\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)})\n"
+            f"📈 Stängd position: {old_side}\n"
+            f"💥 Stängningspris: {exit_price}\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"💵 Stängd kvantitet: {qty} ({pct_of_position:.1f}% av positionen)\n"
+            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
+            f"\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
@@ -835,18 +856,37 @@ class TelegramNotifier:
         trade,
         reason: str,
     ) -> str:
-        """Hedge cancelled."""
+        """🛡️ HEDGE AVBRUTEN. Per Meddelande telegram.docx."""
         signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
         text = (
-            f"<b>🛡️ HEDGE AVBRUTEN</b>\n"
+            f"🛡️ HEDGE AVBRUTEN\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Anledning: {reason}\n"
+            f"📍 Skäl: {reason}"
+        )
+        return await self._send_notify(text)
+
+    async def hedge_denied(
+        self,
+        trade,
+        reason: str,
+    ) -> str:
+        """🛡️ HEDGE NEKAD — hedge conditions not met. Re-added per
+        Meddelande telegram.docx (client 2026-04-28)."""
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        text = (
+            f"🛡️ HEDGE NEKAD\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"📍 Skäl: {reason}"
         )
         return await self._send_notify(text)
 
@@ -956,9 +996,9 @@ class TelegramNotifier:
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
-        header_suffix = f" - {close_source}" if close_source else ""
+        header_suffix = f"   by {close_source}" if close_source else ""
         text = (
-            f"✅ POSITION CLOSED{header_suffix}\n"
+            f"✅ POSITION STÄNGD{header_suffix}\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -966,11 +1006,11 @@ class TelegramNotifier:
             f"📍 Typ: {lev_type}\n"
             f"\n"
             f"💵 Stängd kvantitet: {qty} (100%)\n"
+            f"📚 Underlag ink. alla delsteg (BOT/Bybit): {trade.id} / {bybit_ids}\n"
             f"📍 Exit: {exit_price}\n"
-            f"📊 Resultat (prisrörelse): {_pct(result_pct_total)} with leverage\n"
-            f"💰 Resultat (USDT): {_pnl_sign(result_usdt_total)} USDT\n"
             f"\n"
-            f"📚 Underlag (BOT/Bybit): {trade.id} / {bybit_ids}\n"
+            f"📊 Resultat (prisrörelse): {_pct(result_pct_total)} with leverage\n"
+            f"💰 Resultat (USDT, inkl. hävstång/notional): {_pnl_sign(result_usdt_total)} USDT\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
         )
