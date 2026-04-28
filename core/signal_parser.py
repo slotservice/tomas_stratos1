@@ -96,6 +96,20 @@ _ENTRY_PATTERNS = [
         + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
+    # Numbered list under "Entry:" / "Entry Price:" / "Entries:" /
+    # "Entry Zone:" header. e.g. "Entry :\n1) 87.07\n2) 84.45" or
+    # "Pair: #QTUM Entry Price:\n1) 0.907\n2) 0.934" or the CRYPTO
+    # WORLD UPTADES format "ENTRY ZONE:\n\n1) 0.02850". Tried BEFORE
+    # the emoji-prefix pattern below so a numbered list with a blank
+    # line between header and price doesn't end up grabbing just
+    # "1" as the entry (CRYPTO WORLD UPTADES ZKJ regression
+    # 2026-04-28).
+    re.compile(
+        r"(?:entry|entries)\s*(?:zone|price|orders?|area|targets?)?\s*[:=]?"
+        r"\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE
+        + r"(?:\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE + r")?",
+        re.IGNORECASE,
+    ),
     # "Entry Targets:\n0.4101" / "Entry Zone:\n💠 9.19\n💠 9.11" —
     # header on one line, price(s) on following line(s) with optional
     # emoji/bullet prefix. Accepted keywords: target(s), zone, area,
@@ -108,17 +122,6 @@ _ENTRY_PATTERNS = [
         r"entry\s+(?:targets?|zone|orders?|area)\s*[:=]?[^\S\n]*\n[^\d\n]*"
         + _PRICE_RE
         + r"(?:[^\S\n]*\n[^\d\n]+(\d[\d,]*\.?\d*))?",
-        re.IGNORECASE,
-    ),
-    # Numbered list under "Entry:" / "Entry Price:" / "Entries:" header.
-    # e.g. "Entry :\n1) 87.07\n2) 84.45" or "Pair: #QTUM Entry Price:\n1) 0.907\n2) 0.934".
-    # Keywords expanded with 'price', 'targets?', 'orders?', 'area' so
-    # variants like "Entry Price:" don't fall through to a generic
-    # pattern that swallows just the leading "1" from the ordinal.
-    re.compile(
-        r"(?:entry|entries)\s*(?:zone|price|orders?|area|targets?)?\s*[:=]?"
-        r"\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE
-        + r"(?:\s*\n\s*\d+[\)\.]\s+" + _PRICE_RE + r")?",
         re.IGNORECASE,
     ),
     # "Entry: 65000" / "Entry Zone: 3200-3250" / "Buy: 0.152" /
@@ -196,8 +199,13 @@ _TP_PATTERNS = [
 _SL_PATTERNS = [
     # Accepts "SL", "Stop Loss", "Stop-Loss", "StopLoss", "Stop loss",
     # "stop" alone, "invalidation". Hyphen/space/none between the words.
+    # ``[^\d\n]{0,10}`` between the colon and the price absorbs an arrow
+    # / bullet / emoji prefix on the next line ("STOP LOSS:\n→ 0.027",
+    # CRYPTO WORLD UPTADES format) without crossing into a different
+    # line of the message.
     re.compile(
-        r"(?:sl|stop[-\s]*loss|stop|stoploss|invalidation)\s*[:=]?\s*" + _PRICE_RE,
+        r"(?:sl|stop[-\s]*loss|stop|stoploss|invalidation)\s*[:=]?\s*"
+        r"[^\d\n]{0,10}" + _PRICE_RE,
         re.IGNORECASE,
     ),
 ]
@@ -475,9 +483,9 @@ def extract_prices(text: str) -> dict:
     # (CoinAura format — price-only lines follow the Entry line,
     # no "TP:" / "Target:" labels). A TP line is a line whose only
     # content is a price, optionally preceded by a bullet/emoji or
-    # "N)" / "N." index marker. Any line containing alphabetic
-    # characters after an optional bullet/index prefix is skipped
-    # so that metadata lines (Leverage, etc.) don't get captured.
+    # "N)" / "N." index marker, and optionally followed by a
+    # parenthetical comment such as "(Close 50%)" (CRYPTO WORLD
+    # UPTADES format).
     if not collected_tps:
         # Anchor on the first line that contains "entry", "entries",
         # "buy range", or "buy zone" — so signals using "Buy Range:"
@@ -489,11 +497,23 @@ def extract_prices(text: str) -> dict:
         sl_line_re = re.compile(
             r"(?im)^.*\b(?:sl|stop[-\s]*loss|stoploss|invalidation)\b.*$"
         )
+        # If a TARGETS / TP header sits between the Entry line and
+        # the SL line, the actual TPs follow that header — the lines
+        # before it are entry-zone prices and must NOT be captured
+        # (CRYPTO WORLD UPTADES ZKJ regression: entry value 0.02850
+        # was being captured as TP[1]).
+        tp_header_re = re.compile(
+            r"(?im)^.*\b(?:targets?|take[\s_-]*profits?|tps?)\b.*$"
+        )
         em = entry_line_re.search(text)
         if em:
             sm = sl_line_re.search(text, em.end())
             end_pos = sm.start() if sm else len(text)
-            block = text[em.end():end_pos]
+            block_start = em.end()
+            tpm = tp_header_re.search(text, em.end(), end_pos)
+            if tpm:
+                block_start = tpm.end()
+            block = text[block_start:end_pos]
             # Normalise bullet separators "•" "·" inside the block to
             # newlines so a single line like "0.0101• 0.0107• 0.0115"
             # (BANANAS31 format) becomes three separate price-only
@@ -503,9 +523,12 @@ def extract_prices(text: str) -> dict:
             # Require whitespace AFTER the separator so a decimal point
             # (e.g. "0.02580") is never mistaken for an ordinal. Limit
             # ordinal digits to 1-2 so 4-digit integer prices aren't
-            # swallowed either.
+            # swallowed either. Allow an optional parenthetical
+            # comment after the price ("(Close 50%)").
             tp_line_re = re.compile(
-                r"^\s*\W*(?:\d{1,2}\s*[)\.\:\-]\s+)?" + _PRICE_RE + r"\s*\W*$",
+                r"^\s*\W*(?:\d{1,2}\s*[)\.\:\-]\s+)?"
+                + _PRICE_RE
+                + r"(?:\s*\([^)]*\))?\s*\W*$",
                 re.MULTILINE,
             )
             idx = 0
