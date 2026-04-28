@@ -421,12 +421,17 @@ def extract_prices(text: str) -> dict:
         m = _TP_PATTERNS[1].search(text)
         if m:
             block = m.group(1)
-            # Extract numbered TP entries from the block. Separator
-            # between the index and the price can be ")" "." ":" "-"
-            # with optional surrounding whitespace, so all of these
-            # match: "1)0.5", "1) 0.5", "1 : 0.5", "1 - 0.5", "1.0.5".
+            # Extract numbered TP entries from the block. The first
+            # character between the index and the price must be one
+            # of ``)``, ``:``, ``-`` or whitespace — never a period.
+            # Allowing ``.`` was reading bare-price lines like
+            # ``0.39200`` as ``idx=0, price=39200`` and collapsing
+            # every entry into ``collected_tps[0]`` (CoinAura PRL
+            # incident 2026-04-28). Bare-price-per-line lists fall
+            # through to Pattern 5 below, which is the right home
+            # for them.
             for item in re.finditer(
-                r"(\d+)[^\d\n\w]{1,4}([\d.]+)", block
+                r"(\d+)[)\:\-\s][^\d\n\w]{0,3}([\d.]+)", block
             ):
                 idx = int(item.group(1))
                 price = _parse_price(item.group(2))
