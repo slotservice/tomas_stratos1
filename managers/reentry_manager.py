@@ -122,6 +122,7 @@ class ReentryManager:
                 signal=signal,
                 leverage=new_trade.leverage or 0.0,
                 im=new_trade.margin or 0.0,
+                max_reentries=self._settings.max_reentries,
             )
         except Exception:
             log.exception(
@@ -160,7 +161,10 @@ class ReentryManager:
         except Exception:
             log.exception("reentry.exhausted_db_error", trade_id=trade.id)
         try:
-            await self._notifier.reentry_exhausted(trade=trade)
+            await self._notifier.reentry_exhausted(
+                trade=trade,
+                max_reentries=self._settings.max_reentries,
+            )
         except Exception:
             log.exception(
                 "reentry.exhausted_notify_failed", trade_id=trade.id,

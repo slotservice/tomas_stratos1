@@ -3,13 +3,12 @@ Tests for the Bybit-driven close-classification pipeline.
 
 Strict architecture (client IZZU 2026-04-28): every close reason and
 every "POSITION CLOSED - X" notification is set by the Bybit fill event,
-never by bot inference. The bot reads ``stopOrderType`` and ``execType``
-on the order-update WebSocket message and records the matching reason on
-the trade. When ``on_position_update`` later reports size=0, it uses the
-recorded reason verbatim.
+never by bot inference. ``on_order_update`` is the SOLE source of close
+events: it reads ``stopOrderType`` and ``execType`` on the fill and
+calls ``close_trade`` directly with the right reason.
 
-These tests cover the classifier (``_classify_bybit_close_fill``) and the
-``_format_close_source`` mapping to the human-readable suffix.
+These tests cover the classifier (``_classify_bybit_close_fill``) and
+the ``_format_close_source`` mapping.
 """
 
 from __future__ import annotations
@@ -42,7 +41,8 @@ class _FakeTrade:
     tp_hits: list = field(default_factory=list)
     tp_order_ids: list = field(default_factory=list)
     state: object = MagicMock(value="POSITION_OPEN")
-    _pending_close_reason: Optional[str] = None
+    hedge_trade_id: Optional[int] = None
+    hedge_conditional_order_id: Optional[str] = None
 
     @property
     def is_terminal(self) -> bool:
@@ -55,6 +55,8 @@ def _pm() -> PositionManager:
     pm._tp_notified = set()
     pm._notifier = MagicMock()
     pm._notifier.take_profit_hit = AsyncMock()
+    # Mock close_trade so we can assert it without running the full close path.
+    pm.close_trade = AsyncMock()
     return pm
 
 
@@ -90,11 +92,11 @@ def test_format_close_source_unknown_reason_passes_through():
 
 
 # --------------------------------------------------------------------------
-# _classify_bybit_close_fill
+# _classify_bybit_close_fill — strict: directly fires close_trade
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_stop_loss_fill_records_reason_stop_loss():
+async def test_stop_loss_fill_calls_close_trade_with_stop_loss():
     pm = _pm()
     trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
     pm._active_trades[trade.id] = trade
@@ -105,11 +107,11 @@ async def test_stop_loss_fill_records_reason_stop_loss():
         "reduceOnly": True,
         "avgPrice": "99.0",
     })
-    assert trade._pending_close_reason == "stop_loss"
+    pm.close_trade.assert_awaited_once_with(trade.id, "stop_loss", 99.0)
 
 
 @pytest.mark.asyncio
-async def test_trailing_stop_fill_records_reason_trailing_stop():
+async def test_trailing_stop_fill_calls_close_trade_with_trailing_stop():
     pm = _pm()
     trade = _FakeTrade(signal=_FakeSignal(direction="SHORT"))
     pm._active_trades[trade.id] = trade
@@ -120,24 +122,44 @@ async def test_trailing_stop_fill_records_reason_trailing_stop():
         "reduceOnly": True,
         "avgPrice": "98.0",
     })
-    assert trade._pending_close_reason == "trailing_stop"
+    pm.close_trade.assert_awaited_once_with(trade.id, "trailing_stop", 98.0)
 
 
 @pytest.mark.asyncio
-async def test_liquidation_fill_records_reason_liquidation():
+async def test_liquidation_fill_calls_close_trade_with_liquidation():
     pm = _pm()
     trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
+    trade.avg_entry = 100.0
     pm._active_trades[trade.id] = trade
     await pm._classify_bybit_close_fill("oid-liq", {
         "symbol": "BTCUSDT",
         "positionIdx": 1,
         "execType": "Liquidation",
     })
-    assert trade._pending_close_reason == "liquidation"
+    pm.close_trade.assert_awaited_once()
+    args = pm.close_trade.await_args.args
+    assert args[0] == trade.id and args[1] == "liquidation"
 
 
 @pytest.mark.asyncio
-async def test_partial_tp_fill_records_tp_level_and_fires_notification():
+async def test_manual_close_fires_close_trade_external_close():
+    """Reduce-only Filled with no stopOrderType = manual close from
+    Bybit UI; bot must label it 'external_close'."""
+    pm = _pm()
+    trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
+    pm._active_trades[trade.id] = trade
+    await pm._classify_bybit_close_fill("oid-manual", {
+        "symbol": "BTCUSDT",
+        "positionIdx": 1,
+        "stopOrderType": "",
+        "reduceOnly": True,
+        "avgPrice": "99.5",
+    })
+    pm.close_trade.assert_awaited_once_with(trade.id, "external_close", 99.5)
+
+
+@pytest.mark.asyncio
+async def test_partial_tp_fill_notifies_only_does_not_close():
     pm = _pm()
     trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
     trade.tp_order_ids = ["oid-tp2"]
@@ -151,14 +173,12 @@ async def test_partial_tp_fill_records_tp_level_and_fires_notification():
         "cumExecQty": "0.25",
     })
     pm._notifier.take_profit_hit.assert_awaited_once()
-    assert trade._pending_close_reason == "tp_2"
+    pm.close_trade.assert_not_called()
     assert 103.0 in trade.tp_hits
 
 
 @pytest.mark.asyncio
 async def test_unrelated_stop_order_does_not_match():
-    """A 'Stop' fill whose order_id we did not place must not be treated
-    as a TP fill."""
     pm = _pm()
     trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
     trade.tp_order_ids = ["oid-tp1"]
@@ -172,7 +192,7 @@ async def test_unrelated_stop_order_does_not_match():
         "cumExecQty": "0.25",
     })
     pm._notifier.take_profit_hit.assert_not_called()
-    assert trade._pending_close_reason is None
+    pm.close_trade.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -203,5 +223,5 @@ async def test_classifier_skips_when_no_matching_active_trade():
         "stopOrderType": "StopLoss",
         "reduceOnly": True,
     })
-    # No trade in _active_trades — nothing should crash, nothing recorded.
     pm._notifier.take_profit_hit.assert_not_called()
+    pm.close_trade.assert_not_called()

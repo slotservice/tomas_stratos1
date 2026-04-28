@@ -291,38 +291,40 @@ class PositionManager:
                 return None
 
         # ----------------------------------------------------------
-        # 4. Auto-SL fallback if SL is missing.
+        # 4. SL is taken from the signal AS-IS — no auto-fallback,
+        #    no liquidation-zone adjustment, no bot-side decision.
+        #    Strict architecture (client 2026-04-28): the bot must
+        #    never invent or adjust the SL. If the signal carries no
+        #    SL, the trade is rejected — there is no safe trade
+        #    without one.
         # ----------------------------------------------------------
         entry_price = signal.entry
         sl_price = signal.sl if hasattr(signal, "sl") else None
-        auto_sl_applied = False
+        auto_sl_applied = False  # retained for legacy log fields; always False
 
         if sl_price is None:
-            auto_sl_applied = True
-            fallback_pct = self._settings.auto_sl.fallback_pct
-            if direction == "LONG":
-                sl_price = round(entry_price * (1.0 - fallback_pct / 100.0), 8)
-            else:
-                sl_price = round(entry_price * (1.0 + fallback_pct / 100.0), 8)
-            log.info(
-                "signal.auto_sl",
-                symbol=symbol,
-                sl_price=sl_price,
-                fallback_pct=fallback_pct,
+            log.warning(
+                "signal.no_sl_rejected",
+                symbol=symbol, channel_name=channel_name,
             )
+            try:
+                await self._safe_notify(
+                    f"[SIGNAL AVVISAD] {symbol} {direction}\n"
+                    f"Anledning: signalen saknar stop-loss.\n"
+                    f"Kanal: {channel_name}"
+                )
+            except Exception:
+                pass
+            return None
 
         # ----------------------------------------------------------
-        # 5. Calculate dynamic leverage.
+        # 5. Dynamic leverage from the signal's actual SL distance.
         # ----------------------------------------------------------
-        if auto_sl_applied:
-            # Lock leverage when auto-SL is used.
-            leverage = self._settings.auto_sl.fallback_leverage
-        else:
-            leverage = calculate_leverage(
-                entry=entry_price,
-                sl=sl_price,
-                settings=(self._settings.wallet, self._settings.leverage),
-            )
+        leverage = calculate_leverage(
+            entry=entry_price,
+            sl=sl_price,
+            settings=(self._settings.wallet, self._settings.leverage),
+        )
 
         # Slippage guard: reject signal if current market price is too
         # far from the signal's entry price. Prevents placing orders on
@@ -894,34 +896,12 @@ class PositionManager:
         except Exception:
             log.exception("trade.liq_price_fetch_failed", symbol=symbol)
 
-        # Safety adjust SL so it fires BEFORE liquidation.
-        # Bybit's reported liq_price is the bankruptcy price - actual
-        # liquidation happens ~2-3% earlier due to maintenance margin.
-        # So we need a 3% buffer to ensure SL triggers first.
-        if sl_price and liq_price:
-            buffer_pct = 0.03  # 3% safety buffer before liq
-            if direction == "LONG":
-                # LONG: liq is below entry, SL must be even higher than liq+buffer
-                min_safe_sl = liq_price * (1 + buffer_pct)
-                if sl_price <= min_safe_sl:
-                    log.warning(
-                        "trade.sl_inside_liq_zone.adjusting",
-                        symbol=symbol, old_sl=sl_price,
-                        new_sl=min_safe_sl, liq_price=liq_price,
-                    )
-                    sl_price = round(min_safe_sl, 8)
-                    trade.sl_price = sl_price
-            else:
-                # SHORT: liq is above entry, SL must be even lower than liq-buffer
-                max_safe_sl = liq_price * (1 - buffer_pct)
-                if sl_price >= max_safe_sl:
-                    log.warning(
-                        "trade.sl_inside_liq_zone.adjusting",
-                        symbol=symbol, old_sl=sl_price,
-                        new_sl=max_safe_sl, liq_price=liq_price,
-                    )
-                    sl_price = round(max_safe_sl, 8)
-                    trade.sl_price = sl_price
+        # Liquidation-zone SL adjustment REMOVED 2026-04-28.
+        # Strict architecture (client): the bot must never adjust the
+        # signal's SL. If the SL sits inside the liquidation zone,
+        # Bybit will reject the set_trading_stop call below and the
+        # operator will see a [VARNING] in the channel — that is the
+        # correct surface for the issue, not a silent bot adjustment.
 
         # Filter TPs that are still valid (not already passed by market).
         # For LONG: TP must be ABOVE current mark.
@@ -969,17 +949,12 @@ class PositionManager:
                 tps=tp_list,
             )
 
-        # Validate SL direction against current mark price.
+        # SL direction validation REMOVED 2026-04-28. The signal's SL
+        # goes to Bybit unmodified. If the SL is on the wrong side of
+        # the current mark, Bybit will reject set_trading_stop and the
+        # [VARNING] notification will fire — the operator decides, not
+        # the bot.
         valid_sl = sl_price
-        if valid_sl:
-            if direction == "LONG" and valid_sl >= current_mark:
-                log.warning("trade.sl_above_mark_long",
-                            sl=valid_sl, mark=current_mark)
-                valid_sl = None
-            elif direction == "SHORT" and valid_sl <= current_mark:
-                log.warning("trade.sl_below_mark_short",
-                            sl=valid_sl, mark=current_mark)
-                valid_sl = None
 
         # ---------- Place the SL via set_trading_stop ----------
         # SL must always use the position-wide trading-stop (not a
@@ -1285,24 +1260,24 @@ class PositionManager:
     async def _classify_bybit_close_fill(
         self, order_id: str, data: dict,
     ) -> None:
-        """Classify a Bybit Filled order to record the close reason on the
-        matching active trade and fire the matching Bybit-driven Telegram
-        notification.
+        """Bybit's order-fill event is the single source of close decisions.
 
-        Strict architecture (client 2026-04-28): the bot must never guess
-        why a position closed. Bybit's ``stopOrderType`` on the filling
-        order is the authoritative answer:
+        Strict architecture (client 2026-04-28): one Bybit event triggers
+        ``close_trade`` directly; on_position_update no longer fires
+        closes. This eliminates the race where two paths would emit two
+        POSITION CLOSED notifications for the same trade.
 
-          * ``StopLoss``     → position-level SL fired   → reason ``stop_loss``
-          * ``TrailingStop`` → native trailing fired     → reason ``trailing_stop``
-          * ``Stop`` + matches one of our recorded ``tp_order_ids`` →
-            partial TP fill → record reason ``tp_N`` (N from triggerPrice
-            ↔ signal.tps lookup) and emit the TAKE PROFIT N TAGEN message.
+        Mapping (from ``stopOrderType`` / ``execType`` on the fill):
+          * ``StopLoss``     reduce-only fill → ``close_trade(stop_loss)``
+          * ``TrailingStop`` reduce-only fill → ``close_trade(trailing_stop)``
+          * ``execType=Liquidation``         → ``close_trade(liquidation)``
+          * ``Stop`` + matches a recorded ``tp_order_id`` → emit the
+            TAKE PROFIT N TAGEN notification only. The position closes
+            only when its remaining size hits zero, which Bybit reports
+            as a separate fill event.
 
-        ``execType=Liquidation`` is also classified as ``liquidation``.
-
-        The recorded reason is later picked up by on_position_update when
-        Bybit confirms size=0, which is when ``close_trade`` actually runs.
+        ``close_trade`` carries an internal ``is_terminal`` guard so any
+        repeat WS event for the same close is a safe no-op.
         """
         try:
             position_idx = int(data.get("positionIdx") or 0)
@@ -1319,43 +1294,69 @@ class PositionManager:
         exec_type = data.get("execType", "") or ""
         reduce_only = bool(data.get("reduceOnly", False))
 
-        # Match the trade by symbol + side derived from positionIdx.
         direction = "LONG" if position_idx == 1 else "SHORT"
         trade = self._find_trade_by_symbol_direction(symbol, direction)
         if trade is None or trade.is_terminal or trade.signal is None:
             return
 
-        # Position-closing event types.
+        # Position-closing event types: fire close_trade directly.
+        def _exit_price() -> float:
+            try:
+                ap = float(data.get("avgPrice") or 0)
+                if ap > 0:
+                    return ap
+            except (TypeError, ValueError):
+                pass
+            try:
+                tp = float(data.get("triggerPrice") or 0)
+                if tp > 0:
+                    return tp
+            except (TypeError, ValueError):
+                pass
+            return trade.avg_entry or 0.0
+
         if reduce_only and sot == "StopLoss":
-            trade._pending_close_reason = "stop_loss"
             log.info(
-                "ws.classified_close",
+                "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="stop_loss", order_id=order_id,
             )
+            await self.close_trade(trade.id, "stop_loss", _exit_price())
             return
 
         if reduce_only and sot == "TrailingStop":
-            trade._pending_close_reason = "trailing_stop"
             log.info(
-                "ws.classified_close",
+                "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="trailing_stop", order_id=order_id,
             )
+            await self.close_trade(trade.id, "trailing_stop", _exit_price())
             return
 
         if exec_type == "Liquidation":
-            trade._pending_close_reason = "liquidation"
             log.warning(
-                "ws.classified_close",
+                "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="liquidation", order_id=order_id,
             )
+            await self.close_trade(trade.id, "liquidation", _exit_price())
             return
 
-        # Partial-TP fill (one of our recorded conditional close orders).
+        # Partial-TP fill — notify only.
         if reduce_only and sot == "Stop" and order_id in (trade.tp_order_ids or []):
             await self._notify_tp_filled(trade, order_id, data)
+            return
+
+        # Manual close on the Bybit UI surfaces as a reduce-only Filled
+        # order with no stopOrderType. Treat as an external close —
+        # Bybit closed the position, the bot just records that.
+        if reduce_only and not sot:
+            log.info(
+                "ws.close_event",
+                trade_id=trade.id, symbol=symbol,
+                kind="external_close", order_id=order_id,
+            )
+            await self.close_trade(trade.id, "external_close", _exit_price())
 
     async def _notify_tp_filled(
         self, trade: "Trade", order_id: str, data: dict,
@@ -1442,52 +1443,30 @@ class PositionManager:
             )
 
     async def on_position_update(self, data: dict) -> None:
-        """Handle a WebSocket position update.
+        """Position-update events are observational only after 2026-04-28.
 
-        Detects position closures (e.g. from TP/SL hit on the exchange)
-        that the bot did not initiate directly.
+        The single Bybit-driven close path lives in ``on_order_update``
+        (via ``_classify_bybit_close_fill``). When Bybit fires SL /
+        Trailing / Liquidation, we close from that fill event with the
+        right reason. Position-update size=0 used to trigger a close
+        too — that produced duplicate POSITION CLOSED messages on
+        VINEUSDT and others (one labelled "external close", one
+        labelled "stop loss"). Removed.
+
+        Manual closes via the Bybit UI also surface as a reduce-only
+        Filled order — they are still caught by on_order_update and
+        labelled "external close" (no stopOrderType).
         """
-        symbol = data.get("symbol", "")
-        size = float(data.get("size", 0) or 0)
-        side = data.get("side", "")
-        # Bybit hedge mode: positionIdx 1 = Long side, 2 = Short side.
-        # The hedge side carries size=0 + side="" whenever no position
-        # exists there — including transient events emitted while the
-        # Phase 3 hedge pre-arm conditional is being placed and cancelled.
-        # Without an idx check, every such empty event matched the main
-        # trade and closed it ~1s after open (see incident 2026-04-27).
         try:
             position_idx = int(data.get("positionIdx") or 0)
         except (TypeError, ValueError):
             position_idx = 0
-
         log.debug(
             "ws.position_update",
-            symbol=symbol,
-            size=size,
-            side=side,
+            symbol=data.get("symbol", ""),
+            size=data.get("size", "0"),
+            side=data.get("side", ""),
             position_idx=position_idx,
-        )
-
-        if size != 0 or position_idx not in (1, 2):
-            return
-
-        direction_for_idx = "LONG" if position_idx == 1 else "SHORT"
-        trade = self._find_trade_by_symbol_direction(symbol, direction_for_idx)
-        if trade is None:
-            return
-
-        exit_price = float(data.get("markPrice", 0) or 0)
-        # Use the close reason classified by on_order_update (the Bybit
-        # fill event told us WHAT closed the position). If nothing was
-        # classified, this is a truly external close (manual action on
-        # the Bybit UI, instrument delisting, etc.) — label as
-        # ``external_close``. No bot inference of price-vs-SL/TP.
-        reason = getattr(trade, "_pending_close_reason", None) or "external_close"
-        await self.close_trade(
-            trade_id=trade.id,
-            reason=reason,
-            exit_price=exit_price,
         )
 
     async def on_execution_update(self, data: dict) -> None:
@@ -1630,14 +1609,14 @@ class PositionManager:
         symbol = trade.signal.symbol if trade.signal else "UNKNOWN"
         direction = trade.signal.direction if trade.signal else "?"
 
-        # --- Close any open hedge ---
-        if trade.hedge_trade_id is not None:
-            await self._hedge_mgr.close_hedge(trade, exit_price)
-        # Phase 3 — if the hedge was pre-armed on Bybit but never
-        # fired (main trade closed via TP / SL / manual / max-loss
-        # cap before the hedge trigger was reached), cancel the
-        # pending conditional so it doesn't fire after the main
-        # trade is gone and open an unwanted position.
+        # Cancel the pre-armed hedge conditional if it never fired —
+        # otherwise it would open an unwanted hedge position after the
+        # main trade is already gone.
+        # We do NOT force-close an already-filled hedge here. Per the
+        # strict architecture, the hedge has its own SL/TP set on Bybit;
+        # Bybit closes it autonomously and the bot mirrors that close
+        # via on_order_update. Force-closing from the bot was the source
+        # of the [HEDGE CLOSE ERROR] notifications (2026-04-28).
         if trade.hedge_conditional_order_id is not None:
             try:
                 await self._hedge_mgr.cancel_pre_armed(trade)

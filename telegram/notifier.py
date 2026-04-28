@@ -854,6 +854,7 @@ class TelegramNotifier:
         signal,
         leverage: float,
         im: float,
+        max_reentries: int = 2,
     ) -> str:
         """Re-entry activated after stop-out."""
         text = (
@@ -866,7 +867,7 @@ class TelegramNotifier:
             f"   Entry: {signal.entry}\n"
             f"   Hävstång: x{leverage}\n"
             f"   IM: {im:.2f} USDT\n"
-            f"   Försök: {trade.reentry_count}/3\n"
+            f"   Försök: {trade.reentry_count}/{max_reentries}\n"
             f"\n"
             f"   🔑 Order-ID BOT: {trade.id}\n"
             f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
@@ -903,17 +904,18 @@ class TelegramNotifier:
     async def reentry_exhausted(
         self,
         trade,
+        max_reentries: int = 2,
     ) -> str:
         """All re-entry attempts used up."""
         signal = trade.signal
         text = (
-            f"<b>⛔ RE-ENTRY AVSTÄNGT (3/3 försök gjorda)</b>\n"
+            f"<b>⛔ RE-ENTRY AVSTÄNGT ({max_reentries}/{max_reentries} försök gjorda)</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
             f"   Kanal: {_chan(signal.channel_name)}\n"
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
-            f"   Försök använda: 3/3\n"
+            f"   Försök använda: {max_reentries}/{max_reentries}\n"
             f"\n"
             f"   Ingen ytterligare re-entry kommer att göras.\n"
             f"\n"

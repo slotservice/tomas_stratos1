@@ -1,12 +1,19 @@
 """
-Regression test for the on_position_update WebSocket handler.
+Tests for the on_position_update WebSocket handler.
 
-Reproduces the 2026-04-27 incident where every signal closed ~1 second
-after open with reason ``near_entry_close``: the Phase 3 hedge pre-arm
-placed a conditional order on the empty hedge side (positionIdx=2),
-which made Bybit emit position_update events with size=0 + side="" +
-positionIdx=2. The handler used to match those against the LONG main
-trade at positionIdx=1 and close it.
+History:
+- 2026-04-27 incident: Phase 3 hedge pre-arm placed a conditional order
+  on positionIdx=2 (the empty hedge side); Bybit emitted position_update
+  events with size=0 + side="" + positionIdx=2; the handler matched
+  those against the LONG main trade at idx=1 and closed it ~1s after
+  open. Fixed by checking positionIdx.
+- 2026-04-28 strict architecture: on_position_update no longer triggers
+  closes at all. The single Bybit-driven close path lives in
+  on_order_update via _classify_bybit_close_fill (it reads stopOrderType
+  / execType on the fill and calls close_trade with the right reason).
+  The test below now asserts close_trade is NEVER called from
+  on_position_update — for any size or positionIdx — because the
+  handler is purely observational.
 """
 
 from __future__ import annotations
@@ -44,17 +51,15 @@ class _FakeTrade:
 
 
 def _make_pm() -> PositionManager:
-    """Build a PositionManager with all heavy deps mocked."""
     pm = PositionManager.__new__(PositionManager)
     pm._active_trades = {}
+    pm.close_trade = AsyncMock()
     return pm
 
 
 @pytest.mark.asyncio
-async def test_idx2_empty_event_does_not_close_long_main():
-    """Empty positionIdx=2 update during hedge pre-arm must NOT close LONG main."""
+async def test_position_update_never_closes_idx2_empty_event():
     pm = _make_pm()
-    pm.close_trade = AsyncMock()
     long_trade = _FakeTrade(
         id="long-1",
         signal=_FakeSignal(symbol="BTCUSDT", direction="LONG"),
@@ -73,33 +78,10 @@ async def test_idx2_empty_event_does_not_close_long_main():
 
 
 @pytest.mark.asyncio
-async def test_idx1_empty_event_does_not_close_short_main():
-    """Empty positionIdx=1 update during hedge pre-arm must NOT close SHORT main."""
+async def test_position_update_never_closes_idx1_size_zero():
+    """Even a real positionIdx=1 size=0 event must not trigger close
+    from on_position_update — the close path is on_order_update."""
     pm = _make_pm()
-    pm.close_trade = AsyncMock()
-    short_trade = _FakeTrade(
-        id="short-1",
-        signal=_FakeSignal(symbol="BTCUSDT", direction="SHORT"),
-        avg_entry=100.0,
-    )
-    pm._active_trades[short_trade.id] = short_trade
-
-    await pm.on_position_update({
-        "symbol": "BTCUSDT",
-        "side": "",
-        "size": "0",
-        "positionIdx": 1,
-        "markPrice": "100",
-    })
-
-    pm.close_trade.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_idx1_close_event_does_close_long_main():
-    """A real positionIdx=1 close (size=0 after a real LONG fill) must close the LONG."""
-    pm = _make_pm()
-    pm.close_trade = AsyncMock()
     long_trade = _FakeTrade(
         id="long-1",
         signal=_FakeSignal(symbol="BTCUSDT", direction="LONG"),
@@ -116,42 +98,12 @@ async def test_idx1_close_event_does_close_long_main():
         "markPrice": "99.0",
     })
 
-    pm.close_trade.assert_awaited_once()
-    kwargs = pm.close_trade.await_args.kwargs
-    assert kwargs["trade_id"] == "long-1"
+    pm.close_trade.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_idx2_close_event_does_close_short_main():
-    """A real positionIdx=2 close (size=0 after a real SHORT fill) must close the SHORT."""
+async def test_position_update_never_closes_size_nonzero():
     pm = _make_pm()
-    pm.close_trade = AsyncMock()
-    short_trade = _FakeTrade(
-        id="short-1",
-        signal=_FakeSignal(symbol="BTCUSDT", direction="SHORT"),
-        avg_entry=100.0,
-        sl_price=101.0,
-    )
-    pm._active_trades[short_trade.id] = short_trade
-
-    await pm.on_position_update({
-        "symbol": "BTCUSDT",
-        "side": "",
-        "size": "0",
-        "positionIdx": 2,
-        "markPrice": "101.0",
-    })
-
-    pm.close_trade.assert_awaited_once()
-    kwargs = pm.close_trade.await_args.kwargs
-    assert kwargs["trade_id"] == "short-1"
-
-
-@pytest.mark.asyncio
-async def test_size_nonzero_does_not_close():
-    """Open / running positions (size > 0) must never trigger a close."""
-    pm = _make_pm()
-    pm.close_trade = AsyncMock()
     long_trade = _FakeTrade(
         id="long-1",
         signal=_FakeSignal(symbol="BTCUSDT", direction="LONG"),
@@ -170,21 +122,13 @@ async def test_size_nonzero_does_not_close():
 
 
 @pytest.mark.asyncio
-async def test_missing_position_idx_is_ignored():
-    """Defensive: events with no positionIdx (one-way mode, malformed) are skipped."""
+async def test_position_update_handles_missing_position_idx():
+    """Defensive: malformed events (no positionIdx) must not crash."""
     pm = _make_pm()
-    pm.close_trade = AsyncMock()
-    long_trade = _FakeTrade(
-        id="long-1",
-        signal=_FakeSignal(symbol="BTCUSDT", direction="LONG"),
-    )
-    pm._active_trades[long_trade.id] = long_trade
-
     await pm.on_position_update({
         "symbol": "BTCUSDT",
         "side": "",
         "size": "0",
         "markPrice": "100",
     })
-
     pm.close_trade.assert_not_called()
