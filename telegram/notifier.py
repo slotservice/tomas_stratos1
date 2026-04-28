@@ -902,21 +902,64 @@ class TelegramNotifier:
         im: float,
         max_reentries: int = 2,
     ) -> str:
-        """Re-entry activated after stop-out."""
+        """♻️ RE-ENTRY / ÅTERINTRÄDE AKTIVERAD per Meddelande
+        telegram.docx (client 2026-04-28). Lists the full TP / SL
+        block for the new trade so the operator sees exactly what
+        was placed on Bybit, plus the försök counter (e.g. 1/2)."""
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        entry = trade.avg_entry or signal.entry
+        sl = trade.sl_price or getattr(signal, "sl", None)
+
+        # Build TP block from signal (avoids depending on trade state).
+        tp_list = (
+            getattr(signal, "tps", None)
+            or getattr(signal, "tp_list", None)
+            or []
+        )
+        tp_lines: list[str] = []
+        for i, tp in enumerate(tp_list, start=1):
+            if not tp:
+                continue
+            if entry and entry > 0:
+                if signal.direction == "LONG":
+                    pct = (tp - entry) / entry * 100.0
+                else:
+                    pct = (entry - tp) / entry * 100.0
+            else:
+                pct = 0.0
+            tp_lines.append(f"🎯 TP{i}: {tp} ({_pct(pct)})")
+        tps_block = "\n".join(tp_lines)
+
+        if sl and entry and entry > 0:
+            if signal.direction == "LONG":
+                sl_pct = (sl - entry) / entry * 100.0
+            else:
+                sl_pct = (entry - sl) / entry * 100.0
+            sl_line = f"🚩 SL: {sl} ({_pct(sl_pct)})"
+        else:
+            sl_line = f"🚩 SL: {sl if sl else 'N/A'}"
+
         text = (
-            f"<b>♻️ RE-ENTRY / ÅTERINTRÄDE AKTIVERAD</b>\n"
+            f"♻️ RE-ENTRY / ÅTERINTRÄDE AKTIVERAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Entry: {signal.entry}\n"
-            f"   Hävstång: x{leverage}\n"
-            f"   IM: {im:.2f} USDT\n"
-            f"   Försök: {trade.reentry_count}/{max_reentries}\n"
+            f"💥 Entry: {entry}\n"
+        )
+        if tps_block:
+            text += f"{tps_block}\n"
+        text += (
+            f"{sl_line}\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
+            f"💰 IM: {im:.2f} USDT (Bybit confirmed)\n"
+            f"📌 Försök: {trade.reentry_count}/{max_reentries}\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
@@ -928,22 +971,27 @@ class TelegramNotifier:
         result_pct: float,
         result_usdt: float,
     ) -> str:
-        """Re-entry position closed."""
+        """♻️ RE-ENTRY / ÅTERINTRÄDE AVSLUTAD per Meddelande spec."""
         signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        leverage = trade.leverage if trade.leverage else 0.0
         text = (
-            f"<b>♻️ RE-ENTRY / ÅTERINTRÄDE AVSLUTAD</b>\n"
+            f"♻️ RE-ENTRY / ÅTERINTRÄDE AVSLUTAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Exit-pris: {exit}\n"
-            f"   Qty: {qty}\n"
-            f"   Resultat: {_pct(result_pct)}\n"
-            f"   Resultat USDT: {_pnl_sign(result_usdt)} USDT\n"
+            f"💥 Exit: {exit}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
+            f"💵 Stängd kvantitet: {qty} (100% av positionen)\n"
+            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
             f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
@@ -952,21 +1000,19 @@ class TelegramNotifier:
         trade,
         max_reentries: int = 2,
     ) -> str:
-        """All re-entry attempts used up."""
+        """⛔ RE-ENTRY AVSTÄNGT — all attempts used up. Per spec the
+        message ends with 'Väntar på ny extern signal'."""
         signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
         text = (
-            f"<b>⛔ RE-ENTRY AVSTÄNGT ({max_reentries}/{max_reentries} försök gjorda)</b>\n"
+            f"⛔ RE-ENTRY AVSTÄNGT ({max_reentries}/{max_reentries} försök gjorda)\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Försök använda: {max_reentries}/{max_reentries}\n"
-            f"\n"
-            f"   Ingen ytterligare re-entry kommer att göras.\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
+            f"📌 Väntar på ny extern signal"
         )
         return await self._send_notify(text)
 
