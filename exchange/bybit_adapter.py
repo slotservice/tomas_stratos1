@@ -884,21 +884,48 @@ class BybitAdapter:
 
         self._log.info("setting_trading_stop", **kwargs)
 
-        try:
-            resp = await self._call_with_retry(
-                self._rest.set_trading_stop,
-                **kwargs,
-            )
-            self._log.info("trading_stop_set", symbol=symbol,
-                           position_idx=position_idx)
-            return resp.get("result", {})
-        except BybitAdapterError as exc:
-            # 34040: TP/SL not modified (already at target value) - treat as success.
-            if exc.ret_code == 34040:
-                self._log.info("trading_stop_already_set",
-                               symbol=symbol, position_idx=position_idx)
-                return {}
-            raise
+        # Bybit's trading-stop endpoint sometimes lags the position-open
+        # confirmation: an entry order can fill (WS reports Filled) but
+        # the trading-stop API still sees position size = 0 and rejects
+        # with ErrCode 10001 "can not set tp/sl/ts for zero position".
+        # We retry up to 3 times with a short backoff specifically for
+        # that one error — every other Bybit error propagates as before.
+        ZERO_POSITION_RETRIES = 3
+        ZERO_POSITION_DELAY_SECONDS = (0.5, 1.0, 2.0)
+
+        for attempt in range(ZERO_POSITION_RETRIES + 1):
+            try:
+                resp = await self._call_with_retry(
+                    self._rest.set_trading_stop,
+                    **kwargs,
+                )
+                self._log.info("trading_stop_set", symbol=symbol,
+                               position_idx=position_idx)
+                return resp.get("result", {})
+            except BybitAdapterError as exc:
+                # 34040: TP/SL not modified (already at target value).
+                if exc.ret_code == 34040:
+                    self._log.info("trading_stop_already_set",
+                                   symbol=symbol, position_idx=position_idx)
+                    return {}
+                # 10001 "can not set tp/sl/ts for zero position" — race.
+                msg = (exc.ret_msg or str(exc)).lower()
+                if (
+                    exc.ret_code == 10001
+                    and "zero position" in msg
+                    and attempt < ZERO_POSITION_RETRIES
+                ):
+                    delay = ZERO_POSITION_DELAY_SECONDS[
+                        min(attempt, len(ZERO_POSITION_DELAY_SECONDS) - 1)
+                    ]
+                    self._log.warning(
+                        "trading_stop_zero_position_retry",
+                        symbol=symbol, position_idx=position_idx,
+                        attempt=attempt + 1, delay=delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
 
     async def add_margin(
         self, symbol: str, position_idx: int, margin: float

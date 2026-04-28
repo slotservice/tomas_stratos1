@@ -266,14 +266,20 @@ class TelegramNotifier:
         existing_entry: float,
         reason: str = "",
     ) -> str:
-        """Signal blocked as duplicate (within 5% of active trade)."""
+        """Signal blocked as duplicate (within 5% of active trade).
+
+        Format per Meddelande telegram.docx — exactly the four lines
+        plus the header. No "Duplicate within X% ..." footer (the
+        operator can derive that from the timing of the previous
+        SIGNAL MOTTAGEN message in the channel; the doc spec explicitly
+        ends at Riktning).
+        """
         text = (
             f"❌ SIGNAL BLOCKERAD (Dubblett ≤5%) ❌\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Riktning: {signal.direction}\n"
-            f"📍 {reason or f'Duplicate of active trade at {existing_entry}'}"
+            f"📈 Riktning: {signal.direction}"
         )
         return await self._send_notify(text)
 
