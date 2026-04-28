@@ -54,6 +54,60 @@ def _make_db(active_trades: list[dict] | None = None) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_opposite_direction_blocked():
+    """Client 2026-04-28: bot trades only one direction per symbol.
+    A LONG signal arriving while an active SHORT exists must be blocked,
+    regardless of how close the entry is."""
+    existing = [
+        {
+            "id": 1,
+            "state": "POSITION_OPEN",
+            "avg_entry": 100.0,
+            "direction": "SHORT",
+        },
+    ]
+    db = _make_db(active_trades=existing)
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    # A LONG signal at a totally different price (which would normally
+    # be 'update') is still blocked because of the direction mismatch.
+    long_signal = ParsedSignal(
+        symbol="BTCUSDT",
+        direction="LONG",
+        entry=110.0,  # >5% diff — would be 'update' if same direction
+        tps=[120.0],
+        sl=105.0,
+    )
+    result = await detector.check(long_signal)
+    assert result.is_blocked
+    assert "Opposite direction" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_same_direction_within_5pct_still_blocked():
+    """Same direction + within 5% entry diff — existing block path
+    still applies (regression check)."""
+    existing = [
+        {
+            "id": 1,
+            "state": "POSITION_OPEN",
+            "avg_entry": 100.0,
+            "direction": "LONG",
+        },
+    ]
+    db = _make_db(active_trades=existing)
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    new = ParsedSignal(
+        symbol="BTCUSDT", direction="LONG", entry=101.0,
+        tps=[105.0], sl=98.0,
+    )
+    result = await detector.check(new)
+    assert result.is_blocked
+    assert "Duplicate" in result.reason
+
+
+@pytest.mark.asyncio
 async def test_no_duplicate_first_signal():
     """First signal for a symbol -> action='new'."""
     db = _make_db(active_trades=[])

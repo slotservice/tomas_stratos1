@@ -111,11 +111,45 @@ class DuplicateDetector:
             )
             return DuplicateCheckResult("new")
 
+        new_direction = (signal.direction or "").upper()
+
         # Compare the new signal's entry against each active trade.
         for trade in active_trades:
             existing_entry = trade.get("entry_price", 0.0)
             if existing_entry <= 0:
                 continue
+
+            existing_direction = (trade.get("direction") or "").upper()
+
+            # Direction guard (client 2026-04-28): the bot trades only
+            # ONE direction per symbol. An opposite-direction signal
+            # while any same-symbol trade is active is blocked — no
+            # parallel LONG+SHORT on Bybit (the hedge_manager's hedge
+            # leg is a separate Bybit-conditional, not a user signal).
+            if (
+                new_direction
+                and existing_direction
+                and new_direction != existing_direction
+            ):
+                reason = (
+                    f"Opposite direction ({new_direction}) of active "
+                    f"{symbol} {existing_direction} trade at "
+                    f"{existing_entry}"
+                )
+                log.info(
+                    "duplicate_check.opposite_direction_blocked",
+                    symbol=symbol,
+                    new_direction=new_direction,
+                    existing_direction=existing_direction,
+                    new_entry=new_entry,
+                    existing_entry=existing_entry,
+                    trade_id=trade.get("id"),
+                )
+                return DuplicateCheckResult(
+                    action="blocked",
+                    reason=reason,
+                    existing_trade=trade,
+                )
 
             diff_pct = abs(new_entry - existing_entry) / existing_entry * 100
 

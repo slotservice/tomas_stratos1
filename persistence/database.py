@@ -427,11 +427,18 @@ class Database:
     async def get_trades_by_symbol(self, symbol: str) -> list[dict[str, Any]]:
         """Return all trades (active and historical) for a given symbol.
 
-        Joins via signal_id to resolve the symbol.
+        Joins via signal_id so the result also carries the signal's
+        ``symbol``, ``direction``, and ``entry_price`` — used by the
+        duplicate detector for direction-aware blocking (client
+        2026-04-28: trade only one direction per symbol).
         """
         cursor = await self._conn.execute(
             """
-            SELECT t.* FROM trades t
+            SELECT t.*,
+                   s.symbol         AS symbol,
+                   s.direction      AS direction,
+                   s.entry_price    AS entry_price
+            FROM trades t
             JOIN signals s ON t.signal_id = s.id
             WHERE s.symbol = ?
             ORDER BY t.created_at DESC
