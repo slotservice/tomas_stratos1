@@ -167,10 +167,17 @@ _TP_PATTERNS = [
     # accepts ")" "." ":" "-" with optional whitespace AROUND them so
     # "1)0.5", "1) 0.5", "1 : 0.5", "1 - 0.5" all match. Trailing
     # "(?:\s+targets?)?" absorbs the extra word in "Take Profit Targets".
+    #
+    # The bare ``targets?`` alternative is anchored to start-of-line
+    # (or after a newline) so headers like "Entry Targets:" don't match
+    # — that header followed by a single price was making the parser
+    # capture the ENTRY price as TP1. "Take-Profit Targets" still
+    # matches anywhere because the "take..." prefix is unambiguous.
     re.compile(
-        r"(?:targets?|take[\s_-]*profits?(?:\s+targets?)?)\s*[:=]?\s*-?"
+        r"(?:take[\s_-]*profits?(?:\s+targets?)?|(?:^|\n)\s*(?:tps?|targets?))"
+        r"\s*[:=]?\s*-?"
         r"\s*\n\s*((?:\d+[^\d\n\w]{1,4}[\d.]+\s*\n?\s*){1,8})",
-        re.IGNORECASE,
+        re.IGNORECASE | re.MULTILINE,
     ),
     # "Targets: 3300/3400/3500" / "Targets: 3300, 3400, 3500" / "Targets:
     # 🎯 1.20, 1.27, 1.36" — same-line list with optional emojis between
