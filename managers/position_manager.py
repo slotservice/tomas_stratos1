@@ -1883,17 +1883,15 @@ class PositionManager:
                     except Exception:
                         log.exception("notify.no_money_failed")
             elif "110074" in err_str or "not live" in err_lower or "delist" in err_lower:
-                # Contract delisted / not tradable — give a human
-                # reason instead of the raw API error.
+                # Contract delisted / not tradable on Bybit — same
+                # operational meaning as "Finns inte på bybit"
+                # (the symbol is not tradable here), so use the same
+                # warning template for consistency (client 2026-04-28).
                 try:
                     if trade.signal:
-                        await self._notifier.order_place_failed(
-                            signal=trade.signal,
-                            order_label=order_label,
-                            reason="Kontraktet är inte aktivt på Bybit (delistat eller ej handelbart).",
-                        )
+                        await self._notifier.symbol_not_on_bybit(trade.signal)
                 except Exception:
-                    log.exception("notify.order_place_failed_failed")
+                    log.exception("notify.symbol_not_on_bybit_failed")
             else:
                 try:
                     if trade.signal:

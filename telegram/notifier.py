@@ -275,7 +275,7 @@ class TelegramNotifier:
         ends at Riktning).
         """
         text = (
-            f"❌ SIGNAL BLOCKERAD (Dubblett ≤5%) ❌\n"
+            f"⚠️ SIGNAL BLOCKERAD (Dubblett ≤5%) ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -299,7 +299,7 @@ class TelegramNotifier:
                 f"(priser per-{suggestion[:-len(signal.symbol)] or '1'}-token)."
             )
         text = (
-            f"❌ Finns inte på bybit ❌\n"
+            f"⚠️ Finns inte på bybit ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
