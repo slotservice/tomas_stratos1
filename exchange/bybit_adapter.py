@@ -888,10 +888,13 @@ class BybitAdapter:
         # confirmation: an entry order can fill (WS reports Filled) but
         # the trading-stop API still sees position size = 0 and rejects
         # with ErrCode 10001 "can not set tp/sl/ts for zero position".
-        # We retry up to 3 times with a short backoff specifically for
-        # that one error — every other Bybit error propagates as before.
-        ZERO_POSITION_RETRIES = 3
-        ZERO_POSITION_DELAY_SECONDS = (0.5, 1.0, 2.0)
+        # We retry up to 6 times with backoff specifically for that one
+        # error — every other Bybit error propagates as before. Total
+        # worst-case wait: 0.5+1+2+3+5+8 = 19.5s, observed-3 retries was
+        # not enough for high-volatility symbols (BOMEUSDT, BTCUSDT
+        # 2026-04-28: positions opened without SL).
+        ZERO_POSITION_RETRIES = 6
+        ZERO_POSITION_DELAY_SECONDS = (0.5, 1.0, 2.0, 3.0, 5.0, 8.0)
 
         for attempt in range(ZERO_POSITION_RETRIES + 1):
             try:

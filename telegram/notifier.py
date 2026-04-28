@@ -989,14 +989,39 @@ class TelegramNotifier:
     ) -> str:
         """TAKE PROFIT {N} TAGEN — per-TP partial-close notification.
 
-        Fires each time a partial TP conditional order fills on Bybit.
-        Per Meddelande telegram.docx spec.
+        Lists every TP from the signal with ``✅`` for the levels that
+        have already filled (TP1..tp_level) and ``🎯`` for the ones
+        still pending. Per Meddelande telegram.docx (client 2026-04-28
+        update — TP1 ✅ stays ticked when later levels also fill).
         """
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         entry = trade.avg_entry or (signal.entry if signal else 0)
         leverage = trade.leverage if trade.leverage else 0.0
+
+        # Build the TP list with ✅ (hit) / 🎯 (pending) markers.
+        all_tps = (
+            getattr(signal, "tps", None)
+            or getattr(signal, "tp_list", None)
+            or []
+        ) if signal else []
+        tp_lines: list[str] = []
+        for i, tp in enumerate(all_tps, start=1):
+            if not tp:
+                continue
+            if entry and entry > 0:
+                if signal and signal.direction == "LONG":
+                    pct = (tp - entry) / entry * 100.0
+                else:
+                    pct = (entry - tp) / entry * 100.0
+            else:
+                pct = 0.0
+            marker = "✅" if i <= tp_level else "🎯"
+            tp_lines.append(f"{marker} TP{i}: {tp} ({_pct(pct)})")
+
+        tps_block = "\n".join(tp_lines) if tp_lines else f"🎯 TP{tp_level}: {tp_price} ({_pct(tp_pct)})"
+
         text = (
             f"✅ TAKE PROFIT {tp_level} TAGEN\n"
             f"🕒 Tid: {_ts()}\n"
@@ -1007,9 +1032,10 @@ class TelegramNotifier:
             f"\n"
             f"💥 Entry: {entry}\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
-            f"🎯 TP{tp_level}: {tp_price} ({_pct(tp_pct)})\n"
-            f"💵 Stängd kvantitet: {closed_qty} ({closed_pct:.1f}% av positionen)\n"
             f"\n"
+            f"{tps_block}\n"
+            f"\n"
+            f"💵 Stängd kvantitet: {closed_qty} ({closed_pct:.1f}% av positionen)\n"
             f"📊 Resultat: {_pct(result_pct)} with leverage\n"
             f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
             f"\n"
