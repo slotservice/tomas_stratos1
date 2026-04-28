@@ -1044,6 +1044,36 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def trailing_stop_activated(
+        self,
+        trade,
+        activation_price: float,
+        trailing_distance: float,
+        activation_pct: float,
+        distance_pct: float,
+    ) -> str:
+        """TRAILING STOP AKTIVERAD — fired when the bot arms Bybit's
+        native trailing stop on the position at trade open. Per
+        Meddelande telegram.docx (client 2026-04-28)."""
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        text = (
+            f"🔄 TRAILING STOP AKTIVERAD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Typ: {lev_type}\n"
+            f"\n"
+            f"📍 Trigger: {_pct(activation_pct)} (aktiveringspris {activation_price})\n"
+            f"📍 Avstånd: {distance_pct:+.2f}% bakom pris ({trailing_distance})\n"
+            f"\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
+        )
+        return await self._send_notify(text)
+
     # ===================================================================
     # SPECIAL TEMPLATES
     # ===================================================================

@@ -1139,6 +1139,22 @@ class PositionManager:
                         )
                     ),
                 )
+                # Telegram: TRAILING STOP AKTIVERAD per Meddelande
+                # telegram.docx (client 2026-04-28: "this one i never
+                # seen" — was missing from the bot's notifications).
+                try:
+                    await self._notifier.trailing_stop_activated(
+                        trade=trade,
+                        activation_price=activation_price,
+                        trailing_distance=trailing_distance,
+                        activation_pct=ts_settings.activation_pct,
+                        distance_pct=ts_settings.trailing_distance_pct,
+                    )
+                except Exception:
+                    log.exception(
+                        "trade.trailing_arm_notify_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
         except Exception:
             log.exception(
                 "trade.trailing_arm_failed",
