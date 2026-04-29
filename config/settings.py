@@ -78,7 +78,14 @@ class WalletSettings(BaseModel):
 
 
 class LeverageSettings(BaseModel):
-    """Dynamic leverage thresholds and limits."""
+    """Dynamic leverage thresholds and limits.
+
+    Client 2026-04-29 (clarified): wallet IM risk = 2% (entry -> SL).
+        raw < 6.75              -> always x6 (min_leverage)
+        6.75 <= raw < 7.5       -> floor to 7.5 (dynamic starts here)
+        7.5  <= raw < 25.0      -> use raw value
+        raw >= 25.0             -> cap to 25 (max_entry_leverage)
+    """
     min_leverage: float = Field(6.0, alias="min_leverage")
     neutral_zone_split: float = 6.75
     neutral_zone_upper: float = 7.5
@@ -121,14 +128,39 @@ class TrailingStopSettings(BaseModel):
     """Trailing stop configuration."""
     activation_pct: float = 6.1
     trailing_distance_pct: float = 2.5
-    trigger_type: str = "MarkPrice"
+    trigger_type: str = "LastPrice"
 
 
 class HedgeSettings(BaseModel):
-    """Hedge trade configuration."""
+    """Hedge trade configuration.
+
+    Client 2026-04-30 production-stable model:
+        Hedge trigger          : -1.5 % (Last price, Bybit conditional)
+        Hedge hard SL          : -1.2 % from hedge's own entry
+        Hedge trailing distance: 1.2 % (Bybit native, Last trigger)
+        No fixed TP — trailing is the only profit-lock mechanism.
+
+        Original-trade force close: -2.0 % adverse move (Market reduce-only)
+            — independent of the signal's SL. Hedge then runs alone.
+
+        Timeout: if the hedge price stays within ``no_move_threshold_pct``
+        of the hedge entry for ``timeout_minutes`` after fill, the bot
+        closes it (capital control — prevents stuck hedges).
+
+    The bot-side ``check_and_activate`` path is disabled: the only
+    source of truth for hedge opening is the Bybit conditional placed
+    by ``pre_arm_on_bybit``. Two activation paths can create duplicate
+    hedges and inconsistent state.
+    """
     enabled: bool = True
-    trigger_pct: float = -2.0
+    trigger_pct: float = -1.5
     max_hedge_count: int = 1
+    hard_sl_pct: float = 1.2
+    trailing_pct: float = 1.2
+    timeout_minutes: int = 20
+    no_move_threshold_pct: float = 0.5
+    original_force_close_pct: float = 2.0
+    use_bybit_conditional_only: bool = True
 
 
 class ReentrySettings(BaseModel):
@@ -174,8 +206,19 @@ class ReportingSettings(BaseModel):
 
 
 class TpSlSettings(BaseModel):
-    """TP/SL trigger type shared across the bot."""
-    trigger_type: str = "MarkPrice"
+    """TP / SL / hedge / trailing trigger types.
+
+    Client 2026-04-29 spec:
+        SL (initial)        : MarkPrice
+        SL (moving / BE)    : LastPrice
+        TP (always)         : LastPrice
+        Trailing stop       : LastPrice
+        Hedge conditional   : LastPrice
+    ``trigger_type`` is the default for everything except the initial
+    SL, which uses ``sl_initial_trigger_type``.
+    """
+    trigger_type: str = "LastPrice"
+    sl_initial_trigger_type: str = "MarkPrice"
 
 
 class GeneralSettings(BaseModel):

@@ -67,12 +67,18 @@ class HedgeManager:
         trade: Trade,
         current_price: float,
     ) -> bool:
-        """Check whether a hedge should be opened for *trade*.
+        """Bot-side hedge activation — DISABLED 2026-04-30.
 
-        Returns ``True`` if a hedge was opened on this call, ``False``
-        otherwise.  Idempotent -- will not open a second hedge if one
-        already exists.
+        Per client production-stable spec, the hedge has ONE source
+        of truth: the Bybit conditional placed by ``pre_arm_on_bybit``.
+        Two activation paths created duplicate hedges and inconsistent
+        state. This method is kept as a stub so existing call sites
+        do not break, but it never opens a hedge.
         """
+        if getattr(self._settings, "use_bybit_conditional_only", True):
+            return False
+
+        # Legacy path retained for the off-toggle case only.
         if not self._settings.enabled:
             return False
 
@@ -102,8 +108,15 @@ class HedgeManager:
         # closer of fixed OR (SL distance - small buffer) so the
         # hedge always fires before SL, with a 0.3% buffer to avoid
         # near-simultaneous firing.
+        #
+        # Client 2026-04-29: previously the floor was 0.5% which fired
+        # the hedge on micro-moves (e.g. SUIUSDT at -0.53% adverse
+        # produced a hedge before the operator could even react). Floor
+        # raised to 1.5% — tight-SL signals still get a pre-SL hedge,
+        # but only when the move is meaningful.
         fixed_trigger = abs(self._settings.trigger_pct)
         pre_sl_buffer_pct = 0.3
+        pre_sl_floor_pct = 1.5
         effective_trigger = fixed_trigger
         sl_price = trade.sl_price
         if sl_price and avg_entry and avg_entry > 0:
@@ -112,7 +125,9 @@ class HedgeManager:
             else:
                 sl_distance_pct = (sl_price - avg_entry) / avg_entry * 100.0
             if sl_distance_pct > 0:
-                pre_sl_trigger = max(0.5, sl_distance_pct - pre_sl_buffer_pct)
+                pre_sl_trigger = max(
+                    pre_sl_floor_pct, sl_distance_pct - pre_sl_buffer_pct,
+                )
                 if pre_sl_trigger < effective_trigger:
                     effective_trigger = pre_sl_trigger
 
@@ -146,10 +161,13 @@ class HedgeManager:
                 trade_id=trade.id,
                 symbol=symbol,
             )
-            await self._safe_notify(
-                f"[HEDGE VARNING] {symbol}: ingen SL tillganglig for hedge TP. "
-                f"Hedge avbruten."
-            )
+            try:
+                await self._notifier.hedge_cancelled(
+                    trade=trade,
+                    reason="Ingen SL tillgänglig för hedge TP — hedge avbruten.",
+                )
+            except Exception:
+                log.exception("hedge.notify_cancelled_failed", trade_id=trade.id)
             return False
 
         # Use the same quantity as the main position.
@@ -177,10 +195,13 @@ class HedgeManager:
                 trade_id=trade.id,
                 symbol=symbol,
             )
-            await self._safe_notify(
-                f"[HEDGE ERROR] {symbol}: kunde inte oppna hedge-position. "
-                f"Se loggar."
-            )
+            try:
+                await self._notifier.hedge_cancelled(
+                    trade=trade,
+                    reason="Kunde inte öppna hedge-position på Bybit. Se loggar.",
+                )
+            except Exception:
+                log.exception("hedge.notify_error_failed", trade_id=trade.id)
             return False
 
         # --- Set TP/SL on the hedge position ---
@@ -199,10 +220,16 @@ class HedgeManager:
                 hedge_tp=hedge_tp,
                 hedge_sl=hedge_sl,
             )
-            await self._safe_notify(
-                f"[HEDGE VARNING] {symbol}: hedge oppnad men TP/SL kunde "
-                f"inte sattas! Manuell atgard kravs."
-            )
+            try:
+                await self._notifier.hedge_cancelled(
+                    trade=trade,
+                    reason=(
+                        "Hedge öppnad men TP/SL kunde inte sättas! "
+                        "Manuell åtgärd krävs."
+                    ),
+                )
+            except Exception:
+                log.exception("hedge.notify_tp_sl_failed", trade_id=trade.id)
 
         # --- Schedule delayed SL adjustment on original trade ---
         # Client requirement (2026-04-23): do NOT move the original
@@ -269,13 +296,21 @@ class HedgeManager:
         except Exception:
             log.exception("hedge.parent_update_error", trade_id=trade.id)
 
-        # --- Notify ---
-        await self._safe_notify(
-            f"[HEDGE] {symbol} {direction} -> {hedge_direction}\n"
-            f"Hedge-position oppnad vid {current_price}\n"
-            f"Hedge SL: {hedge_sl} | Hedge TP: {hedge_tp}\n"
-            f"Rorelse mot position: -{adverse_pct:.2f}%"
-        )
+        # --- Notify (use the proper Swedish template) ---
+        try:
+            await self._notifier.hedge_activated(
+                trade=trade,
+                hedge_entry=current_price,
+                hedge_sl=hedge_sl,
+                hedge_tp=hedge_tp,
+                leverage=trade.leverage or 0.0,
+                im=trade.margin or 0.0,
+            )
+        except Exception:
+            log.exception(
+                "hedge.notify_activated_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
 
         log.info(
             "hedge.activated",
@@ -319,22 +354,11 @@ class HedgeManager:
         direction = trade.signal.direction
         symbol = trade.signal.symbol
 
-        # Use the same dynamic-trigger rule as check_and_activate so
-        # the conditional fires at exactly the same price level the
-        # bot-side path would have fired at.
-        fixed_trigger = abs(self._settings.trigger_pct)
-        pre_sl_buffer_pct = 0.3
-        effective_trigger = fixed_trigger
-        sl_price = trade.sl_price
-        if sl_price and avg_entry > 0:
-            if direction == "LONG":
-                sl_distance_pct = (avg_entry - sl_price) / avg_entry * 100.0
-            else:
-                sl_distance_pct = (sl_price - avg_entry) / avg_entry * 100.0
-            if sl_distance_pct > 0:
-                pre_sl_trigger = max(0.5, sl_distance_pct - pre_sl_buffer_pct)
-                if pre_sl_trigger < effective_trigger:
-                    effective_trigger = pre_sl_trigger
+        # Client 2026-04-30 production-stable spec: hedge always fires
+        # at a fixed adverse move (default -1.5%). Earlier dynamic
+        # SL-buffer logic created varying triggers per signal; the
+        # client wants ONE deterministic value across all trades.
+        effective_trigger = abs(self._settings.trigger_pct)
 
         # Trigger PRICE: how far is effective_trigger% from avg_entry,
         # in the adverse direction?
@@ -466,10 +490,19 @@ class HedgeManager:
                 trade_id=trade.id,
                 symbol=symbol,
             )
-            await self._safe_notify(
-                f"[HEDGE CLOSE ERROR] {symbol}: kunde inte stanga "
-                f"hedge-position. Manuell atgard kravs."
-            )
+            try:
+                await self._notifier.hedge_cancelled(
+                    trade=trade,
+                    reason=(
+                        "Kunde inte stänga hedge-position på Bybit. "
+                        "Manuell åtgärd krävs."
+                    ),
+                )
+            except Exception:
+                log.exception(
+                    "hedge.notify_close_error_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
             return
 
         # Update hedge trade in DB.
@@ -492,10 +525,24 @@ class HedgeManager:
         except (ValueError, Exception):
             log.exception("hedge.close_db_error", trade_id=trade.id)
 
-        await self._safe_notify(
-            f"[HEDGE KLAR] {symbol}\n"
-            f"Hedge-position stangd vid {exit_price}"
-        )
+        # Use the proper hedge_completed Swedish template. Without
+        # qty/PnL details from Bybit we pass the values we have on
+        # hand — full PnL still reaches the operator from the parent
+        # close report. Client 2026-04-29: no more plain-text.
+        try:
+            await self._notifier.hedge_completed(
+                trade=trade,
+                exit_price=exit_price,
+                qty=trade.quantity or 0.0,
+                pct_of_position=100.0,
+                result_pct=0.0,
+                result_usdt=0.0,
+            )
+        except Exception:
+            log.exception(
+                "hedge.notify_completed_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
 
         log.info(
             "hedge.closed",

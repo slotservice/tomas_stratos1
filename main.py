@@ -128,7 +128,7 @@ def _import_components():
 
     # Core
     from core.duplicate_detector import DuplicateDetector
-    from core.signal_parser import parse_signal
+    from core.signal_parser import parse_signal, parse_signal_detailed
 
     # Managers
     from managers.position_manager import PositionManager
@@ -144,6 +144,7 @@ def _import_components():
         "TelegramNotifier": TelegramNotifier,
         "DuplicateDetector": DuplicateDetector,
         "parse_signal": parse_signal,
+        "parse_signal_detailed": parse_signal_detailed,
         "PositionManager": PositionManager,
         "HealthChecker": HealthChecker,
         "OrderLoopProtector": OrderLoopProtector,
@@ -458,7 +459,7 @@ async def main() -> None:
     # 13. Wire up callbacks
     # ---------------------------------------------------------------
     # a) TG listener -> signal parser -> position manager
-    parse_signal_fn = C["parse_signal"]
+    parse_signal_detailed_fn = C["parse_signal_detailed"]
 
     async def _on_signal_message(
         raw_text: str,
@@ -467,13 +468,52 @@ async def main() -> None:
     ) -> None:
         """Full signal processing pipeline for each Telegram message."""
         try:
-            signal = parse_signal_fn(
+            result = parse_signal_detailed_fn(
                 text=raw_text,
                 channel_id=channel_id,
                 channel_name=channel_name,
             )
-            if signal is None:
-                return  # Not a valid signal -- silently ignore.
+
+            # On rejection AFTER symbol+direction were detected, notify
+            # the operator so they can see what was filtered and why
+            # (client 2026-04-28). "no_symbol" / "no_direction" / "empty"
+            # stay silent — those fire for non-signal chatter and would
+            # spam the channel.
+            if result.signal is None:
+                # Per-symbol-direction dedup so the same signal echoed
+                # by 3 Telegram channels doesn't fire 3 identical
+                # rejection messages (client 2026-04-30).
+                if result.reason == "no_entry" and result.symbol and result.direction:
+                    if position_mgr._should_send_reject_notify(
+                        "no_entry", result.symbol, result.direction,
+                    ):
+                        try:
+                            await tg_notifier.signal_blocked_no_entry(
+                                symbol=result.symbol,
+                                direction=result.direction,
+                                channel_name=channel_name,
+                            )
+                        except Exception:
+                            log.exception("notify.signal_blocked_no_entry_failed")
+                elif (result.reason in ("no_tps", "invalid")
+                      and result.symbol and result.direction):
+                    # ``invalid`` covers TP-direction mismatch (LONG with
+                    # TP below entry, SHORT with TP above) AND the SL
+                    # sanity-check failures from validate_signal.
+                    if position_mgr._should_send_reject_notify(
+                        "invalid_tps", result.symbol, result.direction,
+                    ):
+                        try:
+                            await tg_notifier.signal_blocked_invalid_tps(
+                                symbol=result.symbol,
+                                direction=result.direction,
+                                channel_name=channel_name,
+                            )
+                        except Exception:
+                            log.exception("notify.signal_blocked_invalid_tps_failed")
+                return
+
+            signal = result.signal
 
             # Check order-loop protection.
             if not order_protector.check(signal.symbol):
@@ -736,19 +776,47 @@ async def main() -> None:
 
                         # Phase 3: a tracked-but-not-yet-fired hedge
                         # conditional just fired and opened a hedge
-                        # position. Arm its TP/SL and link to parent.
+                        # position. Arm its hard SL + trailing per
+                        # client 2026-04-30 production-stable spec.
                         if (sym, side) in pre_armed_hedges:
                             parent = pre_armed_hedges.pop((sym, side))
                             avg_price = float(p.get("avgPrice") or 0)
                             try:
-                                hedge_sl = parent.signal.entry  # original entry
-                                hedge_tp = parent.sl_price  # main SL becomes hedge TP
-                                if hedge_tp:
+                                # Hard SL = -1.2% from hedge's own entry
+                                # (loss-direction is "against" the hedge,
+                                # which is the OPPOSITE direction of the
+                                # parent: hedge SHORT loses when price
+                                # rises; hedge LONG loses when price falls).
+                                hedge_settings = settings.hedge
+                                hard_sl_pct = (
+                                    hedge_settings.hard_sl_pct / 100.0
+                                )
+                                trailing_pct = (
+                                    hedge_settings.trailing_pct / 100.0
+                                )
+                                if side == "Sell":
+                                    # SHORT hedge: SL above entry
+                                    hedge_sl = avg_price * (1 + hard_sl_pct)
+                                else:
+                                    # LONG hedge: SL below entry
+                                    hedge_sl = avg_price * (1 - hard_sl_pct)
+                                hedge_sl = round(hedge_sl, 8)
+                                # Trailing distance (in price terms) =
+                                # 1.2% of hedge entry. No fixed TP — the
+                                # trailing IS the profit-lock.
+                                trailing_distance = round(
+                                    avg_price * trailing_pct, 8,
+                                )
+                                # Hedge has no TP — trailing only.
+                                hedge_tp = None
+                                if True:
                                     await bybit.set_trading_stop(
                                         symbol=sym,
                                         position_idx=position_idx,
-                                        take_profit=hedge_tp,
                                         stop_loss=hedge_sl,
+                                        trailing_stop=trailing_distance,
+                                        active_price=avg_price,
+                                        sl_trigger_by="LastPrice",
                                     )
                                 # Persist hedge link on parent trade.
                                 hedge_trade_db_id = None
@@ -773,6 +841,12 @@ async def main() -> None:
                                     else "fired"
                                 )
                                 parent.hedge_conditional_order_id = None
+                                # Record hedge fill bookkeeping for the
+                                # 20-min timeout watcher.
+                                from datetime import datetime as _dt
+                                from datetime import timezone as _tz
+                                parent.hedge_entry_price = avg_price
+                                parent.hedge_filled_at = _dt.now(_tz.utc)
                                 try:
                                     await db.update_trade(
                                         int(parent.id),
@@ -789,18 +863,59 @@ async def main() -> None:
                                     symbol=sym, side=side,
                                     hedge_trade_id=parent.hedge_trade_id,
                                     avg_price=avg_price,
+                                    hedge_sl=hedge_sl,
+                                    trailing_distance=trailing_distance,
                                 )
                                 try:
+                                    from telegram.notifier import _chan, _ts
+                                    chan = (
+                                        _chan(parent.signal.channel_name)
+                                        if parent.signal else "#Unknown"
+                                    )
+                                    parent_dir = (
+                                        parent.signal.direction
+                                        if parent.signal else ""
+                                    )
+                                    hedge_dir = (
+                                        "SHORT" if parent_dir == "LONG" else "LONG"
+                                    )
+                                    lev_type = (
+                                        parent.signal.signal_type
+                                        if parent.signal else "dynamic"
+                                    )
+                                    leverage_val = parent.leverage or 0.0
+                                    margin_val = parent.margin or 0.0
                                     await tg_notifier._send_notify(
                                         f"🛡️ HEDGE AKTIVERAD (Bybit-conditional)\n"
+                                        f"🕒 Tid: {_ts()}\n"
+                                        f"📢 Från kanal: {chan}\n"
                                         f"📊 Symbol: #{sym}\n"
-                                        f"📈 Hedge: {side}\n"
-                                        f"💥 Entry: {avg_price}\n"
-                                        f"🚩 Hedge SL: {hedge_sl}\n"
-                                        f"🎯 Hedge TP: {hedge_tp}"
+                                        f"📈 Riktning: {hedge_dir} "
+                                        f"(motrikt mot {parent_dir})\n"
+                                        f"📍 Typ: {lev_type}\n"
+                                        f"\n"
+                                        f"💥 Entry (hedge): {avg_price}\n"
+                                        f"🚩 Hard SL: {hedge_sl} "
+                                        f"(-{hedge_settings.hard_sl_pct}% "
+                                        f"från hedge-entry)\n"
+                                        f"🔄 Trailing: "
+                                        f"{hedge_settings.trailing_pct}% "
+                                        f"(Last price, ingen fast TP)\n"
+                                        f"\n"
+                                        f"⚙️ Hävstång ({lev_type}): "
+                                        f"x{leverage_val}\n"
+                                        f"💰 IM: {margin_val:.2f} USDT "
+                                        f"(Bybit confirmed)\n"
+                                        f"🔑 Order-ID BOT: {parent.id}\n"
+                                        f"🔑 Order-ID Bybit: "
+                                        f"{parent.hedge_trade_id or 'N/A'}"
                                     )
                                 except Exception:
-                                    pass
+                                    log.exception(
+                                        "reverse_reconcile.hedge_notify_failed",
+                                        parent_trade_id=parent.id,
+                                        symbol=sym,
+                                    )
                             except Exception:
                                 log.exception(
                                     "reverse_reconcile.hedge_arm_failed",
@@ -811,7 +926,17 @@ async def main() -> None:
 
                         if (sym, side) in tracked:
                             continue
-                        # Orphan — the bot doesn't track this. Close it.
+                        # Orphan position handling — client 2026-04-29:
+                        #
+                        #   PnL >= 0  -> ADOPT into the bot's DB.
+                        #     Synthesise a signal, register the trade,
+                        #     verify SL/TP (auto-SL at -3 % if none).
+                        #     The bot now manages the position normally.
+                        #
+                        #   PnL <  0  -> CLOSE with market reduce-only.
+                        #     The position is bleeding without a managing
+                        #     trade in the DB; force-close and log as
+                        #     "orphan-risk close".
                         unreal = float(p.get("unrealisedPnl") or 0)
                         log.warning(
                             "reverse_reconcile.orphan_found",
@@ -819,6 +944,47 @@ async def main() -> None:
                             unrealised_pnl=unreal,
                             position_idx=position_idx,
                         )
+
+                        if unreal >= 0:
+                            # Profitable orphan — adopt it.
+                            try:
+                                adopted = await position_mgr.adopt_orphan_position(p)
+                            except Exception:
+                                adopted = None
+                                log.exception(
+                                    "reverse_reconcile.adopt_failed",
+                                    symbol=sym, side=side,
+                                )
+                            if adopted is not None:
+                                log.info(
+                                    "reverse_reconcile.orphan_adopted",
+                                    symbol=sym, side=side, size=size,
+                                    unrealised_pnl=unreal,
+                                    trade_id=adopted.id,
+                                )
+                                try:
+                                    await subscribe_ticker(sym)
+                                except Exception:
+                                    pass
+                            else:
+                                # Adoption failed — flag the operator.
+                                try:
+                                    await tg_notifier._send_notify(
+                                        f"⚠️ ORPHAN POSITION ADOPTION FEL\n"
+                                        f"📊 Symbol: #{sym}\n"
+                                        f"📈 Riktning: {side}\n"
+                                        f"💵 Storlek: {size}\n"
+                                        f"💰 Aktuell PnL: +{unreal:.2f} USDT\n"
+                                        f"📍 Status: positionen kunde inte "
+                                        f"adopteras automatiskt. Operatör "
+                                        f"bör verifiera och vid behov "
+                                        f"återupplänka manuellt."
+                                    )
+                                except Exception:
+                                    pass
+                            continue
+
+                        # Losing orphan — close with market reduce-only.
                         close_side = "Sell" if side == "Buy" else "Buy"
                         try:
                             await bybit.place_market_order(
@@ -833,15 +999,18 @@ async def main() -> None:
                                 "reverse_reconcile.orphan_closed",
                                 symbol=sym, side=side, size=size,
                                 unrealised_pnl=unreal,
+                                reason="orphan_risk_close",
                             )
                             try:
                                 await tg_notifier._send_notify(
-                                    f"⚠️ ORPHAN POSITION STÄNGD\n"
+                                    f"⚠️ ORPHAN POSITION STÄNGD (förlust)\n"
                                     f"📊 Symbol: #{sym}\n"
                                     f"📈 Riktning: {side}\n"
                                     f"💵 Storlek: {size}\n"
                                     f"💰 PnL vid stängning: {unreal:.2f} USDT\n"
-                                    f"📍 Skäl: positionen fanns på Bybit men hade ingen aktiv trade i botens DB"
+                                    f"📍 Skäl: orphan-risk close — positionen "
+                                    f"fanns på Bybit utan aktiv trade i botens "
+                                    f"DB och var i förlust."
                                 )
                             except Exception:
                                 pass

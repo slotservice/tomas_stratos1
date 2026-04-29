@@ -142,6 +142,26 @@ class Trade:
     be_price: Optional[float] = None
     trailing_sl: Optional[float] = None
 
+    # --- Trailing-stop activation tracking ---
+    # The activation price + distance args we handed to Bybit's
+    # set_trading_stop. We re-emit them in the TRAILING STOP AKTIVERAD
+    # notification at the moment Bybit *actually* starts trailing
+    # (price crosses activation_price), not at trade open. Client
+    # 2026-04-28: "the message should be sent when the trailing stop
+    # starts, not when it is placed".
+    trailing_activation_price: Optional[float] = None
+    trailing_distance: Optional[float] = None
+    trailing_activation_pct: Optional[float] = None
+    trailing_distance_pct: Optional[float] = None
+    trailing_activated_notified: bool = False
+    # The trailing-stop price last reported by Bybit (the position
+    # event's ``stopLoss`` field once the trailing has activated). We
+    # use it to detect when Bybit moves the trailing to a new better
+    # level and fire TRAILING STOP UPPDATERAD. Client 2026-04-28:
+    # "Värdet måste bekräftas från Bybit, inte beräknas lokalt" — we
+    # only mirror Bybit's reported value, never compute our own.
+    last_trailing_stop_price: Optional[float] = None
+
     # --- Hedge / re-entry ---
     hedge_trade_id: Optional[str] = None
     # Bybit orderId of the conditional that pre-arms the hedge on the
@@ -150,6 +170,15 @@ class Trade:
     # Lets the hedge fire autonomously if the bot is offline at the
     # moment price crosses the trigger.
     hedge_conditional_order_id: Optional[str] = None
+    # Hedge fill bookkeeping (client 2026-04-30 production-stable model).
+    # Recorded the moment the bot detects a fired pre-arm conditional
+    # so the 20-minute timeout watcher can compute elapsed time and
+    # the no-meaningful-move check can compare against the hedge entry.
+    hedge_entry_price: Optional[float] = None
+    hedge_filled_at: Optional[datetime] = None
+    # Set to True once the bot has issued the -2 % force-close on the
+    # original trade so we don't double-fire the close.
+    original_force_closed: bool = False
     reentry_count: int = 0
 
     # --- Scaling ---

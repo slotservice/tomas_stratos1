@@ -111,6 +111,23 @@ class PositionManager:
         # we only fire the per-TP Telegram notification once per order.
         self._tp_notified: set[str] = set()
 
+        # Last-price cache per symbol, fed from the ticker stream via
+        # ``handle_price_update``. Client 2026-04-29: trailing-stop
+        # activation must gate on Last price, not Mark — Bybit fires
+        # the trailing on Last, so the bot's notification has to use
+        # the same source to avoid skew.
+        self._last_price_by_symbol: Dict[str, float] = {}
+
+        # Per-symbol-direction dedup for repeat rejection notifications
+        # (client 2026-04-30). Same signal posted by 3 different
+        # Telegram channels within seconds was firing 3 identical
+        # ``⚠️ Finns inte på bybit ⚠️`` (and similar rejection)
+        # messages. Key: f"{kind}:{symbol}:{direction}". Value: monotonic
+        # timestamp of the last fire. Same key within ``_dedup_window_s``
+        # is silenced.
+        self._reject_notify_last: Dict[str, float] = {}
+        self._dedup_window_s: float = 300.0  # 5 minutes
+
         # --- Sub-managers ---
         # Strict architecture (client IZZU 2026-04-28): the bot must not
         # think, assume, guess, or infer anything — every close decision
@@ -139,6 +156,43 @@ class PositionManager:
             db=db,
             position_manager=self,
         )
+
+    # ==================================================================
+    # Reject-notification dedup helper
+    # ==================================================================
+
+    def _should_send_reject_notify(
+        self,
+        kind: str,
+        symbol: str,
+        direction: str = "",
+    ) -> bool:
+        """Return True if this rejection notification should fire.
+
+        Client 2026-04-30: the same signal posted by 3 different
+        Telegram channels was producing 3 identical "Finns inte på
+        bybit" / "Blokerad" / "SIGNAL AVVISAD" messages within
+        seconds. We dedupe on (kind, symbol, direction) within
+        ``_dedup_window_s`` (default 5 min) so the operator sees the
+        rejection ONCE per unique cause, regardless of how many
+        channels echo the same signal.
+        """
+        key = f"{kind}:{symbol}:{direction}"
+        now = time.monotonic()
+        last = self._reject_notify_last.get(key)
+        if last is not None and (now - last) < self._dedup_window_s:
+            return False
+        self._reject_notify_last[key] = now
+        # Best-effort GC: prune entries older than 2x the window.
+        if len(self._reject_notify_last) > 500:
+            cutoff = now - 2 * self._dedup_window_s
+            stale = [
+                k for k, t in self._reject_notify_last.items()
+                if t < cutoff
+            ]
+            for k in stale:
+                self._reject_notify_last.pop(k, None)
+        return True
 
     # ==================================================================
     # Signal processing -- full entry pipeline
@@ -233,14 +287,17 @@ class PositionManager:
                     })
                 except Exception:
                     log.exception("signal.blocked_save_failed", symbol=symbol)
-                try:
-                    await self._notifier.signal_blocked_duplicate(
-                        signal=signal,
-                        existing_entry=existing.get("entry_price", 0),
-                        reason=dup_result.reason,
-                    )
-                except Exception:
-                    log.exception("notify.signal_blocked_duplicate_failed")
+                if self._should_send_reject_notify(
+                    "duplicate", symbol, direction,
+                ):
+                    try:
+                        await self._notifier.signal_blocked_duplicate(
+                            signal=signal,
+                            existing_entry=existing.get("entry_price", 0),
+                            reason=dup_result.reason,
+                        )
+                    except Exception:
+                        log.exception("notify.signal_blocked_duplicate_failed")
                 try:
                     await self._db.increment_report_stat(
                         0, "ALL", datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -307,14 +364,22 @@ class PositionManager:
                 "signal.no_sl_rejected",
                 symbol=symbol, channel_name=channel_name,
             )
-            try:
-                await self._safe_notify(
-                    f"[SIGNAL AVVISAD] {symbol} {direction}\n"
-                    f"Anledning: signalen saknar stop-loss.\n"
-                    f"Kanal: {channel_name}"
-                )
-            except Exception:
-                pass
+            if self._should_send_reject_notify(
+                "no_sl", symbol, direction,
+            ):
+                try:
+                    from telegram.notifier import _chan, _ts
+                    await self._safe_notify(
+                        f"⚠️ SIGNAL AVVISAD (saknar stop-loss)\n"
+                        f"🕒 Tid: {_ts()}\n"
+                        f"📢 Från kanal: {_chan(channel_name)}\n"
+                        f"📊 Symbol: #{symbol}\n"
+                        f"📈 Riktning: {direction}\n"
+                        f"📍 Anledning: signalen saknar stop-loss — "
+                        f"ingen säker handel utan SL."
+                    )
+                except Exception:
+                    pass
             return None
 
         # ----------------------------------------------------------
@@ -345,17 +410,23 @@ class PositionManager:
                             current_mark=current,
                             diff_pct=round(price_diff_pct, 2),
                         )
-                        chan = getattr(signal, "channel_name", "") or "okand"
-                        await self._safe_notify(
-                            f"⚠️ SIGNAL AVVISAD (pris for langt fran entry)\n"
-                            f"📢 Fran kanal: {chan}\n"
-                            f"📊 Symbol: #{symbol}\n"
-                            f"📈 Riktning: {direction}\n"
-                            f"💥 Signal entry: {entry_price}\n"
-                            f"📍 Marknadspris: {current}\n"
-                            f"📍 Diff: {price_diff_pct:.2f}% (max {max_slippage}%)\n"
-                            f"📍 Signalen ar for gammal / marknad har redan flyttat."
-                        )
+                        if self._should_send_reject_notify(
+                            "stale_price", symbol, direction,
+                        ):
+                            # Channel name needs the #Hashtag form for
+                            # Telegram clickable history (2026-04-29).
+                            from telegram.notifier import _chan
+                            chan = _chan(getattr(signal, "channel_name", ""))
+                            await self._safe_notify(
+                                f"⚠️ SIGNAL AVVISAD (pris för långt från entry)\n"
+                                f"📢 Från kanal: {chan}\n"
+                                f"📊 Symbol: #{symbol}\n"
+                                f"📈 Riktning: {direction}\n"
+                                f"💥 Signal entry: {entry_price}\n"
+                                f"📍 Marknadspris: {current}\n"
+                                f"📍 Diff: {price_diff_pct:.2f}% (max {max_slippage}%)\n"
+                                f"📍 Signalen är för gammal / marknad har redan flyttat."
+                            )
                         return None
         except Exception:
             log.exception("signal.slippage_check_error", symbol=symbol)
@@ -428,22 +499,28 @@ class PositionManager:
                     symbol=symbol,
                     suggestion=resolved_prefix,
                 )
-                try:
-                    await self._notifier.symbol_not_on_bybit(
-                        signal, suggestion=resolved_prefix,
-                    )
-                except Exception:
-                    log.exception("notify.symbol_not_on_bybit_failed")
+                if self._should_send_reject_notify(
+                    "not_on_bybit", symbol, direction,
+                ):
+                    try:
+                        await self._notifier.symbol_not_on_bybit(
+                            signal, suggestion=resolved_prefix,
+                        )
+                    except Exception:
+                        log.exception("notify.symbol_not_on_bybit_failed")
                 return None
         except Exception:
             log.warning(
                 "signal.instrument_info_fetch_failed",
                 symbol=symbol,
             )
-            try:
-                await self._notifier.symbol_not_on_bybit(signal)
-            except Exception:
-                log.exception("notify.symbol_not_on_bybit_failed")
+            if self._should_send_reject_notify(
+                "not_on_bybit", symbol, direction,
+            ):
+                try:
+                    await self._notifier.symbol_not_on_bybit(signal)
+                except Exception:
+                    log.exception("notify.symbol_not_on_bybit_failed")
             return None
 
         # Round to the symbol's precision using Bybit instrument info.
@@ -604,15 +681,17 @@ class PositionManager:
                         side=side,
                         existing_size=existing_size,
                     )
-                    chan = getattr(signal, "channel_name", "") or "okand"
+                    from telegram.notifier import _chan, _ts
                     await self._safe_notify(
                         f"⚠️ SIGNAL BLOCKERAD (position finns redan på Bybit)\n"
-                        f"📢 Fran kanal: {chan}\n"
+                        f"🕒 Tid: {_ts()}\n"
+                        f"📢 Från kanal: "
+                        f"{_chan(getattr(signal, 'channel_name', ''))}\n"
                         f"📊 Symbol: #{symbol}\n"
                         f"📈 Riktning: {direction}\n"
                         f"📍 Bybit har redan storlek {existing_size} på "
                         f"{side}-sidan.\n"
-                        f"📍 Sta'ng positionen manuellt pa Bybit, "
+                        f"📍 Stäng positionen manuellt på Bybit, "
                         f"sedan kan boten ta nya signaler."
                     )
                     return None
@@ -959,14 +1038,24 @@ class PositionManager:
         # ---------- Place the SL via set_trading_stop ----------
         # SL must always use the position-wide trading-stop (not a
         # conditional order) because it applies to the whole position.
-        trigger_src = self._settings.tp_sl.trigger_type  # e.g. "LastPrice"
+        # Client 2026-04-29: initial SL fires on MarkPrice; everything
+        # else (TP, hedge, trailing, BE/scaling moved SLs) uses
+        # LastPrice. The split is intentional — Mark is steadier than
+        # Last and prevents wick-driven SL hits on the fresh position,
+        # while moved SLs follow Last so they react to actual fills.
+        trigger_src = self._settings.tp_sl.trigger_type  # LastPrice (TP/conditional/moved-SL)
+        sl_initial_trigger = getattr(
+            self._settings.tp_sl,
+            "sl_initial_trigger_type",
+            "MarkPrice",
+        )
         if valid_sl:
             try:
                 await self._bybit.set_trading_stop(
                     symbol=symbol,
                     position_idx=position_idx,
                     stop_loss=valid_sl,
-                    sl_trigger_by=trigger_src,
+                    sl_trigger_by=sl_initial_trigger,
                 )
                 log.info("trade.sl_set",
                          trade_id=trade.id, symbol=symbol, sl=valid_sl)
@@ -974,10 +1063,19 @@ class PositionManager:
                 log.exception(
                     "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
-                await self._safe_notify(
-                    f"[VARNING] {symbol}: SL kunde inte sattas pa borsen. "
-                    f"Manuell atgard kan kravas."
-                )
+                try:
+                    await self._notifier.error_sl_not_executed(
+                        signal=trade.signal,
+                        error_detail=(
+                            "SL kunde inte sättas på börsen. "
+                            "Manuell åtgärd kan krävas."
+                        ),
+                    )
+                except Exception:
+                    log.exception(
+                        "notify.sl_error_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
 
         # ---------- Place PARTIAL TPs — one reduce-only conditional
         # order per TP level (from TP2 onwards). Client IZZU
@@ -1001,14 +1099,31 @@ class PositionManager:
         # TOTAL slice count (individual closes + 1 trailing slice
         # if any TPs were merged).
         trailing_activation_pct = self._settings.trailing_stop.activation_pct
+        # Client 2026-04-29: TPs closer than 2% from avg_entry are
+        # ignored — they leave too little headroom for fees+slippage
+        # and effectively scratch the position. The dropped quantity
+        # rolls into the remaining slices automatically (smaller
+        # num_slices = larger per-slice qty).
+        MIN_TP_DISTANCE_PCT = 2.0
         below_trailing_tps: list[float] = []
         merged_above_trailing_count = 0
+        ignored_too_close_count = 0
         for tp_price in valid_tps:
             if avg_entry and avg_entry > 0:
                 if direction == "LONG":
                     dist_pct = (tp_price - avg_entry) / avg_entry * 100.0
                 else:
                     dist_pct = (avg_entry - tp_price) / avg_entry * 100.0
+                if dist_pct < MIN_TP_DISTANCE_PCT:
+                    ignored_too_close_count += 1
+                    log.info(
+                        "trade.tp_ignored_too_close",
+                        trade_id=trade.id, symbol=symbol,
+                        tp_price=tp_price,
+                        dist_pct=round(dist_pct, 3),
+                        threshold_pct=MIN_TP_DISTANCE_PCT,
+                    )
+                    continue
                 if dist_pct >= trailing_activation_pct:
                     merged_above_trailing_count += 1
                     continue
@@ -1125,6 +1240,16 @@ class PositionManager:
                     active_price=activation_price,
                 )
                 trade.trailing_sl = trailing_distance
+                # Stash activation params on the trade — the Telegram
+                # notification fires later, when Bybit *actually* starts
+                # trailing (price crosses activation_price). Client
+                # 2026-04-28: "the message should be sent when the
+                # trailing stop starts, not when it is placed."
+                trade.trailing_activation_price = activation_price
+                trade.trailing_distance = trailing_distance
+                trade.trailing_activation_pct = ts_settings.activation_pct
+                trade.trailing_distance_pct = ts_settings.trailing_distance_pct
+                trade.trailing_activated_notified = False
                 log.info(
                     "trade.trailing_armed_at_open",
                     trade_id=trade.id, symbol=symbol,
@@ -1139,22 +1264,6 @@ class PositionManager:
                         )
                     ),
                 )
-                # Telegram: TRAILING STOP AKTIVERAD per Meddelande
-                # telegram.docx (client 2026-04-28: "this one i never
-                # seen" — was missing from the bot's notifications).
-                try:
-                    await self._notifier.trailing_stop_activated(
-                        trade=trade,
-                        activation_price=activation_price,
-                        trailing_distance=trailing_distance,
-                        activation_pct=ts_settings.activation_pct,
-                        distance_pct=ts_settings.trailing_distance_pct,
-                    )
-                except Exception:
-                    log.exception(
-                        "trade.trailing_arm_notify_failed",
-                        trade_id=trade.id, symbol=symbol,
-                    )
         except Exception:
             log.exception(
                 "trade.trailing_arm_failed",
@@ -1472,6 +1581,13 @@ class PositionManager:
         Manual closes via the Bybit UI also surface as a reduce-only
         Filled order — they are still caught by on_order_update and
         labelled "external close" (no stopOrderType).
+
+        One observational side-effect remains: detect when Bybit's
+        trailing stop has actually started trailing (mark price crossed
+        the activation price we set at trade open) and fire the
+        TRAILING STOP AKTIVERAD Telegram message exactly once. Client
+        2026-04-28: "the message should be sent when the trailing stop
+        starts, not when it is placed."
         """
         try:
             position_idx = int(data.get("positionIdx") or 0)
@@ -1484,6 +1600,166 @@ class PositionManager:
             side=data.get("side", ""),
             position_idx=position_idx,
         )
+        # Trailing AKTIVERAD gating moved to handle_price_update so it
+        # follows Last price (client 2026-04-29). The position-event
+        # path stays for UPPDATERAD only — that one watches stopLoss
+        # changes Bybit pushes after the trailing has already started.
+        await self._maybe_notify_trailing_updated(data)
+
+    async def _maybe_notify_trailing_activated(self, data: dict) -> None:
+        """Fire TRAILING STOP AKTIVERAD when Bybit's trailing has
+        actually started moving.
+
+        We detect activation by comparing the position's mark price
+        against ``trade.trailing_activation_price`` (set when Bybit
+        accepted set_trading_stop at trade open):
+          * LONG  -> activated when mark_price >= activation_price
+          * SHORT -> activated when mark_price <= activation_price
+
+        Once fired, we set ``trailing_activated_notified=True`` so the
+        notification doesn't repeat on every subsequent position event.
+        Pure observation of Bybit-pushed data — no polling, no inference.
+        """
+        symbol = data.get("symbol", "")
+        if not symbol:
+            return
+        try:
+            mark_price = float(data.get("markPrice", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if mark_price <= 0:
+            return
+
+        for trade in list(self._active_trades.values()):
+            if trade.signal is None or trade.signal.symbol != symbol:
+                continue
+            if trade.trailing_activated_notified:
+                continue
+            activation = trade.trailing_activation_price
+            if not activation or activation <= 0:
+                continue
+            direction = (trade.signal.direction or "").upper()
+            crossed = (
+                (direction == "LONG" and mark_price >= activation)
+                or (direction == "SHORT" and mark_price <= activation)
+            )
+            if not crossed:
+                continue
+
+            trade.trailing_activated_notified = True
+            # Pull the live position fields off the same WS event.
+            # Bybit-confirmed values only — never compute locally
+            # (client 2026-04-28: "Värdet måste bekräftas från Bybit").
+            try:
+                bybit_trailing_sl = float(data.get("stopLoss", 0) or 0) or None
+            except (TypeError, ValueError):
+                bybit_trailing_sl = None
+            try:
+                quantity = float(data.get("size", 0) or 0)
+            except (TypeError, ValueError):
+                quantity = 0.0
+            try:
+                unrealised_pnl = float(data.get("unrealisedPnl", 0) or 0)
+            except (TypeError, ValueError):
+                unrealised_pnl = 0.0
+            # Seed the last-known trailing-stop price so subsequent
+            # moves are detected as deltas in trailing_updated.
+            trade.last_trailing_stop_price = bybit_trailing_sl
+            log.info(
+                "trade.trailing_activated",
+                trade_id=trade.id, symbol=symbol,
+                mark_price=mark_price,
+                activation_price=activation,
+                direction=direction,
+                bybit_trailing_sl=bybit_trailing_sl,
+            )
+            try:
+                await self._notifier.trailing_stop_activated(
+                    trade=trade,
+                    activation_price=activation,
+                    trailing_distance=trade.trailing_distance or 0.0,
+                    activation_pct=trade.trailing_activation_pct or 0.0,
+                    distance_pct=trade.trailing_distance_pct or 0.0,
+                    trailing_stop_price=bybit_trailing_sl,
+                    mark_price=mark_price,
+                    quantity=quantity,
+                    unrealised_pnl=unrealised_pnl,
+                )
+            except Exception:
+                log.exception(
+                    "trade.trailing_activate_notify_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
+
+    async def _maybe_notify_trailing_updated(self, data: dict) -> None:
+        """Fire TRAILING STOP UPPDATERAD every time Bybit moves the
+        trailing stop to lock in a better profit level.
+
+        Detected by watching the position event's ``stopLoss`` field
+        AFTER the trailing has activated:
+          * LONG  -> updated when stopLoss > last_trailing_stop_price
+          * SHORT -> updated when stopLoss < last_trailing_stop_price
+
+        Bybit moves stopLoss in only one direction (favourable) once
+        the trailing is active, so the strict inequality is enough.
+        Client 2026-04-28: "Värdet måste bekräftas från Bybit, inte
+        beräknas lokalt" — the trailing-stop value passed to the
+        notifier comes from Bybit's WS event, never from a bot
+        calculation.
+        """
+        symbol = data.get("symbol", "")
+        if not symbol:
+            return
+        try:
+            stop_loss = float(data.get("stopLoss", 0) or 0)
+            mark_price = float(data.get("markPrice", 0) or 0)
+            quantity = float(data.get("size", 0) or 0)
+            unrealised_pnl = float(data.get("unrealisedPnl", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if stop_loss <= 0 or mark_price <= 0:
+            return
+
+        for trade in list(self._active_trades.values()):
+            if trade.signal is None or trade.signal.symbol != symbol:
+                continue
+            # Only after the trailing has actually activated — before
+            # then any stopLoss change is the static SL Tomas set, not
+            # the trailing leg. We must not confuse the two.
+            if not trade.trailing_activated_notified:
+                continue
+
+            direction = (trade.signal.direction or "").upper()
+            last = trade.last_trailing_stop_price
+            moved = (
+                last is None
+                or (direction == "LONG" and stop_loss > last)
+                or (direction == "SHORT" and stop_loss < last)
+            )
+            if not moved:
+                continue
+
+            trade.last_trailing_stop_price = stop_loss
+            log.info(
+                "trade.trailing_updated",
+                trade_id=trade.id, symbol=symbol,
+                trailing_stop_price=stop_loss,
+                mark_price=mark_price,
+                previous=last,
+            )
+            try:
+                await self._notifier.trailing_stop_updated(
+                    trade=trade,
+                    trailing_stop_price=stop_loss,
+                    mark_price=mark_price,
+                    quantity=quantity,
+                    unrealised_pnl=unrealised_pnl,
+                )
+            except Exception:
+                log.exception(
+                    "trade.trailing_update_notify_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
 
     async def on_execution_update(self, data: dict) -> None:
         """Handle a WebSocket execution / fill update.
@@ -1519,9 +1795,14 @@ class PositionManager:
     ) -> None:
         """Check all active trades for management triggers.
 
-        Called on every relevant price tick (mark price / last price).
-        Delegates to the appropriate sub-manager for each trade.
+        Called on every relevant price tick (lastPrice from the public
+        ticker WS or REST poll). The price is also cached for use by
+        the trailing-stop activation gate (client 2026-04-29: must
+        track Bybit's Last price, not Mark).
         """
+        if symbol and price > 0:
+            self._last_price_by_symbol[symbol] = price
+
         for trade in list(self._active_trades.values()):
             if trade.signal is None:
                 continue
@@ -1539,6 +1820,266 @@ class PositionManager:
                     symbol=symbol,
                     price=price,
                 )
+
+            # Trailing-stop activation also checked on every Last
+            # tick — gating must follow Bybit's trailing trigger
+            # source (Last), not Mark. The richer notification body
+            # (qty / unrealisedPnl / Bybit-confirmed stopLoss) still
+            # comes from on_position_update, but the GATE fires here.
+            try:
+                await self._check_trailing_activation_on_tick(trade, price)
+            except Exception:
+                log.exception(
+                    "price_update.trailing_check_error",
+                    trade_id=trade.id, symbol=symbol,
+                )
+
+    async def _check_trailing_activation_on_tick(
+        self,
+        trade: Trade,
+        last_price: float,
+    ) -> None:
+        """Fire TRAILING STOP AKTIVERAD when Last price crosses the
+        activation level. Mirrors the gate previously housed in
+        ``_maybe_notify_trailing_activated`` but driven by Last
+        ticks instead of Mark from the position event.
+        """
+        if trade.trailing_activated_notified:
+            return
+        activation = trade.trailing_activation_price
+        if not activation or activation <= 0:
+            return
+        if trade.signal is None:
+            return
+        direction = (trade.signal.direction or "").upper()
+        crossed = (
+            (direction == "LONG" and last_price >= activation)
+            or (direction == "SHORT" and last_price <= activation)
+        )
+        if not crossed:
+            return
+
+        trade.trailing_activated_notified = True
+        log.info(
+            "trade.trailing_activated_via_last",
+            trade_id=trade.id, symbol=trade.signal.symbol,
+            last_price=last_price,
+            activation_price=activation,
+            direction=direction,
+        )
+        # Notification body uses 0 placeholders for Bybit-confirmed
+        # stopLoss / qty / unrealisedPnl; the next position event
+        # will arrive within ~1s and the trailing_updated path takes
+        # over showing the live values.
+        try:
+            await self._notifier.trailing_stop_activated(
+                trade=trade,
+                activation_price=activation,
+                trailing_distance=trade.trailing_distance or 0.0,
+                activation_pct=trade.trailing_activation_pct or 0.0,
+                distance_pct=trade.trailing_distance_pct or 0.0,
+                trailing_stop_price=None,
+                mark_price=last_price,
+                quantity=trade.quantity or 0.0,
+                unrealised_pnl=0.0,
+            )
+        except Exception:
+            log.exception(
+                "trade.trailing_activate_notify_failed",
+                trade_id=trade.id, symbol=trade.signal.symbol,
+            )
+
+    # ==================================================================
+    # Orphan adoption
+    # ==================================================================
+
+    async def adopt_orphan_position(self, p: dict) -> Optional[Trade]:
+        """Adopt a Bybit position that exists outside the bot's DB.
+
+        Client 2026-04-29 spec: when reverse_reconcile finds a
+        profitable orphan, do NOT close it. Instead create a managed
+        Trade record so the bot tracks it like any other:
+
+          * Synthesise a minimal ParsedSignal (channel="Orphan/Manual",
+            entry=Bybit avgPrice, direction inferred from side).
+          * Reuse Bybit's stopLoss/takeProfit if set; otherwise place
+            a -3 % auto-SL so the position can never bleed unbounded.
+          * Register the Trade in ``_active_trades`` and persist to DB.
+
+        Returns the created Trade or None on failure. Failures are
+        logged + flagged via Telegram so the operator can intervene
+        manually.
+        """
+        try:
+            sym = p.get("symbol", "")
+            side = p.get("side", "")
+            size = float(p.get("size") or 0)
+            avg_price = float(p.get("avgPrice") or 0)
+            position_idx = int(p.get("positionIdx") or 0)
+            unreal = float(p.get("unrealisedPnl") or 0)
+            try:
+                bybit_sl = float(p.get("stopLoss") or 0) or None
+            except (TypeError, ValueError):
+                bybit_sl = None
+            try:
+                bybit_tp = float(p.get("takeProfit") or 0) or None
+            except (TypeError, ValueError):
+                bybit_tp = None
+            try:
+                leverage = float(p.get("leverage") or 0) or None
+            except (TypeError, ValueError):
+                leverage = None
+            try:
+                position_im = float(p.get("positionIM") or 0) or None
+            except (TypeError, ValueError):
+                position_im = None
+        except Exception:
+            log.exception("orphan_adopt.parse_error")
+            return None
+
+        if not sym or not side or size <= 0 or avg_price <= 0:
+            log.warning(
+                "orphan_adopt.skip_unparseable",
+                symbol=sym, side=side, size=size, avg_price=avg_price,
+            )
+            return None
+
+        direction = "LONG" if side == "Buy" else "SHORT"
+
+        # If Bybit has no SL on this position, set an auto-SL at -3 %
+        # from the avg entry. Without a protective SL the orphan is
+        # technically unmanageable; this guarantees a floor before we
+        # adopt it.
+        sl_price = bybit_sl
+        if not sl_price:
+            fallback_pct = self._settings.auto_sl.fallback_pct / 100.0
+            if direction == "LONG":
+                sl_price = round(avg_price * (1 - fallback_pct), 8)
+            else:
+                sl_price = round(avg_price * (1 + fallback_pct), 8)
+            try:
+                await self._bybit.set_trading_stop(
+                    symbol=sym,
+                    position_idx=position_idx,
+                    stop_loss=sl_price,
+                    sl_trigger_by=getattr(
+                        self._settings.tp_sl,
+                        "sl_initial_trigger_type",
+                        "MarkPrice",
+                    ),
+                )
+                log.info(
+                    "orphan_adopt.auto_sl_set",
+                    symbol=sym, side=side, sl=sl_price,
+                )
+            except Exception:
+                log.exception(
+                    "orphan_adopt.auto_sl_failed",
+                    symbol=sym, side=side, sl=sl_price,
+                )
+
+        # Synthesised signal. signal_type "dynamic" — orphans aren't
+        # classified by SL distance; the bot treats them as a normal
+        # managed position from this point on.
+        from core.signal_parser import ParsedSignal as _PS
+        synth_signal = _PS(
+            symbol=sym,
+            direction=direction,
+            entry=avg_price,
+            tp_list=[bybit_tp] if bybit_tp else [],
+            sl=sl_price,
+            source_channel_id=0,
+            source_channel_name="Orphan / Manual",
+            raw_text="(orphan position adopted from Bybit)",
+            signal_type="dynamic",
+        )
+        # The notifier reads ``channel_name`` (not source_channel_name).
+        try:
+            synth_signal.channel_name = "Orphan / Manual"
+        except Exception:
+            pass
+        try:
+            synth_signal.tps = list(synth_signal.tp_list)
+        except Exception:
+            pass
+
+        # Build the managed Trade.
+        trade = Trade(
+            signal=synth_signal,
+            state=TradeState.POSITION_OPEN,
+            entry1_fill_price=avg_price,
+            avg_entry=avg_price,
+            quantity=size,
+            leverage=leverage,
+            margin=position_im,
+            sl_price=sl_price,
+        )
+        self._active_trades[trade.id] = trade
+
+        # Persist to DB. Failures here don't unwind the in-memory
+        # registration — the bot still manages the position; we just
+        # lose a row in the audit log.
+        try:
+            db_id = await self._db.save_trade({
+                "signal_id": None,
+                "state": trade.state.value,
+                "avg_entry": avg_price,
+                "quantity": size,
+                "leverage": leverage,
+                "margin": position_im,
+                "sl_price": sl_price,
+                "source_channel_id": 0,
+                "source_channel_name": "Orphan / Manual",
+            })
+            if db_id is not None:
+                # Switch the trade ID to the DB row's primary key so
+                # all subsequent updates (close_trade etc.) hit the
+                # right row.
+                self._active_trades.pop(trade.id, None)
+                trade.id = str(db_id)
+                self._active_trades[trade.id] = trade
+        except Exception:
+            log.exception("orphan_adopt.db_save_failed", symbol=sym)
+
+        log.info(
+            "orphan_adopt.completed",
+            trade_id=trade.id, symbol=sym, side=side, size=size,
+            avg_price=avg_price, sl=sl_price, tp=bybit_tp,
+            unrealised_pnl=unreal,
+        )
+
+        # Notify the operator with the proper Swedish template.
+        try:
+            from telegram.notifier import _chan, _ts, _sym, _pnl_sign
+            sl_str = f"{sl_price}"
+            tp_str = f"{bybit_tp}" if bybit_tp else "ej satt"
+            lev_str = f"x{leverage}" if leverage else "okänd"
+            im_str = f"{position_im:.2f} USDT" if position_im else "okänd"
+            await self._notifier._send_notify(
+                f"♻️ ORPHAN POSITION ADOPTED\n"
+                f"🕒 Tid: {_ts()}\n"
+                f"📢 Från kanal: {_chan('Orphan Manual')}\n"
+                f"📊 Symbol: {_sym(sym)}\n"
+                f"📈 Riktning: {direction}\n"
+                f"\n"
+                f"💥 Entry: {avg_price}\n"
+                f"💵 Storlek: {size}\n"
+                f"🚩 SL: {sl_str}\n"
+                f"🎯 TP: {tp_str}\n"
+                f"\n"
+                f"⚙️ Hävstång: {lev_str}\n"
+                f"💰 IM: {im_str}\n"
+                f"💰 Aktuell PnL: {_pnl_sign(unreal)} USDT\n"
+                f"🔑 Order-ID BOT: {trade.id}\n"
+                f"\n"
+                f"📍 Status: positionen fanns på Bybit utan att vara "
+                f"länkad i botens DB. Den är nu adopterad och hanteras "
+                f"som en vanlig position."
+            )
+        except Exception:
+            log.exception("orphan_adopt.notify_failed", symbol=sym)
+
+        return trade
 
     async def _check_trade_triggers(
         self,
@@ -1588,9 +2129,185 @@ class PositionManager:
             if applied:
                 return
 
-        # --- Hedge: place the Bybit conditional pre-arm if not yet placed.
-        if trade.hedge_trade_id is None:
-            await self._hedge_mgr.check_and_activate(trade, current_price)
+        # --- Original trade -2% force-close (client 2026-04-30) ---
+        # Independent of the signal's SL: when adverse move on the
+        # ORIGINAL trade reaches the configured threshold (default -2%),
+        # close it with Market reduce-only. Pairs with the hedge's
+        # -1.5% trigger so the original trade stops bleeding while the
+        # hedge runs alone.
+        await self._maybe_force_close_original(trade, current_price)
+
+        # --- Hedge: bot-side check_and_activate is DISABLED 2026-04-30.
+        # The Bybit pre-arm conditional placed at trade open is the
+        # single source of truth for hedge opening.
+
+        # --- Hedge timeout: close hedge if no meaningful move in
+        # configured window (default 20 min, threshold 0.5%). The
+        # parent trade carries hedge_filled_at + hedge_entry_price.
+        await self._maybe_timeout_hedge(trade, current_price)
+
+    async def _maybe_force_close_original(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> None:
+        """Force-close the original trade at -2 % adverse move.
+
+        Client 2026-04-30: pairs with the -1.5 % hedge trigger so the
+        original stops bleeding while the hedge runs alone after.
+        Independent of the signal's SL — runs even if SL is further
+        away. Idempotent via ``trade.original_force_closed``.
+        """
+        if getattr(trade, "original_force_closed", False):
+            return
+        if trade.signal is None or trade.avg_entry is None:
+            return
+        if trade.avg_entry <= 0 or current_price <= 0:
+            return
+        threshold_pct = getattr(
+            self._settings.hedge, "original_force_close_pct", 2.0,
+        )
+        direction = (trade.signal.direction or "").upper()
+        if direction == "LONG":
+            adverse_pct = (trade.avg_entry - current_price) / trade.avg_entry * 100.0
+        else:
+            adverse_pct = (current_price - trade.avg_entry) / trade.avg_entry * 100.0
+        if adverse_pct < threshold_pct:
+            return
+
+        # Place a Market reduce-only close on the original leg only.
+        # The hedge leg (opposite positionIdx) is left open by design.
+        symbol = trade.signal.symbol
+        position_idx = 1 if direction == "LONG" else 2
+        close_side = "Sell" if direction == "LONG" else "Buy"
+        qty = trade.quantity or 0
+        if qty <= 0:
+            return
+
+        log.info(
+            "trade.original_force_close",
+            trade_id=trade.id, symbol=symbol,
+            avg_entry=trade.avg_entry, current_price=current_price,
+            adverse_pct=round(adverse_pct, 4),
+            threshold_pct=threshold_pct,
+        )
+        trade.original_force_closed = True
+        try:
+            await self._bybit.place_market_order(
+                symbol=symbol,
+                side=close_side,
+                qty=qty,
+                position_idx=position_idx,
+                reduce_only=True,
+            )
+        except Exception:
+            log.exception(
+                "trade.original_force_close_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+            # Don't latch original_force_closed — let it retry next tick.
+            trade.original_force_closed = False
+            return
+
+        # The Bybit fill-event path (on_order_update -> close_trade)
+        # will issue the POSITION CLOSED notification. We just log the
+        # decision here and let the unified close path handle the rest.
+
+    async def _maybe_timeout_hedge(
+        self,
+        trade: Trade,
+        current_price: float,
+    ) -> None:
+        """Close the hedge if it hasn't made a meaningful move in the
+        configured timeout window.
+
+        Client 2026-04-30: hedges that stall (price within
+        ``no_move_threshold_pct`` of hedge entry for more than
+        ``timeout_minutes``) are closed to free capital. Bot-side
+        timer — the only bot decision left in the hedge flow.
+        """
+        if not getattr(trade, "hedge_trade_id", None):
+            return
+        hedge_entry = getattr(trade, "hedge_entry_price", None)
+        hedge_filled_at = getattr(trade, "hedge_filled_at", None)
+        if not hedge_entry or hedge_entry <= 0 or hedge_filled_at is None:
+            return
+        if current_price <= 0:
+            return
+        if trade.signal is None:
+            return
+
+        timeout_minutes = getattr(
+            self._settings.hedge, "timeout_minutes", 20,
+        )
+        no_move_pct = getattr(
+            self._settings.hedge, "no_move_threshold_pct", 0.5,
+        )
+
+        elapsed = (
+            datetime.now(timezone.utc) - hedge_filled_at
+        ).total_seconds() / 60.0
+        if elapsed < timeout_minutes:
+            return
+
+        move_pct = abs(current_price - hedge_entry) / hedge_entry * 100.0
+        if move_pct >= no_move_pct:
+            return
+
+        # Close the hedge leg — opposite position_idx of the parent.
+        symbol = trade.signal.symbol
+        parent_dir = (trade.signal.direction or "").upper()
+        hedge_position_idx = 2 if parent_dir == "LONG" else 1
+        # SHORT hedge -> close with Buy; LONG hedge -> close with Sell.
+        close_side = "Buy" if parent_dir == "LONG" else "Sell"
+
+        log.info(
+            "hedge.timeout_close",
+            trade_id=trade.id, symbol=symbol,
+            hedge_entry=hedge_entry, current_price=current_price,
+            move_pct=round(move_pct, 4),
+            elapsed_minutes=round(elapsed, 2),
+            timeout_minutes=timeout_minutes,
+        )
+        # Latch so we don't keep firing — Bybit's fill event will
+        # mark the hedge closed and reset hedge_trade_id elsewhere.
+        trade.hedge_filled_at = None
+        try:
+            await self._bybit.place_market_order(
+                symbol=symbol,
+                side=close_side,
+                qty=trade.quantity or 0,
+                position_idx=hedge_position_idx,
+                reduce_only=True,
+            )
+            try:
+                from telegram.notifier import _chan, _ts, _sym
+                await self._notifier._send_notify(
+                    f"⏰ HEDGE TIMEOUT — STÄNGD\n"
+                    f"🕒 Tid: {_ts()}\n"
+                    f"📢 Från kanal: {_chan(trade.signal.channel_name)}\n"
+                    f"📊 Symbol: {_sym(symbol)}\n"
+                    f"\n"
+                    f"💥 Hedge entry: {hedge_entry}\n"
+                    f"📍 Aktuellt pris: {current_price}\n"
+                    f"📍 Rörelse: {move_pct:.2f}% "
+                    f"(<{no_move_pct}%)\n"
+                    f"📍 Tid sedan fill: {elapsed:.1f} min "
+                    f"(>{timeout_minutes} min)\n"
+                    f"\n"
+                    f"📍 Skäl: ingen meningsfull rörelse — "
+                    f"capital control."
+                )
+            except Exception:
+                log.exception(
+                    "hedge.timeout_notify_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
+        except Exception:
+            log.exception(
+                "hedge.timeout_close_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
 
     # ==================================================================
     # Trade closure
@@ -1903,11 +2620,15 @@ class PositionManager:
                 # operational meaning as "Finns inte på bybit"
                 # (the symbol is not tradable here), so use the same
                 # warning template for consistency (client 2026-04-28).
-                try:
-                    if trade.signal:
+                if trade.signal and self._should_send_reject_notify(
+                    "not_on_bybit",
+                    trade.signal.symbol,
+                    trade.signal.direction,
+                ):
+                    try:
                         await self._notifier.symbol_not_on_bybit(trade.signal)
-                except Exception:
-                    log.exception("notify.symbol_not_on_bybit_failed")
+                    except Exception:
+                        log.exception("notify.symbol_not_on_bybit_failed")
             else:
                 try:
                     if trade.signal:
@@ -2215,13 +2936,94 @@ class PositionManager:
         # Determine positionIdx for Bybit hedge mode.
         position_idx = 1 if direction == "LONG" else 2
 
-        # --- Update TP on exchange ---
+        # Client 2026-04-30: only update TP if the new TP is BETTER
+        # than the existing one (further upside for LONG, further
+        # downside for SHORT). Never downgrade. SL only changes after
+        # the liquidation check (existing behaviour). This collapses
+        # the recurring `❌ TP/SL UPPDATERING MISSLYCKADES` spam:
+        # repeat signals from other channels with similar/worse TPs
+        # are silently skipped instead of fired into Bybit and
+        # rejected.
+        existing_tp_raw = existing_trade_row.get("highest_tp_price")
         try:
-            highest_tp = max(new_tps) if new_tps else None
+            existing_tp = (
+                float(existing_tp_raw) if existing_tp_raw else None
+            )
+        except (TypeError, ValueError):
+            existing_tp = None
+        if existing_tp is None:
+            # Fallback: pull from JSON tp_list column if the schema
+            # doesn't have a denormalised highest_tp_price column.
+            try:
+                import json as _json
+                raw_list = existing_trade_row.get("tp_list")
+                if raw_list:
+                    parsed = (
+                        _json.loads(raw_list)
+                        if isinstance(raw_list, str) else raw_list
+                    )
+                    if parsed:
+                        existing_tp = (
+                            max(float(x) for x in parsed if x)
+                            if direction == "LONG"
+                            else min(float(x) for x in parsed if x)
+                        )
+            except Exception:
+                existing_tp = None
+
+        existing_sl_raw = existing_trade_row.get("sl_price")
+        try:
+            existing_sl = (
+                float(existing_sl_raw) if existing_sl_raw else None
+            )
+        except (TypeError, ValueError):
+            existing_sl = None
+
+        # --- Decide whether the new TP is an improvement ---
+        if direction == "LONG":
+            new_best_tp = max(new_tps) if new_tps else None
+        else:
+            new_best_tp = min((tp for tp in new_tps if tp), default=None)
+
+        tp_improved = False
+        if new_best_tp and new_best_tp > 0:
+            if existing_tp is None:
+                tp_improved = True
+            elif direction == "LONG" and new_best_tp > existing_tp * 1.001:
+                tp_improved = True
+            elif direction == "SHORT" and new_best_tp < existing_tp * 0.999:
+                tp_improved = True
+
+        # --- Decide whether SL needs an update ---
+        # Only push a new SL if it's materially different from the
+        # current one (≥0.1% delta). Identical-value updates are the
+        # primary cause of Bybit "not modified" rejections and the
+        # repeat ❌ TP/SL UPPDATERING MISSLYCKADES messages.
+        sl_changed = False
+        if new_sl and new_sl > 0:
+            if existing_sl is None:
+                sl_changed = True
+            elif abs(new_sl - existing_sl) / max(existing_sl, 1e-9) >= 0.001:
+                sl_changed = True
+
+        if not tp_improved and not sl_changed:
+            log.info(
+                "trade.tp_sl_update_skipped_no_improvement",
+                trade_id=trade_id,
+                symbol=symbol,
+                new_best_tp=new_best_tp,
+                existing_tp=existing_tp,
+                new_sl=new_sl,
+                existing_sl=existing_sl,
+            )
+            return
+
+        # --- Update TP / SL on exchange ---
+        try:
             update_params = {}
-            if highest_tp and highest_tp > 0:
-                update_params["take_profit"] = highest_tp
-            if new_sl and new_sl > 0:
+            if tp_improved:
+                update_params["take_profit"] = new_best_tp
+            if sl_changed:
                 update_params["stop_loss"] = new_sl
 
             if update_params:
@@ -2238,7 +3040,16 @@ class PositionManager:
                     symbol=symbol,
                     **update_params,
                 )
-        except Exception:
+        except Exception as exc:
+            # Bybit code 34040 = "not modified" — values already
+            # match. Treat as no-op, no operator notification.
+            ret_code = getattr(exc, "ret_code", None)
+            if ret_code == 34040:
+                log.info(
+                    "trade.tp_sl_update_unchanged",
+                    trade_id=trade_id, symbol=symbol,
+                )
+                return
             log.exception(
                 "trade.tp_sl_update_failed",
                 trade_id=trade_id,

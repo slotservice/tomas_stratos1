@@ -677,8 +677,10 @@ class BybitAdapter:
         position_idx:
             1 = Buy/Long hedge, 2 = Sell/Short hedge.
         trigger_by:
-            Price source that fires the trigger.  Client prefers
-            ``"LastPrice"`` - the actual traded price.
+            Price source that fires the trigger. Client 2026-04-29:
+            ``"LastPrice"`` — TP levels and hedge conditionals use Last
+            so they fire on actual traded price, not the slower mark.
+            Initial SL uses MarkPrice via a separate code path.
         """
         qty_rounded = self.round_qty(qty, symbol)
         price_rounded = self.round_price(trigger_price, symbol)

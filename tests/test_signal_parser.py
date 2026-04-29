@@ -160,6 +160,60 @@ class TestMissingFields:
         signal = parse_signal(text)
         assert signal is None
 
+    def test_percentage_sl_rejected(self):
+        """CRYPTO BANANA BOT EDU regression 2026-04-28: messages with a
+        percentage-based SL like "Stop Loss: 5-10%" must NOT capture the
+        leading number as an absolute price. The parser must return
+        sl=None (or reject the signal entirely if the sanity check fires).
+        """
+        text = (
+            "#EDU/USDT short 50X\n\n"
+            "Entry Targets: 0.0460\n"
+            "Take-Profit Targets:\n\n"
+            "1) 0.04531\n"
+            "2) 0.04485\n"
+            "3) 0.04439\n"
+            "4) 0.0437\n\n"
+            "Stop Loss: 5-10%"
+        )
+        signal = parse_signal(text, channel_name="CRYPTO BANANA BOT")
+        # Must NOT come back with sl=5.0 (the bug). Either sl=None
+        # (parser skipped the %-suffixed match) or signal=None
+        # (validator rejected the SL>50%-from-entry sanity check).
+        if signal is not None:
+            assert signal.sl is None, (
+                f"percentage SL captured as absolute price: sl={signal.sl}"
+            )
+
+    def test_percentage_sl_short_form_rejected(self):
+        """Short form ``SL: 5%`` must also be rejected as a price."""
+        text = (
+            "BTCUSDT LONG\n"
+            "Entry: 65000\n"
+            "TP1: 66000\n"
+            "SL: 5%"
+        )
+        signal = parse_signal(text)
+        # Either sl=None or signal rejected entirely.
+        if signal is not None:
+            assert signal.sl is None
+
+    def test_implausible_sl_rejected(self):
+        """Defence-in-depth: any SL more than 50% from entry is rejected
+        as a parser error (would leave a position effectively unprotected
+        on Bybit if accepted)."""
+        # Manually-built signal with a bogus SL ~99% from entry.
+        signal = ParsedSignal(
+            symbol="BTCUSDT",
+            direction="LONG",
+            entry=100.0,
+            tps=[110.0],
+            sl=1.0,  # 99% away — implausible
+        )
+        ok, reason = validate_signal(signal)
+        assert not ok
+        assert "implausibly far" in reason
+
 
 # ===================================================================
 # Take-profit targets

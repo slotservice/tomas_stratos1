@@ -60,8 +60,8 @@ def _chan(name: str) -> str:
     import re as _re
     hashtag = _re.sub(r"[^A-Za-z0-9_]", "", clean)
     if not hashtag:
-        return f"{name} #Unknown"
-    return f"{name} #{hashtag}"
+        return "#Unknown"
+    return f"#{hashtag}"
 
 
 def _tp_lines(tp_list: list[float]) -> str:
@@ -243,17 +243,17 @@ class TelegramNotifier:
 
         text = (
             f"✅ Signal mottagen & kopierad\n"
-            f"🕒 Time: {_ts()}\n"
-            f"📢 From channel: {_chan(signal.channel_name)}\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Direction: {direction}\n"
-            f"📍 Type: {lev_type}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Leverage ({_lev_class(lev_type)}): x{leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
@@ -280,6 +280,51 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}"
+        )
+        return await self._send_notify(text)
+
+    async def signal_blocked_no_entry(
+        self,
+        symbol: str,
+        direction: str,
+        channel_name: str,
+    ) -> str:
+        """Signal rejected because the parser could not find an entry price.
+
+        Per client request 2026-04-28: when a Telegram message names a
+        symbol and direction but lacks an entry price (e.g. PENGU "Take
+        Profit" updates without an Entry: line), notify the operator so
+        they know the message reached the bot and was deliberately
+        skipped — not silently lost. Wording follows the exact template
+        the client provided (lowercase "Blokerad", comma + reason).
+        """
+        text = (
+            f"⚠️ Blokerad, Entre saknas ⚠️\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(channel_name)}\n"
+            f"📊 Symbol: {_sym(symbol)}\n"
+            f"📈 Riktning: {direction}"
+        )
+        return await self._send_notify(text)
+
+    async def signal_blocked_invalid_tps(
+        self,
+        symbol: str,
+        direction: str,
+        channel_name: str,
+    ) -> str:
+        """Signal rejected because the take-profit targets are missing
+        or inconsistent with direction (LONG with TP below entry, etc.).
+
+        Covers both the ``no_tps`` case (parser found symbol+direction+entry
+        but no TP prices) and validate_signal failures around TP direction.
+        Per client request 2026-04-28."""
+        text = (
+            f"⚠️ Blokerad, TP är fel angiva ⚠️\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(channel_name)}\n"
+            f"📊 Symbol: {_sym(symbol)}\n"
+            f"📈 Riktning: {direction}"
         )
         return await self._send_notify(text)
 
@@ -353,18 +398,18 @@ class TelegramNotifier:
         bybit_id_str = bybit_order_id or "pending"
 
         text = (
-            f"✅ Signal updated - difference above 5%\n"
-            f"🕒 Time: {_ts()}\n"
-            f"📢 From channel: {_chan(signal.channel_name)}\n"
+            f"✅ Signal uppdaterad — skillnad över 5%\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Direction: {direction}\n"
-            f"📍 Type: {lev_type}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Typ: {lev_type}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Leverage ({_lev_class(lev_type)}): x{leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
             f"💰 IM: {im:.2f} USDT\n"
             f"🔑 Order-ID BOT: {bot_id_str}\n"
             f"🔑 Order-ID Bybit: {bybit_id_str}"
@@ -843,7 +888,7 @@ class TelegramNotifier:
             f"💥 Stängningspris: {exit_price}\n"
             f"\n"
             f"💵 Stängd kvantitet: {qty} ({pct_of_position:.1f}% av positionen)\n"
-            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
             f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
             f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
@@ -987,7 +1032,7 @@ class TelegramNotifier:
             f"💥 Exit: {exit}\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
             f"💵 Stängd kvantitet: {qty} (100% av positionen)\n"
-            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
             f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
             f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
@@ -1108,6 +1153,21 @@ class TelegramNotifier:
 
         tps_block = "\n".join(tp_lines) if tp_lines else f"🎯 TP{tp_level}: {tp_price} ({_pct(tp_pct)})"
 
+        # Client 2026-04-29: TP-TAGEN message must also show the SL
+        # line so the operator sees the full contract context — even
+        # though SL hasn't fired yet, it tells them where the floor is.
+        sl = trade.sl_price or (getattr(signal, "sl", None) if signal else None)
+        if sl and entry and entry > 0:
+            if signal and signal.direction == "LONG":
+                sl_pct = (sl - entry) / entry * 100.0
+            else:
+                sl_pct = (entry - sl) / entry * 100.0
+            sl_line = f"🚩 SL: {sl} ({_pct(sl_pct)})"
+        elif sl:
+            sl_line = f"🚩 SL: {sl}"
+        else:
+            sl_line = ""
+
         text = (
             f"✅ TAKE PROFIT {tp_level} TAGEN\n"
             f"🕒 Tid: {_ts()}\n"
@@ -1120,9 +1180,13 @@ class TelegramNotifier:
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
             f"\n"
             f"{tps_block}\n"
+        )
+        if sl_line:
+            text += f"{sl_line}\n"
+        text += (
             f"\n"
             f"💵 Stängd kvantitet: {closed_qty} ({closed_pct:.1f}% av positionen)\n"
-            f"📊 Resultat: {_pct(result_pct)} with leverage\n"
+            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
             f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
             f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
@@ -1137,26 +1201,156 @@ class TelegramNotifier:
         trailing_distance: float,
         activation_pct: float,
         distance_pct: float,
+        trailing_stop_price: Optional[float] = None,
+        mark_price: float = 0.0,
+        quantity: float = 0.0,
+        unrealised_pnl: float = 0.0,
     ) -> str:
-        """TRAILING STOP AKTIVERAD — fired when the bot arms Bybit's
-        native trailing stop on the position at trade open. Per
-        Meddelande telegram.docx (client 2026-04-28)."""
+        """✅ Trailing Stop Aktiverad — fired when Bybit's trailing
+        actually starts trailing the position (mark price crosses
+        activation_price). Detected via on_position_update, NOT at
+        trade open.
+
+        Client 2026-04-28+29: this is the canonical "trailing has
+        STARTED" message and must include the full position context —
+        entry, Bybit-confirmed trailing-stop price, protected qty,
+        post-only / reduce-only status, and the leveraged profit
+        snapshot. ``trailing_stop_price`` MUST come from Bybit's WS
+        stopLoss field, never a local computation.
+        """
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        entry = trade.avg_entry or (signal.entry if signal else 0.0)
+        leverage = trade.leverage or 1.0
+        direction = (signal.direction if signal else "").upper()
+
+        # Trailing-stop distance from entry, signed so LONG/SHORT
+        # profitable both render as positive %.
+        if entry and entry > 0 and trailing_stop_price:
+            raw_pct = (trailing_stop_price - entry) / entry * 100
+            trailing_stop_pct = raw_pct if direction == "LONG" else -raw_pct
+        else:
+            trailing_stop_pct = 0.0
+
+        # Result % at current mark (with leverage, matching the rest
+        # of the bot's PnL convention).
+        if entry and entry > 0 and mark_price > 0:
+            move_pct = (mark_price - entry) / entry * 100
+            result_pct = move_pct * leverage if direction == "LONG" else -move_pct * leverage
+        else:
+            result_pct = 0.0
+
+        ts_line = (
+            f"✅ Trailing Stop: {trailing_stop_price} "
+            f"({trailing_stop_pct:+.2f}%)"
+            if trailing_stop_price
+            else (
+                f"✅ Trailing aktiveringspris: {activation_price} "
+                f"({_pct(activation_pct)})"
+            )
+        )
+        qty_line = (
+            f"💵 Skyddad kvantitet: {quantity} (100% av positionen)"
+            if quantity
+            else f"💵 Skyddad kvantitet: hela positionen"
+        )
+
         text = (
-            f"🔄 TRAILING STOP AKTIVERAD\n"
+            f"✅ Trailing Stop Aktiverad\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Riktning: {signal.direction}\n"
+            f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"📍 Trigger: {_pct(activation_pct)} (aktiveringspris {activation_price})\n"
+            f"💥 Entry: {entry}\n"
+            f"\n"
+            f"{ts_line}\n"
             f"📍 Avstånd: {distance_pct:+.2f}% bakom pris ({trailing_distance})\n"
             f"\n"
+            f"{qty_line}\n"
+            f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
-            f"🔑 Order-ID Bybit: {bybit_ids}"
+            f"🔑 Order-ID Bybit: {bybit_ids}\n"
+            f"\n"
+            f"✅ Uppdaterad via Market\n"
+            f"✅ Post-Only: false\n"
+            f"✅ Reduce-Only: true\n"
+            f"\n"
+            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
+            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång"
+        )
+        return await self._send_notify(text)
+
+    async def trailing_stop_updated(
+        self,
+        trade,
+        trailing_stop_price: float,
+        mark_price: float,
+        quantity: float,
+        unrealised_pnl: float,
+    ) -> str:
+        """TRAILING STOP UPPDATERAD — fired every time Bybit moves the
+        trailing stop to lock in a better profit level. The
+        ``trailing_stop_price`` MUST come from the Bybit position
+        event's ``stopLoss`` field (client 2026-04-28: "Värdet måste
+        bekräftas från Bybit, inte beräknas lokalt"). All other fields
+        are derived from the trade record + the same position event.
+
+        ``unrealised_pnl`` is the position's unrealised PnL in USDT
+        from Bybit's WS (already includes leverage). ``result_pct`` is
+        the leveraged % move of mark_price vs avg_entry — also
+        Bybit-side numbers, not bot calculation.
+        """
+        signal = trade.signal
+        lev_type = signal.signal_type if signal else "dynamic"
+        bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
+        entry = trade.avg_entry or (signal.entry if signal else 0.0)
+        leverage = trade.leverage or 1.0
+        direction = (signal.direction if signal else "").upper()
+
+        # Trailing-stop distance from entry, signed so that LONG profit
+        # comes out positive and SHORT profit comes out positive too.
+        if entry and entry > 0:
+            raw_pct = (trailing_stop_price - entry) / entry * 100
+            trailing_stop_pct = raw_pct if direction == "LONG" else -raw_pct
+        else:
+            trailing_stop_pct = 0.0
+
+        # Result % at current mark price (with leverage, matching the
+        # rest of the bot's PnL display convention).
+        if entry and entry > 0 and mark_price > 0:
+            move_pct = (mark_price - entry) / entry * 100
+            result_pct = move_pct * leverage if direction == "LONG" else -move_pct * leverage
+        else:
+            result_pct = 0.0
+
+        text = (
+            f"✅ Trailing Stop uppdaterad\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Typ: {lev_type}\n"
+            f"\n"
+            f"💥 Entry: {entry}\n"
+            f"\n"
+            f"✅ Trailing Stop: {trailing_stop_price} ({trailing_stop_pct:+.2f}%)\n"
+            f"\n"
+            f"💵 Skyddad kvantitet: {quantity} (100% av positionen)\n"
+            f"\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}\n"
+            f"\n"
+            f"✅ Uppdaterad via Market\n"
+            f"✅ Post-Only: false\n"
+            f"✅ Reduce-Only: true\n"
+            f"\n"
+            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
+            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång"
         )
         return await self._send_notify(text)
 

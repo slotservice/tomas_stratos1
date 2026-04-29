@@ -39,6 +39,38 @@ class ParsedSignal:
     raw_text: str = ""
     parsed_at: float = 0.0              # Unix timestamp
 
+
+@dataclass
+class ParseResult:
+    """Detailed parse result with rejection reason and partial state.
+
+    The ``signal`` field is set only when parsing succeeded. On rejection,
+    ``reason`` indicates which stage failed and ``symbol``/``direction``
+    expose whatever was successfully extracted before the failure — so
+    callers can build a "BLOCKED: <reason>" Telegram notification that
+    still names the symbol/direction the user can recognise.
+
+    Reason codes:
+        "ok"           - parsed successfully, signal is set
+        "empty"        - empty/whitespace input, ignored silently
+        "no_symbol"    - no recognisable symbol found (silent — too noisy)
+        "no_direction" - symbol found but no LONG/SHORT keyword
+        "no_entry"     - symbol+direction found but no entry price
+        "no_tps"       - symbol+direction+entry found but no TPs
+        "invalid"      - all fields parsed but validate_signal rejected
+                         (e.g. TP on wrong side of entry, SL too far)
+    """
+    signal: Optional[ParsedSignal] = None
+    reason: str = "ok"
+    detail: str = ""
+    symbol: Optional[str] = None
+    direction: Optional[str] = None
+    entry: float = 0.0
+    tps: list[float] = field(default_factory=list)
+    sl: Optional[float] = None
+    channel_id: int = 0
+    channel_name: str = ""
+
 # ---------------------------------------------------------------------------
 # Known USDT-paired symbols on Bybit (common ones used for bare-symbol
 # detection like "BTC" -> "BTCUSDT"). In production this would come from
@@ -209,9 +241,18 @@ _SL_PATTERNS = [
     # / bullet / emoji prefix on the next line ("STOP LOSS:\n→ 0.027",
     # CRYPTO WORLD UPTADES format) without crossing into a different
     # line of the message.
+    #
+    # The trailing ``(?!\s*[-\d]*\s*%)`` negative lookahead rejects
+    # percentage-based SL specs such as "Stop Loss: 5-10%" or "SL: 5%"
+    # (CRYPTO BANANA BOT EDU regression 2026-04-28: live message
+    # "Stop Loss: 5-10%" produced sl=5.0 on a 0.046 entry — 100x above
+    # entry, leaving the position effectively unprotected on Bybit).
+    # We accept only ABSOLUTE-price SLs; percentage specs lack a price
+    # the bot can verify, so the signal is rejected upstream.
     re.compile(
         r"(?:sl|stop[-\s]*loss|stoploss|invalidation)\s*[:=]?\s*"
-        r"[^\d\n]{0,10}" + _PRICE_RE,
+        r"[^\d\n]{0,10}" + _PRICE_RE
+        + r"(?!\s*[-\d]*\s*%)",
         re.IGNORECASE,
     ),
 ]
@@ -627,6 +668,20 @@ def validate_signal(signal: ParsedSignal) -> tuple[bool, str]:
                 f"SHORT signal but SL ({signal.sl}) <= entry ({signal.entry})"
             )
 
+    # Sanity check: SL implausibly far from entry (>50%) — defence-in-depth
+    # against parser errors that capture an unrelated number as the SL price.
+    # CRYPTO BANANA BOT EDU 2026-04-28: "Stop Loss: 5-10%" produced sl=5.0
+    # on a 0.046 entry (10752% away). The SL regex now rejects %-suffixed
+    # captures, but this check ensures any future regex slip doesn't open
+    # a position with effectively no protection on Bybit.
+    if signal.sl is not None and signal.entry > 0:
+        sl_distance_pct = abs(signal.entry - signal.sl) / signal.entry * 100
+        if sl_distance_pct > 50.0:
+            return False, (
+                f"SL ({signal.sl}) implausibly far from entry "
+                f"({signal.entry}): {sl_distance_pct:.1f}%"
+            )
+
     return True, ""
 
 
@@ -670,24 +725,25 @@ def _extract_symbol(text: str) -> Optional[str]:
     return None
 
 
-def parse_signal(
+def parse_signal_detailed(
     text: str,
     channel_id: int = 0,
     channel_name: str = "",
-) -> Optional[ParsedSignal]:
+) -> ParseResult:
     """
-    Parse a raw Telegram message into a ParsedSignal.
+    Parse a raw Telegram message and return a detailed result.
 
-    Returns None if the message cannot be parsed into a valid signal.
-    Logs structured warnings/debug info on failure.
-
-    Args:
-        text:         Raw message text (may include emojis, markdown, etc.)
-        channel_id:   Telegram chat ID the message came from
-        channel_name: Human-readable channel name for logging/reporting
+    Unlike :func:`parse_signal` (which collapses every failure to ``None``),
+    this returns a :class:`ParseResult` whose ``reason`` field tells the
+    caller WHY parsing failed and exposes whichever fields were already
+    extracted. Callers can use that to format meaningful "BLOCKED" Telegram
+    notifications (client request 2026-04-28: notify on missing entry and
+    invalid TPs).
     """
     if not text or not text.strip():
-        return None
+        return ParseResult(reason="empty",
+                           channel_id=channel_id,
+                           channel_name=channel_name)
 
     # Strip zero-width characters and normalize whitespace slightly.
     # Also remove Markdown bold markers (**) — some channels (Coin
@@ -736,7 +792,9 @@ def parse_signal(
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
-        return None
+        return ParseResult(reason="no_symbol",
+                           channel_id=channel_id,
+                           channel_name=channel_name)
 
     # --- Direction ---
     direction = extract_direction(clean)
@@ -748,7 +806,10 @@ def parse_signal(
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
-        return None
+        return ParseResult(reason="no_direction",
+                           symbol=symbol,
+                           channel_id=channel_id,
+                           channel_name=channel_name)
 
     # --- Prices ---
     prices = extract_prices(clean)
@@ -765,7 +826,11 @@ def parse_signal(
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
-        return None
+        return ParseResult(reason="no_entry",
+                           symbol=symbol,
+                           direction=direction,
+                           channel_id=channel_id,
+                           channel_name=channel_name)
 
     if not tps:
         log.debug(
@@ -777,7 +842,13 @@ def parse_signal(
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
-        return None
+        return ParseResult(reason="no_tps",
+                           symbol=symbol,
+                           direction=direction,
+                           entry=entry,
+                           sl=sl,
+                           channel_id=channel_id,
+                           channel_name=channel_name)
 
     # --- Build signal ---
     signal = ParsedSignal(
@@ -809,7 +880,15 @@ def parse_signal(
             channel_id=channel_id,
             channel_name=channel_name,
         )
-        return None
+        return ParseResult(reason="invalid",
+                           detail=reason,
+                           symbol=symbol,
+                           direction=direction,
+                           entry=entry,
+                           tps=tps,
+                           sl=sl,
+                           channel_id=channel_id,
+                           channel_name=channel_name)
 
     log.info(
         "signal_parsed",
@@ -823,4 +902,28 @@ def parse_signal(
         channel_name=channel_name,
     )
 
-    return signal
+    return ParseResult(signal=signal,
+                       reason="ok",
+                       symbol=symbol,
+                       direction=direction,
+                       entry=entry,
+                       tps=tps,
+                       sl=sl,
+                       channel_id=channel_id,
+                       channel_name=channel_name)
+
+
+def parse_signal(
+    text: str,
+    channel_id: int = 0,
+    channel_name: str = "",
+) -> Optional[ParsedSignal]:
+    """
+    Parse a raw Telegram message into a ParsedSignal.
+
+    Returns None if the message cannot be parsed into a valid signal.
+    This is a backwards-compatible thin wrapper around
+    :func:`parse_signal_detailed` for callers that don't need the
+    rejection-reason information.
+    """
+    return parse_signal_detailed(text, channel_id, channel_name).signal
