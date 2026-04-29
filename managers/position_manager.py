@@ -169,18 +169,26 @@ class PositionManager:
     ) -> bool:
         """Return True if this rejection notification should fire.
 
-        Client 2026-04-30: the same signal posted by 3 different
-        Telegram channels was producing 3 identical "Finns inte på
-        bybit" / "Blokerad" / "SIGNAL AVVISAD" messages within
-        seconds. We dedupe on (kind, symbol, direction) within
-        ``_dedup_window_s`` (default 5 min) so the operator sees the
-        rejection ONCE per unique cause, regardless of how many
-        channels echo the same signal.
+        Client 2026-04-30: dedupe ANY rejection for the same
+        (symbol, direction) within ``_dedup_window_s`` (default 5
+        min), regardless of WHY rejected. Earlier behaviour keyed
+        on (kind, symbol, direction) so the same signal could fire
+        ``Entre saknas`` + ``pris för långt från entry`` + ``Finns
+        inte på bybit`` separately. Operator just needs to see
+        "this symbol was rejected once" — the first reason wins.
+
+        ``kind`` is still passed in so the log line can identify
+        which rejection actually fired vs which were silenced.
         """
-        key = f"{kind}:{symbol}:{direction}"
+        key = f"{symbol}:{direction}"
         now = time.monotonic()
         last = self._reject_notify_last.get(key)
         if last is not None and (now - last) < self._dedup_window_s:
+            log.debug(
+                "reject_notify.deduped",
+                kind=kind, symbol=symbol, direction=direction,
+                window_s=self._dedup_window_s,
+            )
             return False
         self._reject_notify_last[key] = now
         # Best-effort GC: prune entries older than 2x the window.
