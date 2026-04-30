@@ -14,6 +14,8 @@ stratos1_run.log
 
 # Database
 *.db
+*.db.*
+*.bak
 
 # Telegram session
 *.session
