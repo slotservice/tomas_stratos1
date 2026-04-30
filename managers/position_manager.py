@@ -1989,27 +1989,23 @@ class PositionManager:
         # Synthesised signal. signal_type "dynamic" — orphans aren't
         # classified by SL distance; the bot treats them as a normal
         # managed position from this point on.
+        # Field names match core.signal_parser.ParsedSignal (the class
+        # the notifier templates read from): ``tps`` (not ``tp_list``),
+        # ``channel_id``/``channel_name`` (not ``source_channel_*``),
+        # no ``received_at`` field — uses ``parsed_at`` float instead.
         from core.signal_parser import ParsedSignal as _PS
         synth_signal = _PS(
             symbol=sym,
             direction=direction,
             entry=avg_price,
-            tp_list=[bybit_tp] if bybit_tp else [],
+            tps=[bybit_tp] if bybit_tp else [],
             sl=sl_price,
-            source_channel_id=0,
-            source_channel_name="Orphan / Manual",
-            raw_text="(orphan position adopted from Bybit)",
             signal_type="dynamic",
+            channel_id=0,
+            channel_name="Orphan Manual",
+            raw_text="(orphan position adopted from Bybit)",
+            parsed_at=time.time(),
         )
-        # The notifier reads ``channel_name`` (not source_channel_name).
-        try:
-            synth_signal.channel_name = "Orphan / Manual"
-        except Exception:
-            pass
-        try:
-            synth_signal.tps = list(synth_signal.tp_list)
-        except Exception:
-            pass
 
         # Build the managed Trade.
         trade = Trade(
