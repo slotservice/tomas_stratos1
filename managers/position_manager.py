@@ -333,9 +333,20 @@ class PositionManager:
                 active=len(self._active_trades),
                 max=max_trades,
             )
-            await self._safe_notify(
-                f"[BLOCKERAD] {symbol}: maxkapacitet ({max_trades} trades) nadd."
-            )
+            if self._should_send_reject_notify(
+                "max_capacity", symbol, direction,
+            ):
+                from telegram.notifier import _chan, _ts
+                await self._safe_notify(
+                    f"⚠️ SIGNAL BLOCKERAD (maxkapacitet nådd)\n"
+                    f"🕒 Tid: {_ts()}\n"
+                    f"📢 Från kanal: "
+                    f"{_chan(getattr(signal, 'channel_name', ''))}\n"
+                    f"📊 Symbol: #{symbol}\n"
+                    f"📈 Riktning: {direction}\n"
+                    f"📍 Aktiva trades: {max_trades} (max nått). "
+                    f"Stäng en position innan boten kan ta nya signaler."
+                )
             return None
 
         # ----------------------------------------------------------
@@ -349,10 +360,20 @@ class PositionManager:
                     symbol=symbol,
                     max_age=max_age,
                 )
-                await self._safe_notify(
-                    f"[BLOCKERAD] {symbol}: signal for gammal "
-                    f"(> {max_age}s)."
-                )
+                if self._should_send_reject_notify(
+                    "stale_signal_age", symbol, direction,
+                ):
+                    from telegram.notifier import _chan, _ts
+                    await self._safe_notify(
+                        f"⚠️ SIGNAL BLOCKERAD (för gammal)\n"
+                        f"🕒 Tid: {_ts()}\n"
+                        f"📢 Från kanal: "
+                        f"{_chan(getattr(signal, 'channel_name', ''))}\n"
+                        f"📊 Symbol: #{symbol}\n"
+                        f"📈 Riktning: {direction}\n"
+                        f"📍 Anledning: signalen är äldre än {max_age}s — "
+                        f"marknaden kan ha flyttat."
+                    )
                 return None
 
         # ----------------------------------------------------------
@@ -2647,9 +2668,12 @@ class PositionManager:
             except Exception:
                 log.exception("cleanup.delete_error", order_id_bot=bot_id)
 
+        from telegram.notifier import _ts
         await self._safe_notify(
-            f"[CLEANUP] {len(stale_orders)} ofyllda order(s) aldre an "
-            f"{timeout_hours}h raderade."
+            f"🧹 ORDERSTÄDNING UTFÖRD\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📍 Antal ofyllda order raderade: {len(stale_orders)}\n"
+            f"📍 Tröskel: äldre än {timeout_hours} timmar."
         )
 
     # ==================================================================
@@ -2880,8 +2904,18 @@ class PositionManager:
 
         await self._persist_trade_state(trade, close_reason=message)
 
+        from telegram.notifier import _chan, _ts
+        chan = (
+            _chan(trade.signal.channel_name)
+            if trade.signal else "#Unknown"
+        )
         await self._safe_notify(
-            f"[AVBRUTEN] {symbol} {direction}\n{message}"
+            f"❌ TRADE AVBRUTEN\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {chan}\n"
+            f"📊 Symbol: #{symbol}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Anledning: {message}"
         )
 
     async def _persist_trade_state(self, trade: Trade, **extra: Any) -> None:
@@ -3172,12 +3206,17 @@ class PositionManager:
                             mark_price=mark_price,
                             liq_distance_pct=round(liq_distance_pct, 2),
                         )
+                        from telegram.notifier import _chan, _ts
+                        chan = _chan(getattr(signal, "channel_name", ""))
                         await self._safe_notify(
                             f"⚠️ LIKVIDATIONSVARNING ⚠️\n"
+                            f"🕒 Tid: {_ts()}\n"
+                            f"📢 Från kanal: {chan}\n"
                             f"📊 Symbol: #{symbol}\n"
+                            f"📈 Riktning: {direction}\n"
                             f"📍 Likvidationspris: {liq_price}\n"
                             f"📍 Marknadspris: {mark_price}\n"
-                            f"📍 Avstand: {liq_distance_pct:.2f}%\n"
+                            f"📍 Avstånd: {liq_distance_pct:.2f}%\n"
                             f"📍 Kontrollera positionen manuellt!"
                         )
                     else:
