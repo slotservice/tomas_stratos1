@@ -20,10 +20,25 @@ All thresholds are configurable via ``LeverageSettings``.
 
 from __future__ import annotations
 
+from decimal import Decimal, ROUND_HALF_UP
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from config.settings import LeverageSettings, WalletSettings
+
+
+def _round_half_up(value: float, ndigits: int = 2) -> float:
+    """Half-up rounding (e.g. 7.345 -> 7.35).
+
+    Python's built-in :func:`round` uses banker's rounding (half-to-even)
+    which can produce results that diverge from the client's spec at the
+    .x5 boundary. Client 2026-04-30 explicitly required half-up rounding
+    for the dynamic leverage zone.
+    """
+    quant = Decimal(10) ** -ndigits
+    return float(
+        Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP)
+    )
 
 # Default values matching config.toml (used when no settings object given).
 _DEFAULT_WALLET = 402.1
@@ -100,25 +115,22 @@ def calculate_leverage(
 
     raw = (wallet * risk_pct) / (initial_margin * stop_distance_pct)
 
-    # --- Bucketing rules ---
-    if raw < min_lev:
-        # Below absolute minimum -> clamp to min.
-        return round(min_lev, 2)
-
+    # --- Bucketing rules (client 2026-04-30 explicit spec) ---
+    # All boundaries use half-up rounding via _round_half_up.
     if raw < split:
-        # 6.0 .. 6.75 -> fixed at min.
-        return round(min_lev, 2)
+        # raw < 6.75  (covers raw < min_lev too) -> use min_lev (x6).
+        return _round_half_up(min_lev, 2)
 
     if raw < upper:
-        # 6.75 .. 7.5 (neutral zone) -> dynamic, but floor to upper bound.
-        return round(upper, 2)
+        # 6.75 <= raw < 7.5 -> use neutral_zone_upper (x7.5).
+        return _round_half_up(upper, 2)
 
     if raw > max_entry:
-        # Above max entry leverage -> cap.
-        return round(max_entry, 2)
+        # raw > 25.0 -> cap at max_entry_leverage (x25).
+        return _round_half_up(max_entry, 2)
 
-    # 7.5 .. 25.0 -> use computed value directly.
-    return round(raw, 2)
+    # 7.5 <= raw <= 25.0 -> use computed value directly, half-up to 2 dp.
+    return _round_half_up(raw, 2)
 
 
 def classify_leverage(leverage: float) -> str:
