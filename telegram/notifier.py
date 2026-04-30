@@ -1088,6 +1088,13 @@ class TelegramNotifier:
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         header_suffix = f"   by {close_source}" if close_source else ""
+        # Client 2026-04-30: ``result_pct_total`` is the RAW price
+        # movement (signed for direction). The previous label said
+        # "med hävstång" / "with leverage" which was wrong — value
+        # was unleveraged. Show both lines: raw price move first,
+        # then leveraged ROI = price_move × leverage.
+        leverage = trade.leverage or 1.0
+        result_pct_leveraged = result_pct_total * leverage
         text = (
             f"✅ POSITION STÄNGD{header_suffix}\n"
             f"🕒 Tid: {_ts()}\n"
@@ -1100,7 +1107,8 @@ class TelegramNotifier:
             f"📚 Underlag ink. alla delsteg (BOT/Bybit): {trade.id} / {bybit_ids}\n"
             f"📍 Exit: {exit_price}\n"
             f"\n"
-            f"📊 Resultat (prisrörelse): {_pct(result_pct_total)} with leverage\n"
+            f"📊 Resultat (prisrörelse): {_pct(result_pct_total)}\n"
+            f"📊 Resultat (med hävstång x{leverage}): {_pct(result_pct_leveraged)}\n"
             f"💰 Resultat (USDT, inkl. hävstång/notional): {_pnl_sign(result_usdt_total)} USDT\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"

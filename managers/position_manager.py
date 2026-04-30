@@ -1071,19 +1071,26 @@ class PositionManager:
                 log.exception(
                     "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
-                try:
-                    await self._notifier.error_sl_not_executed(
-                        signal=trade.signal,
-                        error_detail=(
-                            "SL kunde inte sättas på börsen. "
-                            "Manuell åtgärd kan krävas."
-                        ),
-                    )
-                except Exception:
-                    log.exception(
-                        "notify.sl_error_failed",
-                        trade_id=trade.id, symbol=symbol,
-                    )
+                # Dedupe per (symbol, direction): on volatile symbols
+                # we sometimes hit this twice in quick succession
+                # (initial + a retry from elsewhere) — operator only
+                # needs ONE alert.
+                if self._should_send_reject_notify(
+                    "sl_error", symbol, direction,
+                ):
+                    try:
+                        await self._notifier.error_sl_not_executed(
+                            signal=trade.signal,
+                            error_detail=(
+                                "SL kunde inte sättas på börsen. "
+                                "Manuell åtgärd kan krävas."
+                            ),
+                        )
+                    except Exception:
+                        log.exception(
+                            "notify.sl_error_failed",
+                            trade_id=trade.id, symbol=symbol,
+                        )
 
         # ---------- Place PARTIAL TPs — one reduce-only conditional
         # order per TP level (from TP2 onwards). Client IZZU
@@ -2045,22 +2052,98 @@ class PositionManager:
         except Exception:
             log.exception("orphan_adopt.db_save_failed", symbol=sym)
 
+        # Re-read the position from Bybit to verify protection orders
+        # actually exist (client 2026-04-30: Telegram must reflect
+        # verified Bybit reality, never bot assumptions). The
+        # ``adopt_orphan_position`` caller may have placed an auto-SL
+        # via set_trading_stop above; the verification confirms it
+        # was accepted, plus checks whether TP or trailing exist.
+        verified_sl: Optional[float] = None
+        verified_tp: Optional[float] = None
+        verified_trailing: Optional[float] = None
+        try:
+            verify_side = "Buy" if direction == "LONG" else "Sell"
+            verify_pos = await self._bybit.get_position(sym, verify_side)
+            if verify_pos:
+                try:
+                    verified_sl = float(verify_pos.get("stopLoss") or 0) or None
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    verified_tp = float(verify_pos.get("takeProfit") or 0) or None
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    verified_trailing = float(verify_pos.get("trailingStop") or 0) or None
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            log.exception(
+                "orphan_adopt.verify_failed",
+                trade_id=trade.id, symbol=sym,
+            )
+
+        # Classify the adoption result. SL is mandatory protection;
+        # TP or trailing is needed for profit-lock. Without at least
+        # one of those the position can ride a favorable move forever
+        # without realising any gain — "adopted but exit incomplete".
+        has_sl = verified_sl and verified_sl > 0
+        has_profit_lock = (
+            (verified_tp and verified_tp > 0)
+            or (verified_trailing and verified_trailing > 0)
+        )
+        fully_managed = bool(has_sl and has_profit_lock)
+
         log.info(
             "orphan_adopt.completed",
             trade_id=trade.id, symbol=sym, side=side, size=size,
-            avg_price=avg_price, sl=sl_price, tp=bybit_tp,
-            unrealised_pnl=unreal,
+            avg_price=avg_price, unrealised_pnl=unreal,
+            verified_sl=verified_sl, verified_tp=verified_tp,
+            verified_trailing=verified_trailing,
+            fully_managed=fully_managed,
         )
 
-        # Notify the operator with the proper Swedish template.
+        # Notify with verified status only.
         try:
             from telegram.notifier import _chan, _ts, _sym, _pnl_sign
-            sl_str = f"{sl_price}"
-            tp_str = f"{bybit_tp}" if bybit_tp else "ej satt"
+            sl_str = f"{verified_sl}" if has_sl else "ej satt"
+            tp_str = (
+                f"{verified_tp}"
+                if (verified_tp and verified_tp > 0)
+                else "ej satt"
+            )
+            trailing_str = (
+                f"{verified_trailing}"
+                if (verified_trailing and verified_trailing > 0)
+                else "ej satt"
+            )
             lev_str = f"x{leverage}" if leverage else "okänd"
             im_str = f"{position_im:.2f} USDT" if position_im else "okänd"
+
+            if fully_managed:
+                header = "♻️ ORPHAN POSITION ADOPTED"
+                status = (
+                    "📍 Status: positionen fanns på Bybit utan att vara "
+                    "länkad i botens DB. Bybit-verifierad SL + "
+                    "TP/trailing — adopterad och hanteras som en vanlig "
+                    "position."
+                )
+            else:
+                header = "⚠️ ORPHAN POSITION ADOPTED — exit ofullständig"
+                missing = []
+                if not has_sl:
+                    missing.append("SL")
+                if not has_profit_lock:
+                    missing.append("TP/trailing")
+                status = (
+                    f"⚠️ Status: positionen är adopterad i botens DB men "
+                    f"saknar fullständigt skydd på Bybit ({', '.join(missing)} "
+                    f"saknas). Operatör bör verifiera och vid behov "
+                    f"placera saknat skydd manuellt."
+                )
+
             await self._notifier._send_notify(
-                f"♻️ ORPHAN POSITION ADOPTED\n"
+                f"{header}\n"
                 f"🕒 Tid: {_ts()}\n"
                 f"📢 Från kanal: {_chan('Orphan Manual')}\n"
                 f"📊 Symbol: {_sym(sym)}\n"
@@ -2068,17 +2151,16 @@ class PositionManager:
                 f"\n"
                 f"💥 Entry: {avg_price}\n"
                 f"💵 Storlek: {size}\n"
-                f"🚩 SL: {sl_str}\n"
-                f"🎯 TP: {tp_str}\n"
+                f"🚩 SL (Bybit-verifierad): {sl_str}\n"
+                f"🎯 TP (Bybit-verifierad): {tp_str}\n"
+                f"🔄 Trailing (Bybit-verifierad): {trailing_str}\n"
                 f"\n"
                 f"⚙️ Hävstång: {lev_str}\n"
                 f"💰 IM: {im_str}\n"
                 f"💰 Aktuell PnL: {_pnl_sign(unreal)} USDT\n"
                 f"🔑 Order-ID BOT: {trade.id}\n"
                 f"\n"
-                f"📍 Status: positionen fanns på Bybit utan att vara "
-                f"länkad i botens DB. Den är nu adopterad och hanteras "
-                f"som en vanlig position."
+                f"{status}"
             )
         except Exception:
             log.exception("orphan_adopt.notify_failed", symbol=sym)
@@ -3059,10 +3141,16 @@ class PositionManager:
                 trade_id=trade_id,
                 symbol=symbol,
             )
-            try:
-                await self._notifier.tp_sl_update_failed(signal)
-            except Exception:
-                log.exception("notify.tp_sl_update_failed_notify_error")
+            # Client 2026-04-30: dedupe by (symbol, direction) so 3
+            # channels echoing the same signal don't fire 3 identical
+            # ❌ TP/SL UPPDATERING MISSLYCKADES messages.
+            if self._should_send_reject_notify(
+                "tp_sl_update_failed", symbol, direction,
+            ):
+                try:
+                    await self._notifier.tp_sl_update_failed(signal)
+                except Exception:
+                    log.exception("notify.tp_sl_update_failed_notify_error")
             return
 
         # --- Liquidation safety check ---
