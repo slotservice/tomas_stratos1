@@ -826,9 +826,19 @@ def parse_signal_detailed(
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
+        # Populate sl/tps so the caller can distinguish "real signal
+        # missing entry" from "news/article that happens to contain a
+        # ticker + direction word". A real signal always has at least
+        # one of entry/SL/TP — when none of them are present, the
+        # message is non-signal chatter and the rejection should stay
+        # silent (avoids spamming "Entre saknas" for news headlines
+        # like "The Market Is Correcting" or "Wasabi Protocol Hacked",
+        # 2026-04-30 Tomas report).
         return ParseResult(reason="no_entry",
                            symbol=symbol,
                            direction=direction,
+                           tps=tps,
+                           sl=sl,
                            channel_id=channel_id,
                            channel_name=channel_name)
 

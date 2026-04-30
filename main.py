@@ -484,7 +484,15 @@ async def main() -> None:
                 # by 3 Telegram channels doesn't fire 3 identical
                 # rejection messages (client 2026-04-30).
                 if result.reason == "no_entry" and result.symbol and result.direction:
-                    if position_mgr._should_send_reject_notify(
+                    # Only notify when the message has signal-shaped
+                    # evidence (at least one of SL or TP). News/article
+                    # text that happens to contain a ticker + direction
+                    # word ("The Market Is Correcting", "Wasabi Protocol
+                    # Hacked") falls through silently — these are not
+                    # signals and were spamming Tomas with false
+                    # "Entre saknas" rejections (2026-04-30).
+                    has_signal_evidence = bool(result.sl) or bool(result.tps)
+                    if has_signal_evidence and position_mgr._should_send_reject_notify(
                         "no_entry", result.symbol, result.direction,
                     ):
                         try:
@@ -809,15 +817,25 @@ async def main() -> None:
                                 )
                                 # Hedge has no TP — trailing only.
                                 hedge_tp = None
-                                if True:
-                                    await bybit.set_trading_stop(
-                                        symbol=sym,
-                                        position_idx=position_idx,
-                                        stop_loss=hedge_sl,
-                                        trailing_stop=trailing_distance,
-                                        active_price=avg_price,
-                                        sl_trigger_by="LastPrice",
-                                    )
+                                # active_price OMITTED on purpose:
+                                # Bybit rejects activePrice == entry
+                                # ("TrailingProfit must be greater/less
+                                # than session_average_price"). When
+                                # omitted, Bybit defaults to immediate
+                                # activation at current market — which
+                                # is correct for a hedge that fires
+                                # AFTER the original moves -1.5 %
+                                # adverse, since the hedge is already
+                                # in profit territory at fill time
+                                # (Tomas report 2026-04-30: recurring
+                                # `hedge_arm_failed` spam).
+                                await bybit.set_trading_stop(
+                                    symbol=sym,
+                                    position_idx=position_idx,
+                                    stop_loss=hedge_sl,
+                                    trailing_stop=trailing_distance,
+                                    sl_trigger_by="LastPrice",
+                                )
                                 # Persist hedge link on parent trade.
                                 hedge_trade_db_id = None
                                 try:

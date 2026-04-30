@@ -317,6 +317,7 @@ class BybitAdapter:
             110001,  # Order not exists or too late to cancel
             110003,  # Position not exist
             110007,  # Available balance not enough
+            110017,  # Position is zero (reduce-only on phantom position)
             110020,  # Position mode not supported
             110025,  # Position mode is not modified (already correct)
             110033,  # Margin cannot be set without open position

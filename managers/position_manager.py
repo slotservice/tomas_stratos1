@@ -468,6 +468,56 @@ class PositionManager:
         except Exception:
             leverage = round(leverage, 2)
 
+        # SL-vs-liquidation guard. Reject signals where the SL sits
+        # outside the position's liquidation distance — there is no
+        # safe way to honour such an SL because Bybit will liquidate
+        # the position before the SL can fire. BSBUSDT trade 3340
+        # incident 2026-04-30: SHORT entry 0.3313, signal SL 0.44
+        # (+33 % adverse) with 6x leverage (liq distance ~16.7 %) —
+        # liquidated at -16.6 USDT before the SL had any chance.
+        # Estimate liq distance as ~1/leverage minus a small
+        # maintenance-margin buffer (Bybit linear typical ~0.5 %).
+        # Reject if signal_sl_distance > 0.85 * liq_distance.
+        try:
+            sl_distance_pct = abs(entry_price - sl_price) / entry_price
+            est_liq_distance = max(1.0 / leverage - 0.005, 0.005)
+            if sl_distance_pct > est_liq_distance * 0.85:
+                log.warning(
+                    "signal.sl_beyond_liq_rejected",
+                    symbol=symbol,
+                    entry=entry_price,
+                    sl=sl_price,
+                    sl_distance_pct=round(sl_distance_pct * 100, 4),
+                    est_liq_distance_pct=round(est_liq_distance * 100, 4),
+                    leverage=leverage,
+                    channel_name=channel_name,
+                )
+                if self._should_send_reject_notify(
+                    "sl_beyond_liq", symbol, direction,
+                ):
+                    try:
+                        from telegram.notifier import _chan, _ts
+                        await self._safe_notify(
+                            f"⚠️ SIGNAL AVVISAD (SL bortom likvidationsavstånd)\n"
+                            f"🕒 Tid: {_ts()}\n"
+                            f"📢 Från kanal: {_chan(channel_name)}\n"
+                            f"📊 Symbol: #{symbol}\n"
+                            f"📈 Riktning: {direction}\n"
+                            f"💥 Entry: {entry_price}\n"
+                            f"🚩 Signal-SL: {sl_price} "
+                            f"({sl_distance_pct*100:.2f}% från entry)\n"
+                            f"⚙️ Hävstång: x{leverage} "
+                            f"(likvidation ~{est_liq_distance*100:.2f}% från entry)\n"
+                            f"📍 Anledning: SL ligger längre bort än "
+                            f"likvidationsavståndet — Bybit hade likviderat "
+                            f"positionen innan SL hann triggra."
+                        )
+                    except Exception:
+                        log.exception("notify.sl_beyond_liq_failed")
+                return None
+        except Exception:
+            log.exception("signal.sl_liq_check_error", symbol=symbol)
+
         # Also set the leverage on Bybit BEFORE placing the order.
         try:
             side_tmp = "Buy" if direction == "LONG" else "Sell"
@@ -1962,9 +2012,17 @@ class PositionManager:
             except (TypeError, ValueError):
                 bybit_tp = None
             try:
+                bybit_trailing = float(p.get("trailingStop") or 0) or None
+            except (TypeError, ValueError):
+                bybit_trailing = None
+            try:
                 leverage = float(p.get("leverage") or 0) or None
             except (TypeError, ValueError):
                 leverage = None
+            try:
+                liq_price = float(p.get("liqPrice") or 0) or None
+            except (TypeError, ValueError):
+                liq_price = None
             try:
                 position_im = float(p.get("positionIM") or 0) or None
             except (TypeError, ValueError):
@@ -1982,17 +2040,29 @@ class PositionManager:
 
         direction = "LONG" if side == "Buy" else "SHORT"
 
-        # If Bybit has no SL on this position, set an auto-SL at -3 %
-        # from the avg entry. Without a protective SL the orphan is
-        # technically unmanageable; this guarantees a floor before we
-        # adopt it.
+        # If Bybit has no SL on this position, set an auto-SL.
+        # Distance is the SMALLER of:
+        #   - configured fallback (3 % default), and
+        #   - half the liquidation distance.
+        # The cap prevents the SL from being placed INSIDE the
+        # liquidation buffer at high leverage. CGPTUSDT trade 73
+        # incident 2026-04-30: orphan-adopted hedge at 25x → liq
+        # distance ~4 %, auto-SL at -3 % left only 1 % cushion;
+        # slippage liquidated the position before the SL fired.
+        # Half-liq cap gives at least 50 % cushion between SL and
+        # forced liquidation.
         sl_price = bybit_sl
         if not sl_price:
             fallback_pct = self._settings.auto_sl.fallback_pct / 100.0
+            sl_pct = fallback_pct
+            if liq_price and avg_price > 0:
+                liq_distance = abs(avg_price - liq_price) / avg_price
+                if liq_distance > 0:
+                    sl_pct = min(fallback_pct, liq_distance * 0.5)
             if direction == "LONG":
-                sl_price = round(avg_price * (1 - fallback_pct), 8)
+                sl_price = round(avg_price * (1 - sl_pct), 8)
             else:
-                sl_price = round(avg_price * (1 + fallback_pct), 8)
+                sl_price = round(avg_price * (1 + sl_pct), 8)
             try:
                 await self._bybit.set_trading_stop(
                     symbol=sym,
@@ -2007,11 +2077,48 @@ class PositionManager:
                 log.info(
                     "orphan_adopt.auto_sl_set",
                     symbol=sym, side=side, sl=sl_price,
+                    sl_pct=round(sl_pct * 100, 4),
+                    liq_price=liq_price,
                 )
             except Exception:
                 log.exception(
                     "orphan_adopt.auto_sl_failed",
                     symbol=sym, side=side, sl=sl_price,
+                )
+
+        # Add a trailing stop if Bybit has none. Tomas explicit ask
+        # 2026-04-30: every position should have trailing on Bybit,
+        # not just hedges. Use the same hedge config (1.2 % distance).
+        # active_price is intentionally OMITTED — Bybit defaults to
+        # immediate activation at current price, which is what we
+        # want for an already-existing position. Setting it equal to
+        # entry triggers Bybit error 10001 ("TrailingProfit must be
+        # greater/less than session_average_price").
+        if not bybit_trailing:
+            try:
+                hedge_settings = getattr(self._settings, "hedge", None)
+                trailing_pct = (
+                    getattr(hedge_settings, "trailing_pct", 1.2) / 100.0
+                    if hedge_settings else 0.012
+                )
+                trailing_distance = round(avg_price * trailing_pct, 8)
+                if trailing_distance > 0:
+                    await self._bybit.set_trading_stop(
+                        symbol=sym,
+                        position_idx=position_idx,
+                        trailing_stop=trailing_distance,
+                        sl_trigger_by="LastPrice",
+                    )
+                    log.info(
+                        "orphan_adopt.trailing_set",
+                        symbol=sym, side=side,
+                        trailing_distance=trailing_distance,
+                        trailing_pct=round(trailing_pct * 100, 4),
+                    )
+            except Exception:
+                log.exception(
+                    "orphan_adopt.trailing_failed",
+                    symbol=sym, side=side,
                 )
 
         # Synthesised signal. signal_type "dynamic" — orphans aren't
@@ -2307,7 +2414,34 @@ class PositionManager:
                 position_idx=position_idx,
                 reduce_only=True,
             )
-        except Exception:
+        except Exception as exc:
+            # Phantom-trade detection: 110017 ("current position is
+            # zero, cannot fix reduce-only order qty") means the
+            # position no longer exists on Bybit but the bot's DB
+            # still has it as active. Without this guard the bot
+            # spam-retries the force-close every tick (1000LUNCUSDT
+            # trade_id=14 incident 2026-04-30 — hours of failures).
+            # Mark the trade closed in DB and stop trying.
+            ret_code = getattr(exc, "ret_code", None)
+            if ret_code == 110017:
+                log.warning(
+                    "trade.phantom_detected_in_force_close",
+                    trade_id=trade.id, symbol=symbol,
+                    avg_entry=trade.avg_entry,
+                )
+                try:
+                    await self.close_trade(
+                        trade.id,
+                        "phantom_cleanup",
+                        trade.avg_entry or 0.0,
+                    )
+                except Exception:
+                    log.exception(
+                        "trade.phantom_cleanup_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
+                # latch as closed — no retry, no spam.
+                return
             log.exception(
                 "trade.original_force_close_failed",
                 trade_id=trade.id, symbol=symbol,
