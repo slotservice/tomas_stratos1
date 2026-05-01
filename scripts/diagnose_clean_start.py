@@ -183,9 +183,15 @@ def per_symbol_pnl(closed: list) -> list[dict]:
         by_sym[c.get("symbol", "?")].append(float(c.get("closedPnl", 0) or 0))
     rows = []
     for sym, pnls in by_sym.items():
+        wins = sum(1 for p in pnls if p > 0)
+        losses = sum(1 for p in pnls if p < 0)
+        win_rate = (wins / len(pnls) * 100.0) if pnls else 0.0
         rows.append({
             "symbol": sym,
             "n": len(pnls),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
             "total": sum(pnls),
             "avg": sum(pnls) / len(pnls) if pnls else 0,
             "best": max(pnls) if pnls else 0,
@@ -196,9 +202,12 @@ def per_symbol_pnl(closed: list) -> list[dict]:
 
 
 def per_channel_pnl(closed: list, db_trades: list[dict],
-                    db_signals: dict[int, dict]) -> list[dict]:
-    """Map closed-PnL records back to source channels via DB."""
-    # Build symbol+side -> channel name from db_trades joined with signals.
+                    db_signals: dict[int, dict]) -> tuple[list[dict], float, int]:
+    """Map closed-PnL records back to source channels via DB.
+
+    Phase 6.C.3 (audit #22): per-channel breakdown helps spot
+    channels whose signals systematically lose money.
+    """
     sym_side_to_channels: dict[tuple[str, str], list[str]] = defaultdict(list)
     for t in db_trades:
         sig_id = t.get("signal_id")
@@ -208,11 +217,8 @@ def per_channel_pnl(closed: list, db_trades: list[dict],
         if not sig:
             continue
         chan = sig.get("source_channel_name") or sig.get("channel_name") or "?"
-        # signal direction stored as text in some DBs; normalise to
-        # Buy/Sell if possible.
         direction = (sig.get("direction") or "").upper()
         side = "Buy" if direction == "LONG" else "Sell"
-        # signal symbol is on the signal row.
         sym = sig.get("symbol") or "?"
         sym_side_to_channels[(sym, side)].append(chan)
 
@@ -221,14 +227,10 @@ def per_channel_pnl(closed: list, db_trades: list[dict],
     for c in closed:
         sym = c.get("symbol", "?")
         side = c.get("side", "?")
-        # Bybit's closed_pnl `side` is the CLOSING side (Sell closes a
-        # LONG, Buy closes a SHORT). Flip to original entry side.
         entry_side = "Buy" if side == "Sell" else "Sell"
         chans = sym_side_to_channels.get((sym, entry_side), [])
         pnl = float(c.get("closedPnl", 0) or 0)
         if chans:
-            # If the symbol came from multiple channels, charge each
-            # 1/N share to keep the per-channel total honest.
             share = pnl / len(chans)
             for chan in chans:
                 by_chan[chan].append(share)
@@ -237,14 +239,68 @@ def per_channel_pnl(closed: list, db_trades: list[dict],
 
     rows = []
     for chan, pnls in by_chan.items():
+        wins = sum(1 for p in pnls if p > 0)
+        losses = sum(1 for p in pnls if p < 0)
+        win_rate = (wins / len(pnls) * 100.0) if pnls else 0.0
         rows.append({
             "channel": chan,
             "n": len(pnls),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
             "total": sum(pnls),
             "avg": sum(pnls) / len(pnls) if pnls else 0,
         })
     rows.sort(key=lambda r: r["total"])
     return rows, sum(unmatched_pnl), len(unmatched_pnl)
+
+
+def per_signal_type_pnl(
+    closed: list, db_trades: list[dict], db_signals: dict[int, dict],
+) -> list[dict]:
+    """Per signal_type breakdown (dynamic / swing / fixed). Audit #8."""
+    sym_side_to_types: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for t in db_trades:
+        sig_id = t.get("signal_id")
+        if sig_id is None:
+            continue
+        sig = db_signals.get(int(sig_id))
+        if not sig:
+            continue
+        st = sig.get("signal_type") or "?"
+        direction = (sig.get("direction") or "").upper()
+        side = "Buy" if direction == "LONG" else "Sell"
+        sym = sig.get("symbol") or "?"
+        sym_side_to_types[(sym, side)].append(st)
+
+    by_type: dict[str, list[float]] = defaultdict(list)
+    for c in closed:
+        sym = c.get("symbol", "?")
+        side = c.get("side", "?")
+        entry_side = "Buy" if side == "Sell" else "Sell"
+        types = sym_side_to_types.get((sym, entry_side), [])
+        pnl = float(c.get("closedPnl", 0) or 0)
+        if types:
+            share = pnl / len(types)
+            for st in types:
+                by_type[st].append(share)
+
+    rows = []
+    for st, pnls in by_type.items():
+        wins = sum(1 for p in pnls if p > 0)
+        losses = sum(1 for p in pnls if p < 0)
+        win_rate = (wins / len(pnls) * 100.0) if pnls else 0.0
+        rows.append({
+            "signal_type": st,
+            "n": len(pnls),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "total": sum(pnls),
+            "avg": sum(pnls) / len(pnls) if pnls else 0,
+        })
+    rows.sort(key=lambda r: r["total"])
+    return rows
 
 
 def db_vs_bybit_diff(db_trades: list[dict],
@@ -416,12 +472,14 @@ def render_markdown(
     lines.append("## 2. PnL by symbol (worst 10 + best 5)")
     lines.append("")
     if sym_rows:
-        lines.append("| Symbol | N | Total | Avg | Best | Worst |")
-        lines.append("|---|---|---|---|---|---|")
+        lines.append("| Symbol | N | W/L | WinRate | Total | Avg | Best | Worst |")
+        lines.append("|---|---|---|---|---|---|---|---|")
         for r in (sym_rows[:10] + sym_rows[-5:]):
             lines.append(
-                f"| {r['symbol']} | {r['n']} | {r['total']:+.2f} | "
-                f"{r['avg']:+.2f} | {r['best']:+.2f} | {r['worst']:+.2f} |"
+                f"| {r['symbol']} | {r['n']} | {r['wins']}/{r['losses']} | "
+                f"{r['win_rate']:.0f}% | "
+                f"{r['total']:+.2f} | {r['avg']:+.2f} | "
+                f"{r['best']:+.2f} | {r['worst']:+.2f} |"
             )
     lines.append("")
 
@@ -429,21 +487,40 @@ def render_markdown(
     chan_rows, unmatched_pnl, unmatched_n = per_channel_pnl(
         closed, db_trades, db_signals,
     )
-    lines.append("## 3. PnL by source channel")
+    lines.append("## 3. PnL by source channel (Phase 6.C.3 — audit #22)")
     lines.append("")
     if chan_rows:
-        lines.append("| Channel | N | Total | Avg |")
-        lines.append("|---|---|---|---|")
+        lines.append("| Channel | N | W/L | WinRate | Total | Avg |")
+        lines.append("|---|---|---|---|---|---|")
         for r in chan_rows:
             lines.append(
-                f"| {r['channel']} | {r['n']} | "
+                f"| {r['channel']} | {r['n']} | {r['wins']}/{r['losses']} | "
+                f"{r['win_rate']:.0f}% | "
                 f"{r['total']:+.2f} | {r['avg']:+.2f} |"
             )
     lines.append("")
     lines.append(
         f"_Unmatched (no signal_id link): {unmatched_n} closed records, "
-        f"{unmatched_pnl:+.2f} USDT PnL._"
+        f"{unmatched_pnl:+.2f} USDT PnL — usually flatten-script closes._"
     )
+    lines.append("")
+
+    # Per-signal-type — concentration by classification (audit #8).
+    type_rows = per_signal_type_pnl(closed, db_trades, db_signals)
+    lines.append("## 3b. PnL by signal_type (Phase 6.C.3 — audit #8)")
+    lines.append("")
+    if type_rows:
+        lines.append("| Type | N | W/L | WinRate | Total | Avg |")
+        lines.append("|---|---|---|---|---|---|")
+        for r in type_rows:
+            lines.append(
+                f"| {r['signal_type']} | {r['n']} | "
+                f"{r['wins']}/{r['losses']} | "
+                f"{r['win_rate']:.0f}% | "
+                f"{r['total']:+.2f} | {r['avg']:+.2f} |"
+            )
+    else:
+        lines.append("_No matched signals in window._")
     lines.append("")
 
     # DB vs Bybit diff.
