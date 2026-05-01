@@ -441,6 +441,14 @@ class PositionManager:
         # far from the signal's entry price. Prevents placing orders on
         # stale signals where the market has already moved through the
         # TP or SL zone - the main cause of the PROMUSDT liquidation.
+        # Also functions as the "symbol delisted" check — if get_ticker
+        # raises 'No ticker data', the symbol isn't tradable on Bybit
+        # (e.g. FETUSDT was delisted after the FET+AGIX+OCEAN merger
+        # — Bybit returns ErrCode 110074 'contract is not live').
+        # We early-reject in that case with the deduped 'Finns inte
+        # på bybit' notification, instead of silently swallowing the
+        # error and letting the failure cascade through set_leverage
+        # + place_market_order (each emitting its own notification).
         try:
             ticker = await self._bybit.get_ticker(symbol)
             if ticker:
@@ -474,7 +482,43 @@ class PositionManager:
                                 f"📍 Signalen är för gammal / marknad har redan flyttat."
                             )
                         return None
-        except Exception:
+        except Exception as exc:
+            err_str = str(exc).lower()
+            # Detect "symbol not on Bybit" specifically. Two signal
+            # patterns from Bybit / our adapter:
+            #   - "No ticker data for X"  (adapter raises this when
+            #     get_ticker returns empty/None)
+            #   - "contract is not live"   (Bybit ErrCode 110074)
+            #   - "symbol is not exists"   (some Bybit error variants)
+            if (
+                "no ticker data" in err_str
+                or "not live" in err_str
+                or "not exists" in err_str
+                or "110074" in err_str
+            ):
+                log.info(
+                    "signal.symbol_not_on_bybit",
+                    symbol=symbol,
+                    direction=direction,
+                    channel_name=channel_name,
+                    error=err_str[:120],
+                )
+                if self._should_send_reject_notify(
+                    "not_on_bybit", symbol, direction,
+                ):
+                    try:
+                        from telegram.notifier import _chan, _ts
+                        await self._safe_notify(
+                            f"⚠️ Finns inte på bybit ⚠️\n"
+                            f"🕒 Tid: {_ts()}\n"
+                            f"📢 Från kanal: {_chan(channel_name)}\n"
+                            f"📊 Symbol: #{symbol}\n"
+                            f"📈 Riktning: {direction}\n"
+                            f"📍 Fel: Kontrolera manuellt"
+                        )
+                    except Exception:
+                        log.exception("notify.not_on_bybit_failed")
+                return None
             log.exception("signal.slippage_check_error", symbol=symbol)
 
         # Round leverage to symbol's leverage step (keeps e.g. 12.34 precision).
