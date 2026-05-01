@@ -248,14 +248,29 @@ class BybitAdapter:
             # Non-fatal: we can still operate via REST polling
             self._ws_private = None
 
-        # --- Public WebSocket (for ticker / kline if needed later) ---
+        # --- Public WebSocket (for Last-price ticker stream).
+        # Bybit demo's public stream URL
+        # (wss://stream-demo.bybit.com/v5/public/linear) returns
+        # HTTP 404 from CloudFront — Bybit only hosts a public WS
+        # under stream-demo.bybit.com for the *private* topics; the
+        # market-data stream is the same mainnet stream regardless
+        # of demo vs live (demo uses real market prices, only the
+        # trading is simulated).
+        # Connect with demo=False so pybit picks the mainnet
+        # public WS URL (wss://stream.bybit.com/v5/public/linear),
+        # which serves the live market data we actually need for
+        # tick-driven decisions (profit-lock at +4%/+5%, hedge
+        # timeout, trailing-active notification).
         try:
             self._ws_public = WebSocket(
                 testnet=False,
-                demo=self._demo,
+                demo=False,
                 channel_type="linear",
             )
-            self._log.info("public_ws_connected")
+            self._log.info(
+                "public_ws_connected",
+                note="forced mainnet URL for market data (demo public WS returns 404)",
+            )
         except Exception:
             self._log.exception("public_ws_connect_failed")
             self._ws_public = None
