@@ -223,8 +223,27 @@ def find_ghosts(
 def find_orphan_orders(
     orders: list, positions: list,
 ) -> list[dict]:
-    """Bybit orders whose (symbol, positionIdx) doesn't match any open
-    position — leftover conditionals that should be cancelled."""
+    """Bybit orders that are TRULY orphan and safe to cancel.
+
+    Two correct categories of orphan:
+      A) The symbol has NO position in any positionIdx -> any order
+         on it (force-close, hedge pre-arm, leftover TP) is dead.
+      B) The order is reduce-only AND its positionIdx has no position
+         -> it's a leftover close-side conditional whose target is
+         already gone.
+
+    NOT orphan (must NEVER cancel):
+      - Hedge pre-arm conditional: NOT reduce-only, lives on the
+        OPPOSITE positionIdx from the active original position.
+        E.g. AAVE LONG at idx=1 + a Sell idx=2 conditional armed at
+        -1.5% — the Sell is the hedge pre-arm, NOT an orphan.
+      - Original-trade -2% force-close conditional: reduce-only on
+        the SAME positionIdx as the active position. (positionIdx
+        match -> already excluded by category A/B logic.)
+    """
+    # Symbols with at least one open position (any idx).
+    symbols_with_position = {p.get("symbol") for p in positions}
+    # (symbol, positionIdx) keys that have an open position.
     pos_keys = {
         (p.get("symbol"), int(p.get("positionIdx") or 0))
         for p in positions
@@ -236,17 +255,30 @@ def find_orphan_orders(
             idx = int(o.get("positionIdx") or 0)
         except (TypeError, ValueError):
             idx = 0
-        if (sym, idx) not in pos_keys:
-            out.append({
-                "symbol": sym,
-                "side": o.get("side"),
-                "position_idx": idx,
-                "order_id": o.get("orderId"),
-                "order_type": o.get("orderType"),
-                "qty": o.get("qty"),
-                "trigger_price": o.get("triggerPrice"),
-                "reduce_only": o.get("reduceOnly"),
-            })
+        reduce_only = bool(o.get("reduceOnly", False))
+        is_orphan = False
+        why = ""
+        if sym not in symbols_with_position:
+            # Category A: symbol fully closed.
+            is_orphan = True
+            why = "symbol_fully_closed"
+        elif reduce_only and (sym, idx) not in pos_keys:
+            # Category B: reduce-only on empty positionIdx.
+            is_orphan = True
+            why = "reduce_only_on_empty_idx"
+        if not is_orphan:
+            continue
+        out.append({
+            "symbol": sym,
+            "side": o.get("side"),
+            "position_idx": idx,
+            "order_id": o.get("orderId"),
+            "order_type": o.get("orderType"),
+            "qty": o.get("qty"),
+            "trigger_price": o.get("triggerPrice"),
+            "reduce_only": reduce_only,
+            "why": why,
+        })
     return out
 
 
@@ -320,11 +352,12 @@ def main() -> None:
             f"({g['reason']})"
         )
     print()
-    print(f"Orphan Bybit orders (no matching position): {len(orphan_orders)}")
+    print(f"Truly orphan Bybit orders (safe to cancel): {len(orphan_orders)}")
     for o in orphan_orders:
         print(
             f"  {o['symbol']:<12}  {o['side']:<5}  idx={o['position_idx']}  "
             f"trigger={o['trigger_price']}  qty={o['qty']}  "
+            f"reduce_only={o['reduce_only']}  why={o['why']}  "
             f"order_id={o['order_id']}"
         )
 
