@@ -1607,6 +1607,12 @@ class PositionManager:
             # Bybit fill, set SL+trailing on the hedge, persist to DB,
             # send Telegram. No race, no orphan, single source of truth.
             await self._maybe_activate_hedge_from_fill(order_id, data)
+            # Phase 4 (client 2026-05-01) — record ORIGINAL_FORCE_CLOSED
+            # state when the -2% conditional fires. The actual close
+            # bookkeeping (PnL + Telegram) still happens via
+            # _classify_bybit_close_fill -> close_trade below; this
+            # transition is purely for the audit trail.
+            await self._maybe_record_force_close_fill(order_id)
             # Strict architecture (client 2026-04-28): every close
             # notification and every close decision is driven by Bybit's
             # order-fill event, never by bot inference. Classify this
@@ -1615,6 +1621,37 @@ class PositionManager:
             # close reason on the trade. on_position_update will read
             # that reason when Bybit reports size=0 and call close_trade.
             await self._classify_bybit_close_fill(order_id, data)
+
+    async def _maybe_record_force_close_fill(self, order_id: str) -> None:
+        """Mark a trade as ORIGINAL_FORCE_CLOSED when its -2% Bybit
+        conditional fires. Audit-trail only — close_trade is still
+        the path that finalises PnL + Telegram.
+        """
+        if not order_id:
+            return
+        for tr in self._active_trades.values():
+            if (
+                getattr(tr, "original_force_close_order_id", None) == order_id
+                and not tr.is_terminal
+            ):
+                tr.transition(TradeState.ORIGINAL_FORCE_CLOSED)
+                log.info(
+                    "trade.original_force_close.fired",
+                    trade_id=tr.id,
+                    symbol=tr.signal.symbol if tr.signal else "",
+                    order_id=order_id,
+                )
+                # Clear the order id — once it has fired, it's no
+                # longer a valid Bybit reference.
+                tr.original_force_close_order_id = None
+                try:
+                    await self._db.update_trade(
+                        int(tr.id),
+                        original_force_close_order_id=None,
+                    )
+                except Exception:
+                    pass
+                return
 
     async def _maybe_activate_hedge_from_fill(
         self, order_id: str, data: dict,
@@ -2097,6 +2134,16 @@ class PositionManager:
                 continue
 
             trade.trailing_activated_notified = True
+            # Phase 4 (client 2026-05-01) — explicit TRAILING_ACTIVE
+            # state once Bybit's MarkPrice crosses activation. The
+            # state-machine transition is best-effort: if the trade is
+            # already in a deeper state (e.g. HEDGE_ACTIVE), the matrix
+            # will reject it and warn — that's fine, the activation is
+            # still reflected on the trade via trailing_activated_notified.
+            try:
+                trade.transition(TradeState.TRAILING_ACTIVE)
+            except Exception:
+                pass
             # Pull the live position fields off the same WS event.
             # Bybit-confirmed values only — never compute locally
             # (client 2026-04-28: "Värdet måste bekräftas från Bybit").
@@ -2190,6 +2237,13 @@ class PositionManager:
                 continue
 
             trade.last_trailing_stop_price = stop_loss
+            # Phase 4 — explicit TRAILING_UPDATED state on every
+            # Bybit-driven trailing-SL move. Self-loops (multiple
+            # consecutive updates) are allowed by the matrix.
+            try:
+                trade.transition(TradeState.TRAILING_UPDATED)
+            except Exception:
+                pass
             log.info(
                 "trade.trailing_updated",
                 trade_id=trade.id, symbol=symbol,

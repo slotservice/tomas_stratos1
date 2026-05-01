@@ -393,6 +393,16 @@ class HedgeManager:
                     )
                 except Exception:
                     pass
+                # Phase 4 (client 2026-05-01) — explicit HEDGE_ARMED
+                # state once the pre-arm conditional is on Bybit.
+                # The transition is best-effort: if the trade is in
+                # an unexpected state (e.g. already ORIGINAL_FORCE_
+                # CLOSED), the matrix will block it and warn.
+                try:
+                    from core.models import TradeState as _TS
+                    trade.transition(_TS.HEDGE_ARMED)
+                except Exception:
+                    pass
                 log.info(
                     "hedge.pre_armed_on_bybit",
                     trade_id=trade.id, symbol=symbol,

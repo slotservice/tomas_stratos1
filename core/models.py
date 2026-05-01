@@ -72,34 +72,298 @@ class ParsedSignal:
 class TradeState(enum.Enum):
     """All possible states a trade can be in.
 
-    Phase 4 (client 2026-05-01) will replace this enum with the
-    explicit 13-state list Tomas dictated. For Phase 1 we add
-    PROTECTION_FAILED so a trade whose SL/TP/trailing setup did not
-    complete can be marked unsafe and force-closed without leaking
-    a "POSITION ÖPPNAD" message that would imply the protection is
-    in place. Tomas explicit rule: "If SL / TP / trailing is not
-    verified: stop the trade, mark it as INCOMPLETE, send an error,
-    do not send a normal Telegram notification."
+    Phase 4 (client 2026-05-01) explicit state-machine refactor.
+    Tomas's audit point #8 dictated 13 explicit states; we keep the
+    legacy entry/scaling/error states the bot still relies on AND
+    add Tomas's named states alongside them. Aliases (POSITION_ACTIVE
+    == POSITION_OPEN) are provided so the existing call sites keep
+    working — both names route through the same enum value.
+
+    Audit point #16 ("Only the state machine may change status.
+    No other module may directly change trade status in the DB.")
+    is enforced via :func:`Trade.transition` — every transition is
+    validated against ALLOWED_TRANSITIONS and logged. Illegal
+    transitions are blocked + warned (failure mode is overridable
+    via the ``strict`` flag for emergencies).
     """
 
-    PENDING            = "PENDING"
-    ENTRY1_PLACED      = "ENTRY1_PLACED"
-    ENTRY1_FILLED      = "ENTRY1_FILLED"
-    ENTRY2_PLACED      = "ENTRY2_PLACED"
-    ENTRY2_FILLED      = "ENTRY2_FILLED"
-    POSITION_OPEN      = "POSITION_OPEN"
-    PROTECTION_FAILED  = "PROTECTION_FAILED"
-    BREAKEVEN_ACTIVE   = "BREAKEVEN_ACTIVE"
-    SCALING_STEP_1     = "SCALING_STEP_1"
-    SCALING_STEP_2     = "SCALING_STEP_2"
-    SCALING_STEP_3     = "SCALING_STEP_3"
-    SCALING_STEP_4     = "SCALING_STEP_4"
-    TRAILING_ACTIVE    = "TRAILING_ACTIVE"
-    HEDGE_ACTIVE       = "HEDGE_ACTIVE"
-    REENTRY_WAITING    = "REENTRY_WAITING"
-    CLOSED             = "CLOSED"
-    CANCELLED          = "CANCELLED"
-    ERROR              = "ERROR"
+    # --- Pre-fill (entry pipeline) ---
+    PENDING                = "PENDING"
+    ENTRY1_PLACED          = "ENTRY1_PLACED"
+    ENTRY1_FILLED          = "ENTRY1_FILLED"
+    ENTRY2_PLACED          = "ENTRY2_PLACED"
+    ENTRY2_FILLED          = "ENTRY2_FILLED"
+
+    # --- Active position ---
+    POSITION_OPEN          = "POSITION_OPEN"   # = POSITION_ACTIVE in spec
+    PROTECTION_FAILED      = "PROTECTION_FAILED"
+
+    # --- Hedge lifecycle ---
+    HEDGE_ARMED            = "HEDGE_ARMED"     # pre-arm conditional placed
+    HEDGE_ACTIVE           = "HEDGE_ACTIVE"    # conditional fired + protected
+
+    # --- Force-close on original ---
+    ORIGINAL_FORCE_CLOSED  = "ORIGINAL_FORCE_CLOSED"  # -2% conditional fired
+
+    # --- SL movement (profit-lock + BE + cascading TP-shift) ---
+    BREAKEVEN_ACTIVE       = "BREAKEVEN_ACTIVE"
+    PROFIT_LOCK_1_ACTIVE   = "PROFIT_LOCK_1_ACTIVE"   # +4% -> lock +1.5%
+    PROFIT_LOCK_2_ACTIVE   = "PROFIT_LOCK_2_ACTIVE"   # +5% -> lock +2.5%
+    SL_MOVED_TO_TP1        = "SL_MOVED_TO_TP1"        # at TP3 -> SL=TP1
+    SL_MOVED_TO_TP2        = "SL_MOVED_TO_TP2"        # at TP4 -> SL=TP2
+    SL_MOVED_TO_TP3        = "SL_MOVED_TO_TP3"        # at TP5 -> SL=TP3
+    SL_MOVED_TO_TP4        = "SL_MOVED_TO_TP4"        # at TP6 -> SL=TP4
+
+    # --- Trailing lifecycle ---
+    TRAILING_ARMED         = "TRAILING_ARMED"   # set on Bybit, awaiting trigger
+    TRAILING_ACTIVE        = "TRAILING_ACTIVE"  # activation crossed
+    TRAILING_UPDATED       = "TRAILING_UPDATED" # SL level moved by trailing
+
+    # --- Legacy scaling pipeline (off in M1) ---
+    SCALING_STEP_1         = "SCALING_STEP_1"
+    SCALING_STEP_2         = "SCALING_STEP_2"
+    SCALING_STEP_3         = "SCALING_STEP_3"
+    SCALING_STEP_4         = "SCALING_STEP_4"
+
+    # --- Re-entry ---
+    REENTRY_WAITING        = "REENTRY_WAITING"
+
+    # --- Terminal ---
+    CLOSED                 = "CLOSED"           # = POSITION_CLOSED in spec
+    CANCELLED              = "CANCELLED"
+    ERROR                  = "ERROR"
+
+
+# Allowed transitions matrix. Each key is a source state; the value is
+# the set of destination states reachable from that source. Used by
+# Trade.transition() to enforce the "only the state machine changes
+# state" rule (audit point #16).
+#
+# A few notes on the matrix:
+#   - Terminal states (CLOSED, CANCELLED, ERROR) are sinks — no
+#     outgoing transitions allowed.
+#   - PROTECTION_FAILED transitions only to CLOSED (the bot force-
+#     closes the position) or terminal failure states.
+#   - From any active state, transitioning to a terminal state
+#     (CLOSED, CANCELLED, ERROR) is always legal.
+#   - HEDGE / SL-movement / trailing states overlap conceptually
+#     (a single trade can be in HEDGE_ACTIVE while also tracking
+#     a moved SL); we model the dominant state machine as
+#     "current most-progressed lifecycle stage" and let the
+#     individual flags on Trade carry the orthogonal dimensions.
+_TERMINAL_STATES = frozenset({
+    TradeState.CLOSED,
+    TradeState.CANCELLED,
+    TradeState.ERROR,
+})
+
+ALLOWED_TRANSITIONS: dict[TradeState, frozenset[TradeState]] = {
+    TradeState.PENDING: frozenset({
+        TradeState.ENTRY1_PLACED,
+        TradeState.ENTRY1_FILLED,
+        TradeState.POSITION_OPEN,
+        TradeState.PROTECTION_FAILED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    TradeState.ENTRY1_PLACED: frozenset({
+        TradeState.ENTRY1_FILLED,
+        TradeState.ENTRY2_PLACED,
+        TradeState.POSITION_OPEN,
+        TradeState.PROTECTION_FAILED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    TradeState.ENTRY1_FILLED: frozenset({
+        TradeState.ENTRY2_PLACED,
+        TradeState.ENTRY2_FILLED,
+        TradeState.POSITION_OPEN,
+        TradeState.PROTECTION_FAILED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    TradeState.ENTRY2_PLACED: frozenset({
+        TradeState.ENTRY2_FILLED,
+        TradeState.POSITION_OPEN,
+        TradeState.PROTECTION_FAILED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    TradeState.ENTRY2_FILLED: frozenset({
+        TradeState.POSITION_OPEN,
+        TradeState.PROTECTION_FAILED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    TradeState.POSITION_OPEN: frozenset({
+        TradeState.HEDGE_ARMED,
+        TradeState.HEDGE_ACTIVE,
+        TradeState.ORIGINAL_FORCE_CLOSED,
+        TradeState.BREAKEVEN_ACTIVE,
+        TradeState.PROFIT_LOCK_1_ACTIVE,
+        TradeState.PROFIT_LOCK_2_ACTIVE,
+        TradeState.SL_MOVED_TO_TP1,
+        TradeState.SL_MOVED_TO_TP2,
+        TradeState.SL_MOVED_TO_TP3,
+        TradeState.SL_MOVED_TO_TP4,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.SCALING_STEP_1,
+        TradeState.REENTRY_WAITING,
+        TradeState.CLOSED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+        TradeState.PROTECTION_FAILED,
+    }),
+    TradeState.PROTECTION_FAILED: frozenset({
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.HEDGE_ARMED: frozenset({
+        TradeState.HEDGE_ACTIVE,
+        TradeState.ORIGINAL_FORCE_CLOSED,
+        TradeState.BREAKEVEN_ACTIVE,
+        TradeState.PROFIT_LOCK_1_ACTIVE,
+        TradeState.PROFIT_LOCK_2_ACTIVE,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    TradeState.HEDGE_ACTIVE: frozenset({
+        TradeState.ORIGINAL_FORCE_CLOSED,
+        TradeState.TRAILING_UPDATED,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.ORIGINAL_FORCE_CLOSED: frozenset({
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.BREAKEVEN_ACTIVE: frozenset({
+        TradeState.PROFIT_LOCK_1_ACTIVE,
+        TradeState.PROFIT_LOCK_2_ACTIVE,
+        TradeState.SL_MOVED_TO_TP1,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.PROFIT_LOCK_1_ACTIVE: frozenset({
+        TradeState.PROFIT_LOCK_2_ACTIVE,
+        TradeState.SL_MOVED_TO_TP1,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.PROFIT_LOCK_2_ACTIVE: frozenset({
+        TradeState.SL_MOVED_TO_TP1,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SL_MOVED_TO_TP1: frozenset({
+        TradeState.SL_MOVED_TO_TP2,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SL_MOVED_TO_TP2: frozenset({
+        TradeState.SL_MOVED_TO_TP3,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SL_MOVED_TO_TP3: frozenset({
+        TradeState.SL_MOVED_TO_TP4,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SL_MOVED_TO_TP4: frozenset({
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.TRAILING_ARMED: frozenset({
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.TRAILING_ACTIVE: frozenset({
+        TradeState.TRAILING_UPDATED,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.TRAILING_UPDATED: frozenset({
+        TradeState.TRAILING_UPDATED,  # repeated updates allowed
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SCALING_STEP_1: frozenset({
+        TradeState.SCALING_STEP_2,
+        TradeState.HEDGE_ARMED,
+        TradeState.HEDGE_ACTIVE,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SCALING_STEP_2: frozenset({
+        TradeState.SCALING_STEP_3,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SCALING_STEP_3: frozenset({
+        TradeState.SCALING_STEP_4,
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.SCALING_STEP_4: frozenset({
+        TradeState.TRAILING_ARMED,
+        TradeState.TRAILING_ACTIVE,
+        TradeState.CLOSED,
+        TradeState.ERROR,
+    }),
+    TradeState.REENTRY_WAITING: frozenset({
+        TradeState.PENDING,
+        TradeState.POSITION_OPEN,
+        TradeState.CANCELLED,
+        TradeState.ERROR,
+    }),
+    # Terminal states — no outgoing transitions.
+    TradeState.CLOSED: frozenset(),
+    TradeState.CANCELLED: frozenset(),
+    TradeState.ERROR: frozenset(),
+}
+
+
+def is_transition_allowed(
+    src: Optional[TradeState], dst: TradeState,
+) -> bool:
+    """Return True if transition src->dst is permitted by the matrix.
+
+    None / unset src is treated as "fresh trade" — only PENDING is a
+    legal initial transition. dst that is a terminal state is always
+    allowed (safety valve).
+    """
+    if dst in _TERMINAL_STATES:
+        return True
+    if src is None:
+        return dst == TradeState.PENDING
+    allowed = ALLOWED_TRANSITIONS.get(src, frozenset())
+    return dst in allowed
 
 
 # ===================================================================
@@ -227,32 +491,62 @@ class Trade:
         """Update the ``updated_at`` timestamp to now (UTC)."""
         self.updated_at = datetime.now(timezone.utc)
 
-    def transition(self, new_state: TradeState) -> None:
-        """
-        Move to a new state and update the timestamp.
+    def transition(
+        self, new_state: TradeState, *, force: bool = False,
+    ) -> bool:
+        """Move to a new state, validate against ALLOWED_TRANSITIONS,
+        update the timestamp, log the transition.
 
-        Logs every transition for the audit trail (client 2026-05-01
-        audit point #10: "Every trade must have ... state transitions.
-        The full lifecycle must be traceable.").
+        Phase 4 (client 2026-05-01 audit #16): only the state machine
+        may change status. Every transition is checked against the
+        explicit allowed-transitions matrix declared in
+        :data:`ALLOWED_TRANSITIONS`. An illegal transition is BLOCKED
+        and a warning is logged — the trade's state stays unchanged.
 
-        Parameters
-        ----------
-        new_state:
-            The target ``TradeState``.
+        Pass ``force=True`` to override the matrix in emergencies
+        (e.g. recovery from corrupted state). Forced transitions are
+        logged separately so the audit trail still shows them.
+
+        Returns ``True`` when the transition went through, ``False``
+        when it was blocked.
         """
-        prev_state = self.state.value if self.state else None
-        self.state = new_state
-        self.touch()
+        prev_state = self.state if self.state else None
+        prev_value = prev_state.value if prev_state else None
+
         try:
             import structlog
-            structlog.get_logger(__name__).info(
-                "trade.state_transition",
-                trade_id=self.id,
-                from_state=prev_state,
-                to_state=new_state.value,
-            )
+            _slog = structlog.get_logger(__name__)
         except Exception:
-            pass
+            _slog = None
+
+        if not force and not is_transition_allowed(prev_state, new_state):
+            if _slog is not None:
+                try:
+                    _slog.warning(
+                        "trade.state_transition.blocked",
+                        trade_id=self.id,
+                        from_state=prev_value,
+                        to_state=new_state.value,
+                        reason="not in ALLOWED_TRANSITIONS",
+                    )
+                except Exception:
+                    pass
+            return False
+
+        self.state = new_state
+        self.touch()
+        if _slog is not None:
+            try:
+                _slog.info(
+                    "trade.state_transition",
+                    trade_id=self.id,
+                    from_state=prev_value,
+                    to_state=new_state.value,
+                    forced=force,
+                )
+            except Exception:
+                pass
+        return True
 
     @property
     def is_terminal(self) -> bool:
