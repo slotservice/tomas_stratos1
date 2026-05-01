@@ -135,6 +135,32 @@ def fetch_db_signals(db_path: str) -> dict[int, dict]:
     return rows
 
 
+def fetch_configured_channels() -> list[str]:
+    """Read every channel name from telegram_groups.toml. Used to show
+    'all configured channels' (with 0 rows for inactive ones) in the
+    per-channel report — client request 2026-05-02."""
+    groups_path = PROJECT_ROOT / "telegram_groups.toml"
+    if not groups_path.exists():
+        return []
+    out: list[str] = []
+    try:
+        try:
+            import tomllib  # py311+
+            with open(groups_path, "rb") as f:
+                data = tomllib.load(f)
+        except ImportError:
+            import tomli as tomllib  # type: ignore
+            with open(groups_path, "rb") as f:
+                data = tomllib.load(f)
+        for g in data.get("groups", []) or []:
+            name = g.get("name")
+            if name:
+                out.append(str(name))
+    except Exception as exc:
+        print(f"  warn: couldn't read telegram_groups.toml: {exc}")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
@@ -539,9 +565,19 @@ def render_markdown(
     lines.append("")
 
     # Per-channel — channel-quality check.
+    # Client 2026-05-02: show ALL configured channels in the table
+    # (even ones with 0 closed trades in the window) so it's
+    # transparent which channels the bot is listening to vs which
+    # actually produced trades. Hedge tags ("(hedge)") are kept
+    # separate; configured-but-inactive channels show "(0 trades)".
     chan_rows, unmatched_pnl, unmatched_n = per_channel_pnl(
         closed, db_trades, db_signals,
     )
+    configured = fetch_configured_channels()
+    seen_chan_names = {
+        r["channel"].replace(" (hedge)", "") for r in chan_rows
+    }
+    inactive = sorted(c for c in configured if c not in seen_chan_names)
     lines.append("## 3. PnL by source channel (Phase 6.C.3 — audit #22)")
     lines.append("")
     if chan_rows:
@@ -553,7 +589,24 @@ def render_markdown(
                 f"{r['win_rate']:.0f}% | "
                 f"{r['total']:+.2f} | {r['avg']:+.2f} |"
             )
+        for name in inactive:
+            lines.append(
+                f"| {name} | 0 | 0/0 | n/a | +0.00 | n/a |"
+            )
+    else:
+        lines.append("_No closed trades from any channel in the window._")
+        if inactive:
+            lines.append("")
+            lines.append(
+                f"_({len(inactive)} channels are configured but inactive "
+                f"in the window.)_"
+            )
     lines.append("")
+    lines.append(
+        f"_Active channels: {len(chan_rows)}  ·  "
+        f"Configured-but-inactive: {len(inactive)}  ·  "
+        f"Total configured: {len(configured)}._"
+    )
     lines.append(
         f"_Unmatched (no signal_id link): {unmatched_n} closed records, "
         f"{unmatched_pnl:+.2f} USDT PnL — usually flatten-script closes._"
@@ -561,21 +614,37 @@ def render_markdown(
     lines.append("")
 
     # Per-signal-type — concentration by classification (audit #8).
+    # Client 2026-05-02: always show all 3 signal_types (dynamic /
+    # swing / fixed) even when one is empty, so it's visible that
+    # the bot considered all categories. `fixed` only fires for
+    # auto-SL trades (no SL in the signal); `dynamic` and `swing`
+    # come from real-SL signals classified by SL distance.
     type_rows = per_signal_type_pnl(closed, db_trades, db_signals)
+    seen_types = {r["signal_type"] for r in type_rows}
+    for missing in ("dynamic", "swing", "fixed"):
+        if missing not in seen_types:
+            type_rows.append({
+                "signal_type": missing,
+                "n": 0, "wins": 0, "losses": 0,
+                "win_rate": 0.0, "total": 0.0, "avg": 0.0,
+            })
+    type_rows.sort(key=lambda r: r["total"])
     lines.append("## 3b. PnL by signal_type (Phase 6.C.3 — audit #8)")
     lines.append("")
-    if type_rows:
-        lines.append("| Type | N | W/L | WinRate | Total | Avg |")
-        lines.append("|---|---|---|---|---|---|")
-        for r in type_rows:
+    lines.append("| Type | N | W/L | WinRate | Total | Avg |")
+    lines.append("|---|---|---|---|---|---|")
+    for r in type_rows:
+        if r["n"] == 0:
+            lines.append(
+                f"| {r['signal_type']} | 0 | 0/0 | n/a | +0.00 | n/a |"
+            )
+        else:
             lines.append(
                 f"| {r['signal_type']} | {r['n']} | "
                 f"{r['wins']}/{r['losses']} | "
                 f"{r['win_rate']:.0f}% | "
                 f"{r['total']:+.2f} | {r['avg']:+.2f} |"
             )
-    else:
-        lines.append("_No matched signals in window._")
     lines.append("")
 
     # DB vs Bybit diff.
