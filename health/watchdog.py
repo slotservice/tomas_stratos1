@@ -741,6 +741,20 @@ class HealthChecker:
                         be_price=trade.get("be_price"),
                         trailing_sl=trade.get("trailing_sl"),
                         hedge_trade_id=trade.get("hedge_trade_id"),
+                        # 2026-05-02 fix: also restore the hedge pre-arm
+                        # and the -2% force-close conditional order IDs.
+                        # Without these, after a restart reverse_reconcile
+                        # treats a pre-armed-but-not-yet-fired hedge slot
+                        # as untracked (TRBUSDT incident 2026-05-02:
+                        # OBEVAKAD POSITION every cycle for ~1h after
+                        # the bot restarted between hedge pre-arm and
+                        # hedge fire).
+                        hedge_conditional_order_id=trade.get(
+                            "hedge_conditional_order_id"
+                        ),
+                        original_force_close_order_id=trade.get(
+                            "original_force_close_order_id"
+                        ),
                         reentry_count=int(trade.get("reentry_count") or 0),
                         scaling_step=int(trade.get("scaling_step") or 0),
                         tp_hits=[float(t) for t in tp_hits if t],
