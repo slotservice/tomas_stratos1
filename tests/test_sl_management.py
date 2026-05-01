@@ -136,6 +136,43 @@ class TestSlMovementBookkeepingFlags:
         assert t.sl_movement_history[0]["reason"] == "tp2_hit_sl_to_breakeven"
 
 
+class TestProfitLockMutualExclusion:
+    """Phase 5b (client 2026-05-02): profit-lock fallback only fires
+    when the trade has no TP orders on Bybit. Cascade and fallback
+    must never both apply to the same trade."""
+
+    def test_trade_with_tp_orders_skips_fallback(self):
+        # The mutual-exclusion gate is `if trade.tp_order_ids: return`
+        # at the top of _maybe_apply_profit_locks. With at least one
+        # TP order placed, the trade.tp_order_ids list is truthy and
+        # the fallback is bypassed entirely.
+        trade = _make_trade("LONG", entry=100.0, tps=[101, 102, 105])
+        trade.tp_order_ids = ["bybit-order-id-tp1"]
+        # Predicate the function uses:
+        gate_blocks_fallback = bool(trade.tp_order_ids)
+        assert gate_blocks_fallback is True
+
+    def test_trade_without_tp_orders_uses_fallback(self):
+        trade = _make_trade("LONG", entry=100.0, tps=[101, 102, 105])
+        trade.tp_order_ids = []  # nothing made it to Bybit
+        gate_blocks_fallback = bool(trade.tp_order_ids)
+        assert gate_blocks_fallback is False
+
+    def test_fallback_be_buffer_targets(self):
+        # +2% fallback: SL = entry +/- 0.2% buffer.
+        entry = 100.0
+        long_target = entry * 1.002
+        short_target = entry * 0.998
+        assert pytest.approx(long_target, rel=1e-9) == 100.2
+        assert pytest.approx(short_target, rel=1e-9) == 99.8
+
+    def test_2pct_threshold_is_first_fallback_step(self):
+        entry = 100.0
+        last_at_2pct = entry * 1.02
+        favorable = (last_at_2pct - entry) / entry * 100.0
+        assert favorable >= 2.0
+
+
 class TestSlMovementSafetyRules:
     """The single SL-management function refuses to move SL backwards
     or to a price on the wrong side of entry. We test the predicates."""

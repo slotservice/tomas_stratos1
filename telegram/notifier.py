@@ -480,15 +480,21 @@ class TelegramNotifier:
         direction = signal.direction if signal else "?"
         entry = trade.avg_entry or (signal.entry if signal else 0)
 
-        # Human label per reason.
+        # Human label per reason. Cascade reasons (TP-driven) are the
+        # primary path; fallback_* reasons are the fixed-percentage
+        # path that fires only when no TP orders are on Bybit (client
+        # 2026-05-02 mutual-exclusion rule).
         label_map = {
-            "tp2_hit_sl_to_breakeven": "🟢 BREAK-EVEN aktiverad (TP2 träffad)",
-            "tp3_hit_sl_to_tp1":       "🔼 SL flyttad till TP1 (TP3 träffad)",
-            "tp4_hit_sl_to_tp2":       "🔼 SL flyttad till TP2 (TP4 träffad)",
-            "tp5_hit_sl_to_tp3":       "🔼 SL flyttad till TP3 (TP5 träffad)",
-            "tp6_hit_sl_to_tp4":       "🔼 SL flyttad till TP4 (TP6 träffad)",
-            "profit_lock_1_at_4pct":   "🔒 PROFIT-LOCK 1 (+4 % rörelse → SL +1,5 %)",
-            "profit_lock_2_at_5pct":   "🔒 PROFIT-LOCK 2 (+5 % rörelse → SL +2,5 %)",
+            # Primary cascade (TP-driven)
+            "tp2_hit_sl_to_breakeven":      "🟢 BREAK-EVEN aktiverad (TP2 träffad)",
+            "tp3_hit_sl_to_tp1":            "🔼 SL flyttad till TP1 (TP3 träffad)",
+            "tp4_hit_sl_to_tp2":            "🔼 SL flyttad till TP2 (TP4 träffad)",
+            "tp5_hit_sl_to_tp3":            "🔼 SL flyttad till TP3 (TP5 träffad)",
+            "tp6_hit_sl_to_tp4":            "🔼 SL flyttad till TP4 (TP6 träffad)",
+            # Fallback ladder (only when signal has no TP orders)
+            "fallback_be_buffer_at_2pct":   "🟢 BE + buffer (+2 % rörelse, fallback)",
+            "fallback_profit_lock_1_at_4pct": "🔒 PROFIT-LOCK 1 (+4 % rörelse → SL +1,5 %, fallback)",
+            "fallback_profit_lock_2_at_5pct": "🔒 PROFIT-LOCK 2 (+5 % rörelse → SL +2,5 %, fallback)",
         }
         header = label_map.get(reason, f"🔼 SL FLYTTAD ({reason})")
 

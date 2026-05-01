@@ -2286,17 +2286,36 @@ class PositionManager:
         trade: "Trade",
         last_price: float,
     ) -> None:
-        """Profit-lock SL moves (client 2026-05-01 spec):
-          +4% favorable -> SL to entry +/- 1.5%
-          +5% favorable -> SL to entry +/- 2.5%
+        """Profit-lock SL moves — FALLBACK ONLY when TP-cascade isn't
+        available (client 2026-05-02 clarification: "Move SL based on
+        TP levels first. As a fallback, if TP levels are not
+        available, use fixed thresholds: 4%, 5%, and 2%, or 2% to
+        break-even plus buffer. Both should not apply at the same
+        time.").
 
-        Triggered from the price-tick handler. LastPrice driven.
-        Idempotent via ``profit_lock_1_active`` / ``profit_lock_2_active``.
-        Both locks can fire on the same trade (5% implies 4% was reached
-        first).
+        Mutual-exclusion rule: if the trade has at least one
+        partial-TP conditional placed on Bybit, the TP-cascade is the
+        SL-management path for this trade and profit-lock stays off.
+        Profit-lock fires only for trades where no TP orders made it
+        to Bybit (signal had no TPs, all TPs were merged into trailing,
+        all were below the 2% min-distance, or a direction mismatch).
+
+        Fallback ladder when active:
+          +2 % favorable -> SL = entry +/- 0.2 % (BE + small buffer)
+          +4 % favorable -> SL = entry +/- 1.5 %
+          +5 % favorable -> SL = entry +/- 2.5 %
+
+        Each step idempotent via flags on the trade. Higher steps
+        override lower ones (5% implies 4% implies 2% were already
+        reached and the SL keeps marching forward — never backwards).
         """
         if trade.signal is None or trade.is_terminal:
             return
+
+        # Mutual exclusion: cascade-only when TPs are on Bybit.
+        if trade.tp_order_ids:
+            return
+
         avg_entry = trade.avg_entry or trade.signal.entry or 0
         if avg_entry <= 0 or last_price <= 0:
             return
@@ -2308,7 +2327,26 @@ class PositionManager:
         if favorable_pct <= 0:
             return
 
-        # PROFIT LOCK 1: +4% trade movement -> SL at entry +1.5% / -1.5%
+        # FALLBACK STEP 0: +2% trade movement -> SL = entry +/- 0.2%
+        # (BE + small buffer for fees/slippage). Reuses sl_moved_to_be
+        # so the cascade BE flag also blocks this if the cascade ever
+        # somehow ran (defence against future code drift).
+        if favorable_pct >= 2.0 and not trade.sl_moved_to_be:
+            buffer_pct = 0.002  # 0.2% buffer past entry
+            if direction == "LONG":
+                new_sl = avg_entry * (1 + buffer_pct)
+            else:
+                new_sl = avg_entry * (1 - buffer_pct)
+            applied = await self._move_sl_to(
+                trade,
+                new_sl,
+                TradeState.BREAKEVEN_ACTIVE,
+                "fallback_be_buffer_at_2pct",
+            )
+            if applied:
+                trade.sl_moved_to_be = True
+
+        # FALLBACK STEP 1: +4% trade movement -> SL at entry +/- 1.5%
         if favorable_pct >= 4.0 and not trade.profit_lock_1_active:
             if direction == "LONG":
                 new_sl = avg_entry * 1.015
@@ -2318,12 +2356,12 @@ class PositionManager:
                 trade,
                 new_sl,
                 TradeState.PROFIT_LOCK_1_ACTIVE,
-                "profit_lock_1_at_4pct",
+                "fallback_profit_lock_1_at_4pct",
             )
             if applied:
                 trade.profit_lock_1_active = True
 
-        # PROFIT LOCK 2: +5% trade movement -> SL at entry +2.5% / -2.5%
+        # FALLBACK STEP 2: +5% trade movement -> SL at entry +/- 2.5%
         if favorable_pct >= 5.0 and not trade.profit_lock_2_active:
             if direction == "LONG":
                 new_sl = avg_entry * 1.025
@@ -2333,7 +2371,7 @@ class PositionManager:
                 trade,
                 new_sl,
                 TradeState.PROFIT_LOCK_2_ACTIVE,
-                "profit_lock_2_at_5pct",
+                "fallback_profit_lock_2_at_5pct",
             )
             if applied:
                 trade.profit_lock_2_active = True
