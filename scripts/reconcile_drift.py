@@ -379,6 +379,12 @@ def protect_untracked_position(
 
     For SHORT (Sell): SL above entry.
     For LONG  (Buy):  SL below entry.
+
+    Fallback: if Bybit rejects the SL because price has already
+    moved past it ("StopLoss ... should greater/less than base_price"),
+    retry with trailing-only — at least the position gets a profit-
+    lock mechanism. Without trailing the position would ride to
+    liquidation unsupervised.
     """
     sym = pos["symbol"]
     side = pos["side"]
@@ -394,6 +400,7 @@ def protect_untracked_position(
     else:
         sl_price = round(avg * (1 - sl_pct), 8)
     trailing_distance = round(avg * tr_pct, 8)
+    # First attempt: SL + trailing.
     try:
         client.set_trading_stop(
             category="linear",
@@ -405,8 +412,35 @@ def protect_untracked_position(
         )
         return True
     except Exception as exc:
+        msg = str(exc)
+        # Detect "SL would trigger immediately" — the spec error
+        # signature is "should greater/less than base_price". Other
+        # errors (auth, network) propagate as failure.
+        if "base_price" not in msg and "session_average_price" not in msg:
+            print(
+                f"  set_trading_stop failed for {sym} idx={idx}: {exc}",
+                file=sys.stderr,
+            )
+            return False
         print(
-            f"  set_trading_stop failed for {sym} idx={idx}: {exc}",
+            f"  SL rejected for {sym} idx={idx} (price moved past it). "
+            f"Retrying with trailing-only ...",
+            file=sys.stderr,
+        )
+
+    # Fallback: trailing-only.
+    try:
+        client.set_trading_stop(
+            category="linear",
+            symbol=sym,
+            positionIdx=idx,
+            trailingStop=str(trailing_distance),
+            slTriggerBy="LastPrice",
+        )
+        return True
+    except Exception as exc2:
+        print(
+            f"  trailing-only fallback ALSO failed for {sym} idx={idx}: {exc2}",
             file=sys.stderr,
         )
         return False
