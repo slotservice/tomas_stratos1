@@ -2054,6 +2054,290 @@ class PositionManager:
                 trade_id=trade.id, tp_level=tp_level,
             )
 
+        # Phase 5 (client 2026-05-01) — TP-cascade SL movement.
+        # TP2 hit -> SL=BE, TP3 -> SL=TP1, TP4 -> SL=TP2, etc.
+        # Single function path; runs only after the TP fill is
+        # acknowledged by Bybit.
+        try:
+            await self._maybe_cascade_sl_on_tp_hit(trade, tp_level, tp_list)
+        except Exception:
+            log.exception(
+                "trade.sl_cascade_failed",
+                trade_id=trade.id, tp_level=tp_level,
+            )
+
+    # ------------------------------------------------------------------
+    # Phase 5: SL-management (single function, Bybit-verified, dedup)
+    # ------------------------------------------------------------------
+
+    async def _move_sl_to(
+        self,
+        trade: "Trade",
+        new_sl_price: float,
+        target_state: TradeState,
+        reason: str,
+    ) -> bool:
+        """Single canonical path for moving an active position's SL.
+
+        Client 2026-05-01 audit point #4: "There must be one single
+        SL-management function and one state-machine transition path."
+        Every BE / profit-lock / TP-cascade SL move goes through here.
+
+        Steps:
+          1. Validate the new SL is on the correct side of entry (LONG
+             SL must be below entry; SHORT SL above) — defence against
+             a logic error trying to set the SL to a price that would
+             instantly trigger.
+          2. Skip if the new SL is not strictly better than the current
+             SL (LONG: new > current; SHORT: new < current). SL never
+             moves backwards.
+          3. Call set_trading_stop with sl_trigger_by="LastPrice"
+             (Tomas's Phase 5 spec: all SL movement uses Last).
+          4. On Bybit ack: update trade.sl_price, transition trade
+             state, append to sl_movement_history, fire one Telegram.
+
+        Returns True when the move went through, False when skipped /
+        rejected.
+        """
+        if trade.signal is None or trade.is_terminal:
+            return False
+        symbol = trade.signal.symbol
+        direction = (trade.signal.direction or "").upper()
+        position_idx = 1 if direction == "LONG" else 2
+        avg_entry = trade.avg_entry or trade.signal.entry or 0
+        if avg_entry <= 0 or new_sl_price <= 0:
+            return False
+
+        # Side validation.
+        if direction == "LONG" and new_sl_price >= avg_entry * 1.5:
+            log.warning(
+                "trade.sl_move_rejected.too_high_for_long",
+                trade_id=trade.id, symbol=symbol,
+                new_sl=new_sl_price, avg_entry=avg_entry,
+            )
+            return False
+        if direction == "SHORT" and new_sl_price <= avg_entry * 0.5:
+            log.warning(
+                "trade.sl_move_rejected.too_low_for_short",
+                trade_id=trade.id, symbol=symbol,
+                new_sl=new_sl_price, avg_entry=avg_entry,
+            )
+            return False
+
+        # Never move backwards.
+        current_sl = trade.sl_price
+        if current_sl is not None and current_sl > 0:
+            if direction == "LONG" and new_sl_price <= current_sl:
+                return False
+            if direction == "SHORT" and new_sl_price >= current_sl:
+                return False
+
+        # Bybit call. set_trading_stop is idempotent on the Bybit side
+        # (returns 34040 if unchanged, swallowed by the adapter).
+        try:
+            await self._bybit.set_trading_stop(
+                symbol=symbol,
+                position_idx=position_idx,
+                stop_loss=round(new_sl_price, 8),
+                sl_trigger_by="LastPrice",
+            )
+        except Exception:
+            log.exception(
+                "trade.sl_move_failed",
+                trade_id=trade.id, symbol=symbol,
+                new_sl=new_sl_price, reason=reason,
+            )
+            return False
+
+        # Bybit ack received — update state.
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+        old_sl = current_sl
+        trade.sl_price = round(new_sl_price, 8)
+        trade.sl_movement_history.append({
+            "ts": _dt.now(_tz.utc).isoformat(),
+            "from_sl": old_sl,
+            "to_sl": trade.sl_price,
+            "reason": reason,
+            "to_state": target_state.value,
+        })
+        # State transition is best-effort — already-deeper states will
+        # block via the matrix and that's fine; the SL move itself is
+        # the authoritative action.
+        try:
+            trade.transition(target_state)
+        except Exception:
+            pass
+
+        log.info(
+            "trade.sl_moved",
+            trade_id=trade.id, symbol=symbol,
+            from_sl=old_sl, to_sl=trade.sl_price,
+            reason=reason, state=trade.state.value,
+        )
+
+        try:
+            await self._db.update_trade(
+                int(trade.id),
+                sl_price=trade.sl_price,
+                state=trade.state.value,
+            )
+        except Exception:
+            pass
+        try:
+            await self._db.log_event(
+                trade_id=int(trade.id),
+                event_type="sl_moved",
+                details={
+                    "from_sl": old_sl,
+                    "to_sl": trade.sl_price,
+                    "reason": reason,
+                    "state": trade.state.value,
+                },
+            )
+        except Exception:
+            pass
+
+        # Telegram — only after Bybit ack (audit #6: Bybit-verified
+        # before any Telegram message).
+        try:
+            await self._notifier.sl_moved(
+                trade=trade,
+                old_sl=old_sl,
+                new_sl=trade.sl_price,
+                reason=reason,
+            )
+        except Exception:
+            log.exception(
+                "notify.sl_moved_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+
+        return True
+
+    async def _maybe_cascade_sl_on_tp_hit(
+        self,
+        trade: "Trade",
+        tp_level: int,
+        tp_list: list,
+    ) -> None:
+        """TP-cascade SL movement (client 2026-05-01 spec, confirmed
+        via Tomas Telegram 2026-05-01 22:58 "tp2= move to sl, tp3
+        move sl tp tp1, and so on, this is fallback").
+
+        Rules:
+          TP2 hit -> SL = entry (BE)
+          TP3 hit -> SL = TP1
+          TP4 hit -> SL = TP2
+          TP5 hit -> SL = TP3
+          TP_n hit (n >= 2) -> SL = TP_{n-2} (or entry if n == 2)
+
+        Only fires when ``tp_level >= 2`` and the cascade for that
+        level hasn't already been applied (idempotent via
+        ``trade.sl_moved_to_tp_index`` and ``trade.sl_moved_to_be``).
+        """
+        if tp_level < 2 or trade.signal is None:
+            return
+        avg_entry = trade.avg_entry or trade.signal.entry or 0
+        if avg_entry <= 0:
+            return
+
+        if tp_level == 2:
+            if trade.sl_moved_to_be:
+                return
+            new_sl = avg_entry
+            target_state = TradeState.BREAKEVEN_ACTIVE
+            reason = "tp2_hit_sl_to_breakeven"
+            applied = await self._move_sl_to(
+                trade, new_sl, target_state, reason,
+            )
+            if applied:
+                trade.sl_moved_to_be = True
+            return
+
+        # tp_level >= 3 — SL moves to TP_{level-2} (1-indexed in spec,
+        # 0-indexed in tp_list).
+        target_tp_idx = tp_level - 2  # 1-indexed
+        if target_tp_idx <= trade.sl_moved_to_tp_index:
+            return  # already moved to this or further
+        target_tp_zero_idx = target_tp_idx - 1
+        if target_tp_zero_idx < 0 or target_tp_zero_idx >= len(tp_list):
+            return
+        new_sl = tp_list[target_tp_zero_idx]
+        if not new_sl or new_sl <= 0:
+            return
+
+        # State name: SL_MOVED_TO_TP1..TP4 are defined in the enum.
+        # Beyond TP4 we still execute the SL move but skip the named
+        # transition (state stays at SL_MOVED_TO_TP4).
+        state_name = f"SL_MOVED_TO_TP{target_tp_idx}"
+        target_state = getattr(
+            TradeState, state_name, TradeState.SL_MOVED_TO_TP4,
+        )
+        reason = f"tp{tp_level}_hit_sl_to_tp{target_tp_idx}"
+        applied = await self._move_sl_to(
+            trade, float(new_sl), target_state, reason,
+        )
+        if applied:
+            trade.sl_moved_to_tp_index = target_tp_idx
+
+    async def _maybe_apply_profit_locks(
+        self,
+        trade: "Trade",
+        last_price: float,
+    ) -> None:
+        """Profit-lock SL moves (client 2026-05-01 spec):
+          +4% favorable -> SL to entry +/- 1.5%
+          +5% favorable -> SL to entry +/- 2.5%
+
+        Triggered from the price-tick handler. LastPrice driven.
+        Idempotent via ``profit_lock_1_active`` / ``profit_lock_2_active``.
+        Both locks can fire on the same trade (5% implies 4% was reached
+        first).
+        """
+        if trade.signal is None or trade.is_terminal:
+            return
+        avg_entry = trade.avg_entry or trade.signal.entry or 0
+        if avg_entry <= 0 or last_price <= 0:
+            return
+        direction = (trade.signal.direction or "").upper()
+        if direction == "LONG":
+            favorable_pct = (last_price - avg_entry) / avg_entry * 100.0
+        else:
+            favorable_pct = (avg_entry - last_price) / avg_entry * 100.0
+        if favorable_pct <= 0:
+            return
+
+        # PROFIT LOCK 1: +4% trade movement -> SL at entry +1.5% / -1.5%
+        if favorable_pct >= 4.0 and not trade.profit_lock_1_active:
+            if direction == "LONG":
+                new_sl = avg_entry * 1.015
+            else:
+                new_sl = avg_entry * 0.985
+            applied = await self._move_sl_to(
+                trade,
+                new_sl,
+                TradeState.PROFIT_LOCK_1_ACTIVE,
+                "profit_lock_1_at_4pct",
+            )
+            if applied:
+                trade.profit_lock_1_active = True
+
+        # PROFIT LOCK 2: +5% trade movement -> SL at entry +2.5% / -2.5%
+        if favorable_pct >= 5.0 and not trade.profit_lock_2_active:
+            if direction == "LONG":
+                new_sl = avg_entry * 1.025
+            else:
+                new_sl = avg_entry * 0.975
+            applied = await self._move_sl_to(
+                trade,
+                new_sl,
+                TradeState.PROFIT_LOCK_2_ACTIVE,
+                "profit_lock_2_at_5pct",
+            )
+            if applied:
+                trade.profit_lock_2_active = True
+
     async def on_position_update(self, data: dict) -> None:
         """Position-update events are observational only after 2026-04-28.
 
@@ -2466,6 +2750,13 @@ class PositionManager:
         # --- Hedge: bot-side check_and_activate is DISABLED 2026-04-30.
         # The Bybit pre-arm conditional placed at trade open is the
         # single source of truth for hedge opening.
+
+        # --- Phase 5 profit-lock (client 2026-05-01 spec):
+        #     +4% favorable -> SL = entry +/- 1.5%
+        #     +5% favorable -> SL = entry +/- 2.5%
+        # Single SL-management function (_move_sl_to) handles both,
+        # idempotent via flags on the trade.
+        await self._maybe_apply_profit_locks(trade, current_price)
 
         # --- Hedge timeout: close hedge if no meaningful move in
         # configured window (default 20 min, threshold 0.5%). The

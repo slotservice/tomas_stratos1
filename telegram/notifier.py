@@ -461,6 +461,62 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def sl_moved(
+        self,
+        trade,
+        old_sl,
+        new_sl,
+        reason: str,
+    ) -> str:
+        """Notify on a Bybit-confirmed SL movement (Phase 5 / 2026-05-01).
+
+        ``reason`` is the internal label
+        (``tp2_hit_sl_to_breakeven`` / ``tp3_hit_sl_to_tp1`` /
+        ``profit_lock_1_at_4pct`` / ``profit_lock_2_at_5pct`` etc.).
+        Rendered into a human-readable Swedish line.
+        """
+        signal = trade.signal
+        symbol = signal.symbol if signal else "?"
+        direction = signal.direction if signal else "?"
+        entry = trade.avg_entry or (signal.entry if signal else 0)
+
+        # Human label per reason.
+        label_map = {
+            "tp2_hit_sl_to_breakeven": "🟢 BREAK-EVEN aktiverad (TP2 träffad)",
+            "tp3_hit_sl_to_tp1":       "🔼 SL flyttad till TP1 (TP3 träffad)",
+            "tp4_hit_sl_to_tp2":       "🔼 SL flyttad till TP2 (TP4 träffad)",
+            "tp5_hit_sl_to_tp3":       "🔼 SL flyttad till TP3 (TP5 träffad)",
+            "tp6_hit_sl_to_tp4":       "🔼 SL flyttad till TP4 (TP6 träffad)",
+            "profit_lock_1_at_4pct":   "🔒 PROFIT-LOCK 1 (+4 % rörelse → SL +1,5 %)",
+            "profit_lock_2_at_5pct":   "🔒 PROFIT-LOCK 2 (+5 % rörelse → SL +2,5 %)",
+        }
+        header = label_map.get(reason, f"🔼 SL FLYTTAD ({reason})")
+
+        old_sl_str = f"{old_sl}" if old_sl else "—"
+        if entry and entry > 0 and new_sl:
+            if direction == "LONG":
+                pct_from_entry = (new_sl - entry) / entry * 100.0
+            else:
+                pct_from_entry = (entry - new_sl) / entry * 100.0
+            pct_str = f" ({pct_from_entry:+.2f} % från entry)"
+        else:
+            pct_str = ""
+
+        text = (
+            f"{header}\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📊 Symbol: {_sym(symbol)}\n"
+            f"📈 Riktning: {direction}\n"
+            f"\n"
+            f"💥 Entry: {entry}\n"
+            f"🚩 Tidigare SL: {old_sl_str}\n"
+            f"🚩 Ny SL: {new_sl}{pct_str}\n"
+            f"\n"
+            f"📍 Trigger: LastPrice (Bybit-bekräftad)\n"
+            f"🔑 Order-ID BOT: {trade.id}"
+        )
+        return await self._send_notify(text)
+
     async def protection_failed(
         self,
         trade,

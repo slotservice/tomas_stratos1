@@ -464,6 +464,18 @@ class Trade:
     # client 2026-05-01). Set after position open, cleared (cancelled)
     # when the trade closes via any other path.
     original_force_close_order_id: Optional[str] = None
+    # --- Phase 5 SL-movement bookkeeping (client 2026-05-01) ---
+    # Idempotency flags so each SL-move fires AT MOST ONCE per trade.
+    # The TP-cascade also uses ``tp_hits`` (already tracked) but checks
+    # ``sl_movement_history`` to avoid moving the SL backwards.
+    profit_lock_1_active: bool = False    # +4% -> SL=entry+1.5% applied
+    profit_lock_2_active: bool = False    # +5% -> SL=entry+2.5% applied
+    sl_moved_to_be: bool = False          # TP2 hit  -> SL=entry applied
+    sl_moved_to_tp_index: int = 0         # highest TP-index the SL has been moved to (0 = not yet)
+    # Audit trail of every SL move (oldest first). Each entry is a
+    # dict {ts, from_sl, to_sl, reason, state}. Persisted as JSON in
+    # the events table; ephemeral on the in-memory trade.
+    sl_movement_history: List[dict] = field(default_factory=list)
     reentry_count: int = 0
 
     # --- Scaling ---
