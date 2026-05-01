@@ -2861,6 +2861,45 @@ class PositionManager:
             self._fill_data[order_id] = data
             if order_id in self._fill_events:
                 self._fill_events[order_id].set()
+            # 2026-05-02 hedge-fill detection bug fix: when a hedge
+            # CONDITIONAL order fires, Bybit sends order_update
+            # status=Triggered + execution_update execType=Trade —
+            # but no order_update with status=Filled. The hedge
+            # detection in on_order_update is gated on Filled, so
+            # it never fires for conditional patterns. Result:
+            # hedge position lives on Bybit but the bot doesn't
+            # know it fired -> reverse_reconcile labels it as
+            # OBEVAKAD POSITION every cycle (TRBUSDT incident
+            # 2026-05-02 22:04 CEST).
+            #
+            # Fix: also try the hedge-activation path here. The
+            # _maybe_activate_hedge_from_fill function is
+            # idempotent — it bails out if the parent already has
+            # hedge_trade_id set, so calling it from both
+            # on_order_update AND on_execution_update is safe.
+            #
+            # We pass the execution `data` directly; it contains
+            # symbol, side, execPrice, execQty fields that the
+            # handler reads (it falls back to triggerPrice if
+            # avgPrice is missing, which it always is on
+            # execution events).
+            #
+            # Adapt the data shape: the handler reads
+            # data.get("avgPrice") and data.get("cumExecQty"),
+            # but execution events use execPrice/execQty. Build a
+            # compatible dict.
+            try:
+                fill_view = dict(data)
+                fill_view.setdefault("avgPrice", data.get("execPrice"))
+                fill_view.setdefault("cumExecQty", data.get("execQty"))
+                await self._maybe_activate_hedge_from_fill(
+                    order_id, fill_view,
+                )
+            except Exception:
+                log.exception(
+                    "on_execution.hedge_fill_detection_failed",
+                    order_id=order_id, symbol=symbol,
+                )
 
     # ==================================================================
     # Price update handler -- delegates to sub-managers

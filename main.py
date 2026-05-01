@@ -487,16 +487,37 @@ async def main() -> None:
                 # by 3 Telegram channels doesn't fire 3 identical
                 # rejection messages (client 2026-04-30).
                 if result.reason == "no_entry" and result.symbol and result.direction:
-                    # Only notify when the message has signal-shaped
-                    # evidence (at least one of SL or TP). News/article
-                    # text that happens to contain a ticker + direction
-                    # word ("The Market Is Correcting", "Wasabi Protocol
-                    # Hacked") falls through silently — these are not
-                    # signals and were spamming Tomas with false
-                    # "Entre saknas" rejections (2026-04-30).
+                    # Only notify when the message has STRONG signal-
+                    # shaped evidence:
+                    #   1. SL or TP was extracted, AND
+                    #   2. raw text contains an explicit entry-keyword
+                    #      (entry / buy / sell / long here / short here).
+                    # Without #2, news + market-analysis posts that
+                    # happen to list price levels (e.g. "Bull case:
+                    # target 271.62, Bear case: 250.05 support")
+                    # would still parse as having pseudo-TPs/SLs
+                    # because the regex matches "target N" / "support".
+                    # Tomas 2026-05-02: TAOUSDT market-analysis from
+                    # CryptoPasta + SUSHIUSDT TP-status from
+                    # CryptoMasterVip + GOODUSDT scam-forward from
+                    # WessloSignalsfwdJacksonmura all triggered
+                    # "Entre saknas" via the SL/TP-only gate.
+                    import re as _re
                     has_signal_evidence = bool(result.sl) or bool(result.tps)
-                    if has_signal_evidence and position_mgr._should_send_reject_notify(
-                        "no_entry", result.symbol, result.direction,
+                    has_entry_keyword = bool(_re.search(
+                        r"\b(entry|entries|buy\s+(?:zone|range|area|at|@)|"
+                        r"sell\s+(?:zone|range|area|at|@)|long\s+(?:here|@|at)|"
+                        r"short\s+(?:here|@|at)|market\s+(?:buy|sell|entry)|"
+                        r"open\s+(?:long|short))\b",
+                        raw_text or "",
+                        _re.IGNORECASE,
+                    ))
+                    if (
+                        has_signal_evidence
+                        and has_entry_keyword
+                        and position_mgr._should_send_reject_notify(
+                            "no_entry", result.symbol, result.direction,
+                        )
                     ):
                         try:
                             await tg_notifier.signal_blocked_no_entry(
