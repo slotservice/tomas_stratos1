@@ -1908,6 +1908,37 @@ class PositionManager:
 
         direction = "LONG" if position_idx == 1 else "SHORT"
         trade = self._find_trade_by_symbol_direction(symbol, direction)
+
+        # Phase 5c (client 2026-05-02 audit findings) — hedge-child
+        # close detection. When a hedge SL/Trailing fires, the closing
+        # WS event lands on the OPPOSITE slot from the parent
+        # (LONG parent -> hedge fires at idx=2 SHORT; SHORT parent ->
+        # hedge fires at idx=1 LONG). The lookup above returns None
+        # because no signal-direction trade lives in that slot — only
+        # a hedge child does. Find the parent via opposite-direction
+        # lookup with hedge_trade_id set, and route to a dedicated
+        # hedge-close handler that updates the child trade row.
+        is_hedge_close = False
+        parent_for_hedge_close = None
+        if trade is None:
+            parent_direction = "SHORT" if position_idx == 2 else "LONG"
+            # Wait: hedge of LONG is at idx=2. So if WS event is on
+            # idx=2, parent could be LONG (and we're closing the hedge).
+            # Reverse: if event on idx=1, parent could be SHORT.
+            parent_direction = "LONG" if position_idx == 2 else "SHORT"
+            candidate = self._find_trade_by_symbol_direction(
+                symbol, parent_direction,
+            )
+            if (
+                candidate is not None
+                and not candidate.is_terminal
+                and candidate.signal is not None
+                and candidate.hedge_trade_id
+            ):
+                parent_for_hedge_close = candidate
+                is_hedge_close = True
+                trade = candidate  # so _exit_price() below works
+
         if trade is None or trade.is_terminal or trade.signal is None:
             return
 
@@ -1932,8 +1963,15 @@ class PositionManager:
                 "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="stop_loss", order_id=order_id,
+                is_hedge_close=is_hedge_close,
             )
-            await self.close_trade(trade.id, "stop_loss", _exit_price())
+            if is_hedge_close:
+                await self._close_hedge_child(
+                    parent_for_hedge_close, "hedge_stop_loss",
+                    _exit_price(), position_idx,
+                )
+            else:
+                await self.close_trade(trade.id, "stop_loss", _exit_price())
             return
 
         if reduce_only and sot == "TrailingStop":
@@ -1941,8 +1979,15 @@ class PositionManager:
                 "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="trailing_stop", order_id=order_id,
+                is_hedge_close=is_hedge_close,
             )
-            await self.close_trade(trade.id, "trailing_stop", _exit_price())
+            if is_hedge_close:
+                await self._close_hedge_child(
+                    parent_for_hedge_close, "hedge_trailing_stop",
+                    _exit_price(), position_idx,
+                )
+            else:
+                await self.close_trade(trade.id, "trailing_stop", _exit_price())
             return
 
         if exec_type == "Liquidation":
@@ -1950,8 +1995,15 @@ class PositionManager:
                 "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="liquidation", order_id=order_id,
+                is_hedge_close=is_hedge_close,
             )
-            await self.close_trade(trade.id, "liquidation", _exit_price())
+            if is_hedge_close:
+                await self._close_hedge_child(
+                    parent_for_hedge_close, "hedge_liquidation",
+                    _exit_price(), position_idx,
+                )
+            else:
+                await self.close_trade(trade.id, "liquidation", _exit_price())
             return
 
         # Partial-TP fill — notify only.
@@ -1967,8 +2019,191 @@ class PositionManager:
                 "ws.close_event",
                 trade_id=trade.id, symbol=symbol,
                 kind="external_close", order_id=order_id,
+                is_hedge_close=is_hedge_close,
             )
-            await self.close_trade(trade.id, "external_close", _exit_price())
+            if is_hedge_close:
+                await self._close_hedge_child(
+                    parent_for_hedge_close, "hedge_external_close",
+                    _exit_price(), position_idx,
+                )
+            else:
+                await self.close_trade(trade.id, "external_close", _exit_price())
+
+    async def _close_hedge_child(
+        self,
+        parent: "Trade",
+        reason: str,
+        exit_price: float,
+        position_idx: int,
+    ) -> None:
+        """Close the hedge child trade row when the hedge position closes
+        on Bybit.
+
+        Phase 5c (client 2026-05-02 audit findings): the diagnostic
+        showed +3 ghost rows in DB vs Bybit because the hedge child
+        Trade row created by ``_maybe_activate_hedge_from_fill``
+        never got marked CLOSED when its underlying Bybit position
+        was closed by trailing or hard SL. Without this handler:
+          - hedge child row stays POSITION_OPEN forever
+          - leftover Bybit conditionals don't get swept
+          - state_recovery.orphan_check on next restart gets confused
+
+        This method:
+          1. Looks up the hedge child trade by parent.hedge_trade_id.
+          2. Computes hedge PnL from hedge_entry_price + exit price.
+          3. Marks the child trade CLOSED in DB.
+          4. Sweeps any leftover orders on the hedge slot.
+          5. Sends a "🛡️ HEDGE STÄNGD" Telegram (Bybit-verified).
+
+        The PARENT trade is NOT closed — it may still hold the
+        original position. The parent transitions to ORIGINAL_FORCE_
+        CLOSED if its own -2% conditional fired earlier; otherwise
+        stays in HEDGE_ACTIVE (the hedge ran its course but the
+        original may still be open).
+        """
+        if parent is None or parent.signal is None:
+            return
+        symbol = parent.signal.symbol
+        parent_dir = parent.signal.direction
+        hedge_dir = "SHORT" if parent_dir == "LONG" else "LONG"
+
+        hedge_child_id = parent.hedge_trade_id
+        if not hedge_child_id or hedge_child_id == "fired":
+            log.warning(
+                "hedge.close.no_child_trade",
+                parent_trade_id=parent.id, symbol=symbol,
+                hedge_trade_id=hedge_child_id,
+            )
+            # Still sweep leftover orders + send Telegram so the
+            # operator sees something.
+            hedge_child_id = None
+
+        # PnL on the hedge leg.
+        hedge_entry = parent.hedge_entry_price or 0.0
+        hedge_qty = 0.0
+        try:
+            # The hedge child's quantity was saved at fill time.
+            hedge_pnl_pct = None
+            hedge_pnl_usdt = None
+            if hedge_entry > 0 and exit_price > 0:
+                if hedge_dir == "LONG":
+                    hedge_pnl_pct = (
+                        (exit_price - hedge_entry) / hedge_entry * 100.0
+                    )
+                else:
+                    hedge_pnl_pct = (
+                        (hedge_entry - exit_price) / hedge_entry * 100.0
+                    )
+        except Exception:
+            hedge_pnl_pct = None
+            hedge_pnl_usdt = None
+
+        # Mark the child trade row CLOSED in DB.
+        if hedge_child_id is not None:
+            try:
+                from datetime import datetime as _dt
+                from datetime import timezone as _tz
+                await self._db.update_trade(
+                    int(hedge_child_id),
+                    state=TradeState.CLOSED.value,
+                    close_reason=reason,
+                    pnl_pct=(
+                        round(hedge_pnl_pct, 4)
+                        if hedge_pnl_pct is not None else None
+                    ),
+                    closed_at=_dt.now(_tz.utc).isoformat(),
+                )
+            except Exception:
+                log.exception(
+                    "hedge.close.db_update_failed",
+                    parent_trade_id=parent.id,
+                    hedge_trade_id=hedge_child_id,
+                )
+
+        # Sweep any leftover Bybit orders on the hedge slot — without
+        # this, the original-trade force-close conditional or the
+        # hedge pre-arm leftover would linger as orphan orders
+        # (diagnostic 2026-05-02 found 13 such leftovers).
+        try:
+            leftover = await self._bybit.get_open_orders(symbol=symbol)
+            cancelled = 0
+            for od in leftover:
+                try:
+                    o_pidx = int(od.get("positionIdx") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if o_pidx != position_idx:
+                    continue
+                oid = od.get("orderId")
+                if not oid:
+                    continue
+                try:
+                    await self._bybit.cancel_order(symbol=symbol, order_id=oid)
+                    cancelled += 1
+                except Exception:
+                    log.exception(
+                        "hedge.close.order_cancel_failed",
+                        symbol=symbol, order_id=oid,
+                    )
+            if cancelled:
+                log.info(
+                    "hedge.close.leftover_orders_swept",
+                    parent_trade_id=parent.id, symbol=symbol,
+                    position_idx=position_idx, cancelled=cancelled,
+                )
+        except Exception:
+            log.exception(
+                "hedge.close.order_sweep_failed",
+                parent_trade_id=parent.id, symbol=symbol,
+            )
+
+        log.info(
+            "hedge.close.completed",
+            parent_trade_id=parent.id, symbol=symbol,
+            hedge_trade_id=hedge_child_id,
+            reason=reason,
+            hedge_entry=hedge_entry,
+            exit_price=exit_price,
+            hedge_pnl_pct=(
+                round(hedge_pnl_pct, 4)
+                if hedge_pnl_pct is not None else None
+            ),
+        )
+
+        # Telegram — Bybit-verified hedge close.
+        try:
+            from telegram.notifier import _chan, _sym, _ts
+            chan = _chan(parent.signal.channel_name)
+            reason_label = {
+                "hedge_stop_loss":     "Hard SL (-2%)",
+                "hedge_trailing_stop": "Trailing 1.2% (primär exit)",
+                "hedge_liquidation":   "Likvidation",
+                "hedge_external_close": "Manuell stängning på Bybit",
+            }.get(reason, reason)
+            pnl_str = (
+                f"{hedge_pnl_pct:+.2f} %"
+                if hedge_pnl_pct is not None else "?"
+            )
+            await self._safe_notify(
+                f"🛡️ HEDGE STÄNGD\n"
+                f"🕒 Tid: {_ts()}\n"
+                f"📢 Från kanal: {chan}\n"
+                f"📊 Symbol: {_sym(symbol)}\n"
+                f"📈 Riktning (hedge): {hedge_dir} (motrikt mot {parent_dir})\n"
+                f"\n"
+                f"💥 Hedge entry: {hedge_entry}\n"
+                f"💥 Exit: {exit_price}\n"
+                f"📊 Resultat: {pnl_str}\n"
+                f"\n"
+                f"📍 Skäl: {reason_label}\n"
+                f"🔑 Order-ID BOT (parent): {parent.id}\n"
+                f"🔑 Order-ID BOT (hedge): {hedge_child_id or 'N/A'}"
+            )
+        except Exception:
+            log.exception(
+                "hedge.close.notify_failed",
+                parent_trade_id=parent.id, symbol=symbol,
+            )
 
     async def _notify_tp_filled(
         self, trade: "Trade", order_id: str, data: dict,
