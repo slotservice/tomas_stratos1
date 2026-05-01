@@ -1600,6 +1600,13 @@ class PositionManager:
             # Signal the event if someone is already waiting.
             if order_id in self._fill_events:
                 self._fill_events[order_id].set()
+            # Phase 3 (client 2026-05-01) — hedge conditional fill is
+            # now handled atomically here, NOT by reverse_reconcile
+            # polling. If this filled order is a tracked hedge
+            # conditional, activate the hedge in one path: read the
+            # Bybit fill, set SL+trailing on the hedge, persist to DB,
+            # send Telegram. No race, no orphan, single source of truth.
+            await self._maybe_activate_hedge_from_fill(order_id, data)
             # Strict architecture (client 2026-04-28): every close
             # notification and every close decision is driven by Bybit's
             # order-fill event, never by bot inference. Classify this
@@ -1608,6 +1615,222 @@ class PositionManager:
             # close reason on the trade. on_position_update will read
             # that reason when Bybit reports size=0 and call close_trade.
             await self._classify_bybit_close_fill(order_id, data)
+
+    async def _maybe_activate_hedge_from_fill(
+        self, order_id: str, data: dict,
+    ) -> None:
+        """Atomically activate a hedge whose pre-armed conditional just fired.
+
+        Phase 3 of the Bybit-verified-state-machine refactor (client
+        2026-05-01). Replaces the polling-based pre_armed_hedges arming
+        block in main._periodic_reverse_reconciliation. Single path,
+        WS-driven, all values verified from Bybit's fill event.
+
+        Match rule: ``order_id`` equals some active trade's
+        ``hedge_conditional_order_id``. When matched, this method:
+          1. Reads the Bybit-verified avg fill price + qty.
+          2. Computes hedge hard SL (configured % from hedge entry,
+             BACKUP only — trailing is the primary exit) and
+             trailing distance (configured %).
+          3. Calls set_trading_stop with stop_loss + trailing_stop in
+             ONE API call (active_price OMITTED so Bybit defaults to
+             immediate activation, avoiding the activePrice == entry
+             rejection that hit the earlier polling path).
+          4. Saves the hedge as a separate trade row in DB and links
+             it on the parent trade via hedge_trade_id.
+          5. Records hedge_entry_price + hedge_filled_at for the
+             20-min timeout watcher.
+          6. Transitions the parent trade to HEDGE_ACTIVE.
+          7. Sends the HEDGE AKTIVERAD Telegram — only after the
+             Bybit ack confirms SL+trailing are on the hedge position.
+        """
+        if not order_id:
+            return
+        # Find the parent trade whose hedge conditional just filled.
+        parent: Optional[Trade] = None
+        for tr in self._active_trades.values():
+            if tr.hedge_conditional_order_id == order_id and not tr.hedge_trade_id:
+                parent = tr
+                break
+        if parent is None:
+            return
+        if parent.signal is None:
+            log.warning(
+                "hedge.fill.parent_has_no_signal",
+                order_id=order_id, parent_trade_id=parent.id,
+            )
+            return
+
+        symbol = parent.signal.symbol
+        parent_dir = (parent.signal.direction or "").upper()
+        # Hedge position lives in the OPPOSITE positionIdx slot.
+        hedge_position_idx = 2 if parent_dir == "LONG" else 1
+        hedge_side = "Sell" if parent_dir == "LONG" else "Buy"
+        hedge_dir = "SHORT" if parent_dir == "LONG" else "LONG"
+
+        # Read Bybit-verified fill data. avgPrice on the conditional's
+        # fill event is the actual entry. Fall back to triggerPrice
+        # only if avgPrice is missing.
+        try:
+            avg_price = float(data.get("avgPrice") or 0)
+        except (TypeError, ValueError):
+            avg_price = 0.0
+        if avg_price <= 0:
+            try:
+                avg_price = float(data.get("triggerPrice") or 0)
+            except (TypeError, ValueError):
+                avg_price = 0.0
+        try:
+            fill_qty = float(data.get("cumExecQty") or 0)
+        except (TypeError, ValueError):
+            fill_qty = 0.0
+        if avg_price <= 0 or fill_qty <= 0:
+            log.warning(
+                "hedge.fill.unparseable",
+                order_id=order_id, parent_trade_id=parent.id,
+                avg_price=avg_price, fill_qty=fill_qty,
+            )
+            return
+
+        hedge_settings = self._settings.hedge
+        hard_sl_pct = hedge_settings.hard_sl_pct / 100.0
+        trailing_pct = hedge_settings.trailing_pct / 100.0
+        # Hedge SHORT: SL above entry (loses when price rises).
+        # Hedge LONG: SL below entry (loses when price falls).
+        if hedge_side == "Sell":
+            hedge_sl = round(avg_price * (1 + hard_sl_pct), 8)
+        else:
+            hedge_sl = round(avg_price * (1 - hard_sl_pct), 8)
+        trailing_distance = round(avg_price * trailing_pct, 8)
+
+        # ONE Bybit call to set both SL and trailing on the hedge.
+        # active_price is OMITTED so Bybit defaults to immediate
+        # activation at current price (correct for a hedge that fires
+        # AFTER -1.5 % adverse — the hedge is already in profit
+        # territory at fill time; setting active_price == entry
+        # triggers Bybit error 10001).
+        try:
+            await self._bybit.set_trading_stop(
+                symbol=symbol,
+                position_idx=hedge_position_idx,
+                stop_loss=hedge_sl,
+                trailing_stop=trailing_distance,
+                sl_trigger_by="LastPrice",
+            )
+        except Exception:
+            log.exception(
+                "hedge.fill.set_trading_stop_failed",
+                parent_trade_id=parent.id, symbol=symbol,
+            )
+            # Without SL+trailing the hedge is unprotected. This is
+            # a Phase-1 PROTECTION_FAILED scenario — but for the
+            # HEDGE leg specifically. We do NOT force-close the
+            # hedge here (Bybit can still manage it manually); we
+            # surface a deduped error and let the operator handle.
+            try:
+                if self._should_send_reject_notify(
+                    "hedge_protection_failed", symbol, hedge_dir,
+                ):
+                    from telegram.notifier import _chan, _sym, _ts
+                    chan = _chan(parent.signal.channel_name)
+                    await self._safe_notify(
+                        f"❌ HEDGE OFÖRSVARAD (PROTECTION FAILED)\n"
+                        f"🕒 Tid: {_ts()}\n"
+                        f"📢 Från kanal: {chan}\n"
+                        f"📊 Symbol: {_sym(symbol)}\n"
+                        f"📈 Riktning: {hedge_dir} "
+                        f"(motrikt mot {parent_dir})\n"
+                        f"💥 Hedge entry: {avg_price}\n"
+                        f"📍 SL/trailing kunde inte sättas på Bybit "
+                        f"— manuell åtgärd krävs."
+                    )
+            except Exception:
+                log.exception(
+                    "hedge.fill.notify_protection_failed",
+                    parent_trade_id=parent.id, symbol=symbol,
+                )
+            return
+
+        # Persist hedge as its own trade row.
+        hedge_trade_db_id = None
+        try:
+            hedge_trade_db_id = await self._db.save_trade({
+                "signal_id": None,
+                "state": TradeState.HEDGE_ACTIVE.value,
+                "avg_entry": avg_price,
+                "quantity": fill_qty,
+                "leverage": parent.leverage,
+                "margin": parent.margin,
+                "sl_price": hedge_sl,
+            })
+        except Exception:
+            log.exception(
+                "hedge.fill.db_save_failed",
+                parent_trade_id=parent.id, symbol=symbol,
+            )
+
+        parent.hedge_trade_id = (
+            str(hedge_trade_db_id)
+            if hedge_trade_db_id is not None
+            else "fired"
+        )
+        parent.hedge_conditional_order_id = None
+        parent.hedge_entry_price = avg_price
+        parent.hedge_filled_at = datetime.now(timezone.utc)
+        try:
+            await self._db.update_trade(
+                int(parent.id),
+                hedge_trade_id=parent.hedge_trade_id,
+                hedge_conditional_order_id=None,
+            )
+        except Exception:
+            pass
+        parent.transition(TradeState.HEDGE_ACTIVE)
+
+        log.info(
+            "hedge.fill.activated",
+            parent_trade_id=parent.id,
+            symbol=symbol,
+            hedge_trade_id=parent.hedge_trade_id,
+            hedge_entry=avg_price,
+            hedge_qty=fill_qty,
+            hedge_sl=hedge_sl,
+            trailing_distance=trailing_distance,
+            hard_sl_pct=hedge_settings.hard_sl_pct,
+            trailing_pct=hedge_settings.trailing_pct,
+        )
+
+        # Telegram — only AFTER Bybit ack on the SL+trailing set call.
+        try:
+            from telegram.notifier import _chan, _sym, _ts
+            chan = _chan(parent.signal.channel_name)
+            lev_type = parent.signal.signal_type or "dynamic"
+            leverage_val = parent.leverage or 0.0
+            margin_val = parent.margin or 0.0
+            await self._safe_notify(
+                f"🛡️ HEDGE AKTIVERAD (Bybit-conditional)\n"
+                f"🕒 Tid: {_ts()}\n"
+                f"📢 Från kanal: {chan}\n"
+                f"📊 Symbol: {_sym(symbol)}\n"
+                f"📈 Riktning: {hedge_dir} (motrikt mot {parent_dir})\n"
+                f"📍 Typ: {lev_type}\n"
+                f"\n"
+                f"💥 Entry (hedge): {avg_price}\n"
+                f"🚩 Hard SL: {hedge_sl} "
+                f"(-{hedge_settings.hard_sl_pct}% från hedge-entry, BACKUP)\n"
+                f"🔄 Trailing: {hedge_settings.trailing_pct}% "
+                f"(Last price, primär exit, ingen fast TP)\n"
+                f"\n"
+                f"⚙️ Hävstång ({lev_type}): x{leverage_val}\n"
+                f"💰 IM: {margin_val:.2f} USDT (Bybit confirmed)\n"
+                f"🔑 Order-ID BOT: {parent.id}\n"
+                f"🔑 Order-ID Bybit: {parent.hedge_trade_id or 'N/A'}"
+            )
+        except Exception:
+            log.exception(
+                "hedge.fill.notify_failed",
+                parent_trade_id=parent.id, symbol=symbol,
+            )
 
     async def _classify_bybit_close_fill(
         self, order_id: str, data: dict,
@@ -2117,324 +2340,18 @@ class PositionManager:
             )
 
     # ==================================================================
-    # Orphan adoption
+    # Orphan adoption — REMOVED in Phase 3 (client 2026-05-01 audit).
     # ==================================================================
-
-    async def adopt_orphan_position(self, p: dict) -> Optional[Trade]:
-        """Adopt a Bybit position that exists outside the bot's DB.
-
-        Client 2026-04-29 spec: when reverse_reconcile finds a
-        profitable orphan, do NOT close it. Instead create a managed
-        Trade record so the bot tracks it like any other:
-
-          * Synthesise a minimal ParsedSignal (channel="Orphan/Manual",
-            entry=Bybit avgPrice, direction inferred from side).
-          * Reuse Bybit's stopLoss/takeProfit if set; otherwise place
-            a -3 % auto-SL so the position can never bleed unbounded.
-          * Register the Trade in ``_active_trades`` and persist to DB.
-
-        Returns the created Trade or None on failure. Failures are
-        logged + flagged via Telegram so the operator can intervene
-        manually.
-        """
-        try:
-            sym = p.get("symbol", "")
-            side = p.get("side", "")
-            size = float(p.get("size") or 0)
-            avg_price = float(p.get("avgPrice") or 0)
-            position_idx = int(p.get("positionIdx") or 0)
-            unreal = float(p.get("unrealisedPnl") or 0)
-            try:
-                bybit_sl = float(p.get("stopLoss") or 0) or None
-            except (TypeError, ValueError):
-                bybit_sl = None
-            try:
-                bybit_tp = float(p.get("takeProfit") or 0) or None
-            except (TypeError, ValueError):
-                bybit_tp = None
-            try:
-                bybit_trailing = float(p.get("trailingStop") or 0) or None
-            except (TypeError, ValueError):
-                bybit_trailing = None
-            try:
-                leverage = float(p.get("leverage") or 0) or None
-            except (TypeError, ValueError):
-                leverage = None
-            try:
-                liq_price = float(p.get("liqPrice") or 0) or None
-            except (TypeError, ValueError):
-                liq_price = None
-            try:
-                position_im = float(p.get("positionIM") or 0) or None
-            except (TypeError, ValueError):
-                position_im = None
-        except Exception:
-            log.exception("orphan_adopt.parse_error")
-            return None
-
-        if not sym or not side or size <= 0 or avg_price <= 0:
-            log.warning(
-                "orphan_adopt.skip_unparseable",
-                symbol=sym, side=side, size=size, avg_price=avg_price,
-            )
-            return None
-
-        direction = "LONG" if side == "Buy" else "SHORT"
-
-        # If Bybit has no SL on this position, set an auto-SL.
-        # Distance is the SMALLER of:
-        #   - configured fallback (3 % default), and
-        #   - half the liquidation distance.
-        # The cap prevents the SL from being placed INSIDE the
-        # liquidation buffer at high leverage. CGPTUSDT trade 73
-        # incident 2026-04-30: orphan-adopted hedge at 25x → liq
-        # distance ~4 %, auto-SL at -3 % left only 1 % cushion;
-        # slippage liquidated the position before the SL fired.
-        # Half-liq cap gives at least 50 % cushion between SL and
-        # forced liquidation.
-        sl_price = bybit_sl
-        if not sl_price:
-            fallback_pct = self._settings.auto_sl.fallback_pct / 100.0
-            sl_pct = fallback_pct
-            if liq_price and avg_price > 0:
-                liq_distance = abs(avg_price - liq_price) / avg_price
-                if liq_distance > 0:
-                    sl_pct = min(fallback_pct, liq_distance * 0.5)
-            if direction == "LONG":
-                sl_price = round(avg_price * (1 - sl_pct), 8)
-            else:
-                sl_price = round(avg_price * (1 + sl_pct), 8)
-            try:
-                await self._bybit.set_trading_stop(
-                    symbol=sym,
-                    position_idx=position_idx,
-                    stop_loss=sl_price,
-                    sl_trigger_by=getattr(
-                        self._settings.tp_sl,
-                        "sl_initial_trigger_type",
-                        "MarkPrice",
-                    ),
-                )
-                log.info(
-                    "orphan_adopt.auto_sl_set",
-                    symbol=sym, side=side, sl=sl_price,
-                    sl_pct=round(sl_pct * 100, 4),
-                    liq_price=liq_price,
-                )
-            except Exception:
-                log.exception(
-                    "orphan_adopt.auto_sl_failed",
-                    symbol=sym, side=side, sl=sl_price,
-                )
-
-        # Add a trailing stop if Bybit has none. Tomas explicit ask
-        # 2026-04-30: every position should have trailing on Bybit,
-        # not just hedges. Use the same hedge config (1.2 % distance).
-        # active_price is intentionally OMITTED — Bybit defaults to
-        # immediate activation at current price, which is what we
-        # want for an already-existing position. Setting it equal to
-        # entry triggers Bybit error 10001 ("TrailingProfit must be
-        # greater/less than session_average_price").
-        if not bybit_trailing:
-            try:
-                hedge_settings = getattr(self._settings, "hedge", None)
-                trailing_pct = (
-                    getattr(hedge_settings, "trailing_pct", 1.2) / 100.0
-                    if hedge_settings else 0.012
-                )
-                trailing_distance = round(avg_price * trailing_pct, 8)
-                if trailing_distance > 0:
-                    await self._bybit.set_trading_stop(
-                        symbol=sym,
-                        position_idx=position_idx,
-                        trailing_stop=trailing_distance,
-                        sl_trigger_by="LastPrice",
-                    )
-                    log.info(
-                        "orphan_adopt.trailing_set",
-                        symbol=sym, side=side,
-                        trailing_distance=trailing_distance,
-                        trailing_pct=round(trailing_pct * 100, 4),
-                    )
-            except Exception:
-                log.exception(
-                    "orphan_adopt.trailing_failed",
-                    symbol=sym, side=side,
-                )
-
-        # Synthesised signal. signal_type "dynamic" — orphans aren't
-        # classified by SL distance; the bot treats them as a normal
-        # managed position from this point on.
-        # Field names match core.signal_parser.ParsedSignal (the class
-        # the notifier templates read from): ``tps`` (not ``tp_list``),
-        # ``channel_id``/``channel_name`` (not ``source_channel_*``),
-        # no ``received_at`` field — uses ``parsed_at`` float instead.
-        from core.signal_parser import ParsedSignal as _PS
-        synth_signal = _PS(
-            symbol=sym,
-            direction=direction,
-            entry=avg_price,
-            tps=[bybit_tp] if bybit_tp else [],
-            sl=sl_price,
-            signal_type="dynamic",
-            channel_id=0,
-            channel_name="Orphan Manual",
-            raw_text="(orphan position adopted from Bybit)",
-            parsed_at=time.time(),
-        )
-
-        # Build the managed Trade.
-        trade = Trade(
-            signal=synth_signal,
-            state=TradeState.POSITION_OPEN,
-            entry1_fill_price=avg_price,
-            avg_entry=avg_price,
-            quantity=size,
-            leverage=leverage,
-            margin=position_im,
-            sl_price=sl_price,
-        )
-        self._active_trades[trade.id] = trade
-
-        # Persist to DB. Failures here don't unwind the in-memory
-        # registration — the bot still manages the position; we just
-        # lose a row in the audit log.
-        try:
-            db_id = await self._db.save_trade({
-                "signal_id": None,
-                "state": trade.state.value,
-                "avg_entry": avg_price,
-                "quantity": size,
-                "leverage": leverage,
-                "margin": position_im,
-                "sl_price": sl_price,
-                "source_channel_id": 0,
-                "source_channel_name": "Orphan / Manual",
-            })
-            if db_id is not None:
-                # Switch the trade ID to the DB row's primary key so
-                # all subsequent updates (close_trade etc.) hit the
-                # right row.
-                self._active_trades.pop(trade.id, None)
-                trade.id = str(db_id)
-                self._active_trades[trade.id] = trade
-        except Exception:
-            log.exception("orphan_adopt.db_save_failed", symbol=sym)
-
-        # Re-read the position from Bybit to verify protection orders
-        # actually exist (client 2026-04-30: Telegram must reflect
-        # verified Bybit reality, never bot assumptions). The
-        # ``adopt_orphan_position`` caller may have placed an auto-SL
-        # via set_trading_stop above; the verification confirms it
-        # was accepted, plus checks whether TP or trailing exist.
-        verified_sl: Optional[float] = None
-        verified_tp: Optional[float] = None
-        verified_trailing: Optional[float] = None
-        try:
-            verify_side = "Buy" if direction == "LONG" else "Sell"
-            verify_pos = await self._bybit.get_position(sym, verify_side)
-            if verify_pos:
-                try:
-                    verified_sl = float(verify_pos.get("stopLoss") or 0) or None
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    verified_tp = float(verify_pos.get("takeProfit") or 0) or None
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    verified_trailing = float(verify_pos.get("trailingStop") or 0) or None
-                except (TypeError, ValueError):
-                    pass
-        except Exception:
-            log.exception(
-                "orphan_adopt.verify_failed",
-                trade_id=trade.id, symbol=sym,
-            )
-
-        # Classify the adoption result. SL is mandatory protection;
-        # TP or trailing is needed for profit-lock. Without at least
-        # one of those the position can ride a favorable move forever
-        # without realising any gain — "adopted but exit incomplete".
-        has_sl = verified_sl and verified_sl > 0
-        has_profit_lock = (
-            (verified_tp and verified_tp > 0)
-            or (verified_trailing and verified_trailing > 0)
-        )
-        fully_managed = bool(has_sl and has_profit_lock)
-
-        log.info(
-            "orphan_adopt.completed",
-            trade_id=trade.id, symbol=sym, side=side, size=size,
-            avg_price=avg_price, unrealised_pnl=unreal,
-            verified_sl=verified_sl, verified_tp=verified_tp,
-            verified_trailing=verified_trailing,
-            fully_managed=fully_managed,
-        )
-
-        # Notify with verified status only.
-        try:
-            from telegram.notifier import _chan, _ts, _sym, _pnl_sign
-            sl_str = f"{verified_sl}" if has_sl else "ej satt"
-            tp_str = (
-                f"{verified_tp}"
-                if (verified_tp and verified_tp > 0)
-                else "ej satt"
-            )
-            trailing_str = (
-                f"{verified_trailing}"
-                if (verified_trailing and verified_trailing > 0)
-                else "ej satt"
-            )
-            lev_str = f"x{leverage}" if leverage else "okänd"
-            im_str = f"{position_im:.2f} USDT" if position_im else "okänd"
-
-            if fully_managed:
-                header = "♻️ ORPHAN POSITION ADOPTED"
-                status = (
-                    "📍 Status: positionen fanns på Bybit utan att vara "
-                    "länkad i botens DB. Bybit-verifierad SL + "
-                    "TP/trailing — adopterad och hanteras som en vanlig "
-                    "position."
-                )
-            else:
-                header = "⚠️ ORPHAN POSITION ADOPTED — exit ofullständig"
-                missing = []
-                if not has_sl:
-                    missing.append("SL")
-                if not has_profit_lock:
-                    missing.append("TP/trailing")
-                status = (
-                    f"⚠️ Status: positionen är adopterad i botens DB men "
-                    f"saknar fullständigt skydd på Bybit ({', '.join(missing)} "
-                    f"saknas). Operatör bör verifiera och vid behov "
-                    f"placera saknat skydd manuellt."
-                )
-
-            await self._notifier._send_notify(
-                f"{header}\n"
-                f"🕒 Tid: {_ts()}\n"
-                f"📢 Från kanal: {_chan('Orphan Manual')}\n"
-                f"📊 Symbol: {_sym(sym)}\n"
-                f"📈 Riktning: {direction}\n"
-                f"\n"
-                f"💥 Entry: {avg_price}\n"
-                f"💵 Storlek: {size}\n"
-                f"🚩 SL (Bybit-verifierad): {sl_str}\n"
-                f"🎯 TP (Bybit-verifierad): {tp_str}\n"
-                f"🔄 Trailing (Bybit-verifierad): {trailing_str}\n"
-                f"\n"
-                f"⚙️ Hävstång: {lev_str}\n"
-                f"💰 IM: {im_str}\n"
-                f"💰 Aktuell PnL: {_pnl_sign(unreal)} USDT\n"
-                f"🔑 Order-ID BOT: {trade.id}\n"
-                f"\n"
-                f"{status}"
-            )
-        except Exception:
-            log.exception("orphan_adopt.notify_failed", symbol=sym)
-
-        return trade
+    #
+    # The previous adopt_orphan_position() flow synthesised a fake
+    # signal and adopted untracked Bybit positions. That was a
+    # fallback path Tomas explicitly forbade ("no fallback magic, no
+    # auto-correct"). Hedge fills are now handled atomically by
+    # _maybe_activate_hedge_from_fill() in the WS handler — single
+    # path, Bybit-verified. Truly untracked positions (e.g. operator
+    # opened manually on the Bybit UI) are surfaced as deduped
+    # warnings by main._periodic_reverse_reconciliation; the bot
+    # does not adopt or close them.
 
     async def _check_trade_triggers(
         self,
