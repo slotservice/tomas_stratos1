@@ -128,6 +128,13 @@ class PositionManager:
         self._reject_notify_last: Dict[str, float] = {}
         self._dedup_window_s: float = 300.0  # 5 minutes
 
+        # Phase 6 audit-snapshot counter (client 2026-05-02 audit #11):
+        # incremented in close_trade after a successful close; once it
+        # reaches reporting.audit_snapshot_every_n_trades the snapshot
+        # fires and the counter resets. 0 in config disables the
+        # snapshot entirely.
+        self._closes_since_snapshot: int = 0
+
         # --- Sub-managers ---
         # Strict architecture (client IZZU 2026-04-28): the bot must not
         # think, assume, guess, or infer anything — every close decision
@@ -3321,6 +3328,62 @@ class PositionManager:
                         "close_trade.reentry_activate_failed",
                         trade_id=trade.id,
                     )
+
+        # --- Phase 6 audit-snapshot trigger (client 2026-05-02
+        # audit #11 + #26). Increment the post-close counter and, if
+        # we've reached the configured threshold, fire the snapshot
+        # to Telegram. Failures here are NEVER allowed to break the
+        # close path (audit reporting must not affect trading). ---
+        try:
+            every_n = int(getattr(
+                self._settings.reporting,
+                "audit_snapshot_every_n_trades",
+                0,
+            ) or 0)
+            if every_n > 0:
+                self._closes_since_snapshot += 1
+                if self._closes_since_snapshot >= every_n:
+                    self._closes_since_snapshot = 0
+                    await self._fire_audit_snapshot(every_n)
+        except Exception:
+            log.exception(
+                "close_trade.audit_snapshot_trigger_failed",
+                trade_id=trade.id,
+            )
+
+    async def _fire_audit_snapshot(self, window_n: int) -> None:
+        """Collect + post the periodic audit snapshot.
+
+        Single function path (audit #4: "There must be only one
+        function and one execution path"). Never raises; failures
+        are logged but the trading flow continues unaffected.
+        """
+        try:
+            from health.audit_snapshot import (
+                collect_snapshot, render_snapshot_text,
+            )
+            db_path = getattr(self._db, "db_path", None) or (
+                self._settings.general.db_path
+            )
+            snap = await collect_snapshot(
+                db_path=str(db_path),
+                bybit_adapter=self._bybit,
+                window_n=window_n,
+            )
+            text = render_snapshot_text(snap)
+            await self._notifier.audit_snapshot(text)
+            log.info(
+                "audit_snapshot.posted",
+                window_n=window_n,
+                bybit_positions=snap.bybit_position_count,
+                db_active=snap.db_active_count,
+                drift=snap.drift,
+                leftover=snap.leftover_orders,
+                unprotected=snap.unprotected_positions,
+                total_pnl_window=snap.total_pnl,
+            )
+        except Exception:
+            log.exception("audit_snapshot.fire_failed", window_n=window_n)
 
     # ==================================================================
     # Active trades accessor

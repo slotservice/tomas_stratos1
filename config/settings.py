@@ -203,6 +203,9 @@ class ReportingSettings(BaseModel):
     daily_report_hour: int = 23
     weekly_report_day: int = 0   # 0 = Monday
     weekly_report_hour: int = 23
+    # Phase 6 (client 2026-05-02 audit #11 + #26): post an audit
+    # snapshot every N closed trades. 0 = disabled.
+    audit_snapshot_every_n_trades: int = 10
 
 
 class TpSlSettings(BaseModel):

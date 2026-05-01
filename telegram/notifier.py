@@ -461,6 +461,12 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def audit_snapshot(self, snapshot_text: str) -> str:
+        """Post the periodic audit snapshot (Phase 6 / 2026-05-02
+        audit point #11). Body is fully pre-rendered by
+        ``health.audit_snapshot.render_snapshot_text``."""
+        return await self._send_notify(snapshot_text)
+
     async def sl_moved(
         self,
         trade,

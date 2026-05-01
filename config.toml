@@ -105,6 +105,9 @@ fallback_leverage = 10.0          # Lock leverage to x10 when auto-SL
 daily_report_hour = 23            # Hour (24h) to send daily report
 weekly_report_day = 0             # 0=Monday
 weekly_report_hour = 23           # Hour (24h) to send weekly report
+# Phase 6 (client 2026-05-02 audit #11 + #26): post an audit
+# snapshot to Telegram every N closed trades. 0 = disabled.
+audit_snapshot_every_n_trades = 10
 
 [tp_sl]
 # Client 2026-04-29 spec:
