@@ -1499,6 +1499,65 @@ class PositionManager:
                 trade_id=trade.id, symbol=symbol,
             )
 
+        # Phase 2 (client 2026-05-01) — original-trade emergency close
+        # is a Bybit conditional, not a bot-poll decision. Place ONE
+        # reduce-only Market conditional at entry ± original_force_
+        # close_pct (LastPrice). Bybit fires it autonomously if price
+        # ever reaches the threshold. The bot's only job is to react
+        # to the WS fill event and cancel the conditional when the
+        # trade closes via any other path (TP, trailing, manual).
+        try:
+            force_close_pct = getattr(
+                self._settings.hedge,
+                "original_force_close_pct",
+                2.0,
+            ) / 100.0
+            if avg_entry and avg_entry > 0 and force_close_pct > 0:
+                if direction == "LONG":
+                    fc_trigger_price = round(
+                        avg_entry * (1 - force_close_pct), 8,
+                    )
+                    fc_side = "Sell"
+                else:
+                    fc_trigger_price = round(
+                        avg_entry * (1 + force_close_pct), 8,
+                    )
+                    fc_side = "Buy"
+                fc_qty = trade.quantity or 0.0
+                if fc_qty > 0:
+                    fc_resp = await self._bybit.place_conditional_stop(
+                        symbol=symbol,
+                        side=fc_side,
+                        qty=fc_qty,
+                        trigger_price=fc_trigger_price,
+                        position_idx=position_idx,
+                        trigger_by="LastPrice",
+                    )
+                    fc_order_id = fc_resp.get("orderId", "") or None
+                    trade.original_force_close_order_id = fc_order_id
+                    log.info(
+                        "trade.original_force_close.armed",
+                        trade_id=trade.id,
+                        symbol=symbol,
+                        trigger_price=fc_trigger_price,
+                        side=fc_side,
+                        qty=fc_qty,
+                        order_id=fc_order_id,
+                        force_close_pct=force_close_pct * 100,
+                    )
+                    try:
+                        await self._db.update_trade(
+                            int(trade.id),
+                            original_force_close_order_id=fc_order_id,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            log.exception(
+                "trade.original_force_close.arm_failed",
+                trade_id=trade.id, symbol=symbol,
+            )
+
         return trade
 
     # ==================================================================
@@ -2425,13 +2484,13 @@ class PositionManager:
             if applied:
                 return
 
-        # --- Original trade -2% force-close (client 2026-04-30) ---
-        # Independent of the signal's SL: when adverse move on the
-        # ORIGINAL trade reaches the configured threshold (default -2%),
-        # close it with Market reduce-only. Pairs with the hedge's
-        # -1.5% trigger so the original trade stops bleeding while the
-        # hedge runs alone.
-        await self._maybe_force_close_original(trade, current_price)
+        # --- Original trade -2% force-close: handled by the Bybit
+        # conditional armed at trade open (Phase 2, client 2026-05-01).
+        # NO bot-side polling here. When the conditional fires on
+        # Bybit, on_order_update -> close_trade picks up the fill.
+        # This satisfies "single path per function": one place arms
+        # the conditional (process_signal), one place reacts to it
+        # (on_order_update -> close_trade), no duplicate logic.
 
         # --- Hedge: bot-side check_and_activate is DISABLED 2026-04-30.
         # The Bybit pre-arm conditional placed at trade open is the
@@ -2441,100 +2500,6 @@ class PositionManager:
         # configured window (default 20 min, threshold 0.5%). The
         # parent trade carries hedge_filled_at + hedge_entry_price.
         await self._maybe_timeout_hedge(trade, current_price)
-
-    async def _maybe_force_close_original(
-        self,
-        trade: Trade,
-        current_price: float,
-    ) -> None:
-        """Force-close the original trade at -2 % adverse move.
-
-        Client 2026-04-30: pairs with the -1.5 % hedge trigger so the
-        original stops bleeding while the hedge runs alone after.
-        Independent of the signal's SL — runs even if SL is further
-        away. Idempotent via ``trade.original_force_closed``.
-        """
-        if getattr(trade, "original_force_closed", False):
-            return
-        if trade.signal is None or trade.avg_entry is None:
-            return
-        if trade.avg_entry <= 0 or current_price <= 0:
-            return
-        threshold_pct = getattr(
-            self._settings.hedge, "original_force_close_pct", 2.0,
-        )
-        direction = (trade.signal.direction or "").upper()
-        if direction == "LONG":
-            adverse_pct = (trade.avg_entry - current_price) / trade.avg_entry * 100.0
-        else:
-            adverse_pct = (current_price - trade.avg_entry) / trade.avg_entry * 100.0
-        if adverse_pct < threshold_pct:
-            return
-
-        # Place a Market reduce-only close on the original leg only.
-        # The hedge leg (opposite positionIdx) is left open by design.
-        symbol = trade.signal.symbol
-        position_idx = 1 if direction == "LONG" else 2
-        close_side = "Sell" if direction == "LONG" else "Buy"
-        qty = trade.quantity or 0
-        if qty <= 0:
-            return
-
-        log.info(
-            "trade.original_force_close",
-            trade_id=trade.id, symbol=symbol,
-            avg_entry=trade.avg_entry, current_price=current_price,
-            adverse_pct=round(adverse_pct, 4),
-            threshold_pct=threshold_pct,
-        )
-        trade.original_force_closed = True
-        try:
-            await self._bybit.place_market_order(
-                symbol=symbol,
-                side=close_side,
-                qty=qty,
-                position_idx=position_idx,
-                reduce_only=True,
-            )
-        except Exception as exc:
-            # Phantom-trade detection: 110017 ("current position is
-            # zero, cannot fix reduce-only order qty") means the
-            # position no longer exists on Bybit but the bot's DB
-            # still has it as active. Without this guard the bot
-            # spam-retries the force-close every tick (1000LUNCUSDT
-            # trade_id=14 incident 2026-04-30 — hours of failures).
-            # Mark the trade closed in DB and stop trying.
-            ret_code = getattr(exc, "ret_code", None)
-            if ret_code == 110017:
-                log.warning(
-                    "trade.phantom_detected_in_force_close",
-                    trade_id=trade.id, symbol=symbol,
-                    avg_entry=trade.avg_entry,
-                )
-                try:
-                    await self.close_trade(
-                        trade.id,
-                        "phantom_cleanup",
-                        trade.avg_entry or 0.0,
-                    )
-                except Exception:
-                    log.exception(
-                        "trade.phantom_cleanup_failed",
-                        trade_id=trade.id, symbol=symbol,
-                    )
-                # latch as closed — no retry, no spam.
-                return
-            log.exception(
-                "trade.original_force_close_failed",
-                trade_id=trade.id, symbol=symbol,
-            )
-            # Don't latch original_force_closed — let it retry next tick.
-            trade.original_force_closed = False
-            return
-
-        # The Bybit fill-event path (on_order_update -> close_trade)
-        # will issue the POSITION CLOSED notification. We just log the
-        # decision here and let the unified close path handle the rest.
 
     async def _maybe_timeout_hedge(
         self,

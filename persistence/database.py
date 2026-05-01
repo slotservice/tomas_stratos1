@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS trades (
     trailing_sl          REAL,
     hedge_trade_id       INTEGER,
     hedge_conditional_order_id TEXT,           -- Bybit orderId of pre-armed hedge conditional (Phase 3)
+    original_force_close_order_id TEXT,        -- Bybit orderId of -2% force-close conditional (Phase 2 / 2026-05-01)
     reentry_count        INTEGER DEFAULT 0,
     scaling_step         INTEGER DEFAULT 0,
     tp_hits              TEXT,              -- JSON array of hit TP indices
@@ -208,6 +209,7 @@ class Database:
         # ignore "duplicate column" errors.
         for ddl in (
             "ALTER TABLE trades ADD COLUMN hedge_conditional_order_id TEXT",
+            "ALTER TABLE trades ADD COLUMN original_force_close_order_id TEXT",
         ):
             try:
                 await self._db.execute(ddl)

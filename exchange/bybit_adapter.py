@@ -713,6 +713,66 @@ class BybitAdapter:
         )
         return result
 
+    async def place_conditional_stop(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        trigger_price: float,
+        position_idx: int,
+        trigger_by: str = "LastPrice",
+    ) -> dict:
+        """Place a reduce-only conditional Market order with STOP semantics.
+
+        Differs from :meth:`place_conditional_close` (TP semantics) in
+        the trigger direction — a TP for a LONG fires when price RISES
+        to the level, but a stop/force-close for a LONG fires when
+        price FALLS to the level. Bybit cares about this: a wrong
+        trigger_direction order is "untriggered" forever.
+
+        For LONG: ``side="Sell"``, fires when price FALLS to
+        ``trigger_price`` (trigger_direction=2).
+        For SHORT: ``side="Buy"``, fires when price RISES to
+        ``trigger_price`` (trigger_direction=1).
+
+        Used by Phase 2 of the Bybit-verified-state-machine refactor
+        (client 2026-05-01) to put the original-trade emergency close
+        on Bybit instead of relying on the bot's price-poll loop.
+        """
+        qty_rounded = self.round_qty(qty, symbol)
+        price_rounded = self.round_price(trigger_price, symbol)
+        # LONG close (side=Sell) -> price must FALL -> direction=2.
+        # SHORT close (side=Buy) -> price must RISE -> direction=1.
+        trigger_direction = 2 if side == "Sell" else 1
+        self._log.info(
+            "placing_conditional_stop",
+            symbol=symbol, side=side, qty=qty_rounded,
+            trigger_price=price_rounded, trigger_by=trigger_by,
+            trigger_direction=trigger_direction,
+            position_idx=position_idx,
+        )
+        resp = await self._call_with_retry(
+            self._rest.place_order,
+            category=CATEGORY,
+            symbol=symbol,
+            side=side,
+            orderType="Market",
+            qty=str(qty_rounded),
+            triggerPrice=str(price_rounded),
+            triggerBy=trigger_by,
+            triggerDirection=trigger_direction,
+            positionIdx=position_idx,
+            reduceOnly=True,
+            closeOnTrigger=True,
+        )
+        result = resp.get("result", {})
+        self._log.info(
+            "conditional_stop_placed",
+            symbol=symbol, order_id=result.get("orderId", ""),
+            trigger_price=price_rounded,
+        )
+        return result
+
     async def place_conditional_open(
         self,
         symbol: str,

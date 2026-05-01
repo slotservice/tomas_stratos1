@@ -189,7 +189,17 @@ class Trade:
     hedge_filled_at: Optional[datetime] = None
     # Set to True once the bot has issued the -2 % force-close on the
     # original trade so we don't double-fire the close.
+    # NOTE: Phase 2 (client 2026-05-01) moved the force-close from a
+    # bot-side polling decision to a Bybit conditional order placed at
+    # trade open. This flag is still consulted by legacy paths but the
+    # primary close path is now ``original_force_close_order_id`` —
+    # Bybit owns the trigger, the bot only watches the WS fill event.
     original_force_closed: bool = False
+    # Bybit orderId of the -2% reduce-only conditional that closes the
+    # original at the agreed emergency-loss threshold (Phase 2,
+    # client 2026-05-01). Set after position open, cleared (cancelled)
+    # when the trade closes via any other path.
+    original_force_close_order_id: Optional[str] = None
     reentry_count: int = 0
 
     # --- Scaling ---
