@@ -384,48 +384,58 @@ class PositionManager:
                 return None
 
         # ----------------------------------------------------------
-        # 4. SL is taken from the signal AS-IS — no auto-fallback,
-        #    no liquidation-zone adjustment, no bot-side decision.
-        #    Strict architecture (client 2026-04-28): the bot must
-        #    never invent or adjust the SL. If the signal carries no
-        #    SL, the trade is rejected — there is no safe trade
-        #    without one.
+        # 4. SL handling. Client 2026-05-02 spec (revised):
+        #    - Signal HAS SL  -> use it as-is, dynamic leverage from
+        #      its distance.
+        #    - Signal MISSING SL -> apply auto-SL at -auto_sl.fallback_pct
+        #      (default -3%) AND force fixed leverage at
+        #      auto_sl.fallback_leverage (default x10). The trade
+        #      proceeds normally; the Phase 1 PROTECTION_FAILED gate
+        #      will verify the SL actually landed on Bybit and force-
+        #      close the position if not.
         # ----------------------------------------------------------
         entry_price = signal.entry
         sl_price = signal.sl if hasattr(signal, "sl") else None
-        auto_sl_applied = False  # retained for legacy log fields; always False
+        auto_sl_applied = False
 
         if sl_price is None:
-            log.warning(
-                "signal.no_sl_rejected",
-                symbol=symbol, channel_name=channel_name,
+            fallback_pct = self._settings.auto_sl.fallback_pct / 100.0
+            if direction == "LONG":
+                sl_price = round(entry_price * (1 - fallback_pct), 8)
+            else:
+                sl_price = round(entry_price * (1 + fallback_pct), 8)
+            # Mutate the signal so downstream code (notifier templates,
+            # _move_sl_to safety predicates, audit log) sees the auto-SL.
+            try:
+                signal.sl = sl_price
+                signal.signal_type = "fixed"
+            except Exception:
+                pass
+            auto_sl_applied = True
+            log.info(
+                "signal.auto_sl_applied",
+                symbol=symbol,
+                direction=direction,
+                entry=entry_price,
+                auto_sl=sl_price,
+                fallback_pct=self._settings.auto_sl.fallback_pct,
+                fallback_leverage=self._settings.auto_sl.fallback_leverage,
+                channel_name=channel_name,
             )
-            if self._should_send_reject_notify(
-                "no_sl", symbol, direction,
-            ):
-                try:
-                    from telegram.notifier import _chan, _ts
-                    await self._safe_notify(
-                        f"⚠️ SIGNAL AVVISAD (saknar stop-loss)\n"
-                        f"🕒 Tid: {_ts()}\n"
-                        f"📢 Från kanal: {_chan(channel_name)}\n"
-                        f"📊 Symbol: #{symbol}\n"
-                        f"📈 Riktning: {direction}\n"
-                        f"📍 Anledning: signalen saknar stop-loss — "
-                        f"ingen säker handel utan SL."
-                    )
-                except Exception:
-                    pass
-            return None
 
         # ----------------------------------------------------------
-        # 5. Dynamic leverage from the signal's actual SL distance.
+        # 5. Leverage. Auto-SL signals get a FIXED leverage (per
+        #    client spec 2026-05-02); real-SL signals get the
+        #    dynamic formula bucketed by SL distance.
         # ----------------------------------------------------------
-        leverage = calculate_leverage(
-            entry=entry_price,
-            sl=sl_price,
-            settings=(self._settings.wallet, self._settings.leverage),
-        )
+        if auto_sl_applied:
+            leverage = float(self._settings.auto_sl.fallback_leverage)
+        else:
+            leverage = calculate_leverage(
+                entry=entry_price,
+                sl=sl_price,
+                settings=(self._settings.wallet, self._settings.leverage),
+            )
 
         # Slippage guard: reject signal if current market price is too
         # far from the signal's entry price. Prevents placing orders on

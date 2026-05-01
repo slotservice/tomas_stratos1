@@ -201,14 +201,28 @@ def per_symbol_pnl(closed: list) -> list[dict]:
     return rows
 
 
-def per_channel_pnl(closed: list, db_trades: list[dict],
-                    db_signals: dict[int, dict]) -> tuple[list[dict], float, int]:
-    """Map closed-PnL records back to source channels via DB.
+def _build_attribution_maps(
+    db_trades: list[dict], db_signals: dict[int, dict],
+) -> tuple[
+    dict[tuple[str, str], list[str]],
+    dict[tuple[str, str], list[str]],
+]:
+    """Build (sym, side) -> [channel] and (sym, side) -> [signal_type]
+    maps for closed-PnL attribution.
 
-    Phase 6.C.3 (audit #22): per-channel breakdown helps spot
-    channels whose signals systematically lose money.
+    Phase 6 follow-up (client 2026-05-02): hedge children have
+    signal_id=NULL but their parent trade row links to them via
+    hedge_trade_id. We walk that link so hedge closes get attributed
+    back to the parent's channel + signal_type with a "(hedge)"
+    suffix on the channel name. Without this, hedge PnL falls into
+    the unmatched bucket and the per-channel breakdown under-counts
+    real channel performance.
     """
+    by_id = {int(t["id"]): t for t in db_trades}
     sym_side_to_channels: dict[tuple[str, str], list[str]] = defaultdict(list)
+    sym_side_to_types: dict[tuple[str, str], list[str]] = defaultdict(list)
+
+    # Pass 1: ORIGINAL trades (signal_id present).
     for t in db_trades:
         sig_id = t.get("signal_id")
         if sig_id is None:
@@ -217,10 +231,59 @@ def per_channel_pnl(closed: list, db_trades: list[dict],
         if not sig:
             continue
         chan = sig.get("source_channel_name") or sig.get("channel_name") or "?"
+        st = sig.get("signal_type") or "?"
         direction = (sig.get("direction") or "").upper()
         side = "Buy" if direction == "LONG" else "Sell"
         sym = sig.get("symbol") or "?"
         sym_side_to_channels[(sym, side)].append(chan)
+        sym_side_to_types[(sym, side)].append(st)
+
+    # Pass 2: HEDGE CHILDREN (signal_id=NULL). Walk the parent link
+    # via hedge_trade_id and attribute the hedge close to the
+    # parent's channel + signal_type, tagged with "(hedge)".
+    for child in db_trades:
+        if child.get("signal_id") is not None:
+            continue
+        # Find the parent that points to this child.
+        for parent in db_trades:
+            try:
+                parent_hedge_id = parent.get("hedge_trade_id")
+                if parent_hedge_id is None:
+                    continue
+                if int(parent_hedge_id) != int(child["id"]):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            parent_sig_id = parent.get("signal_id")
+            if parent_sig_id is None:
+                break
+            sig = db_signals.get(int(parent_sig_id))
+            if not sig:
+                break
+            chan = (sig.get("source_channel_name")
+                    or sig.get("channel_name") or "?") + " (hedge)"
+            st = sig.get("signal_type") or "?"
+            parent_dir = (sig.get("direction") or "").upper()
+            # The hedge sits on the OPPOSITE side from the parent.
+            hedge_side = "Sell" if parent_dir == "LONG" else "Buy"
+            sym = sig.get("symbol") or "?"
+            sym_side_to_channels[(sym, hedge_side)].append(chan)
+            sym_side_to_types[(sym, hedge_side)].append(st)
+            break
+
+    return sym_side_to_channels, sym_side_to_types
+
+
+def per_channel_pnl(closed: list, db_trades: list[dict],
+                    db_signals: dict[int, dict]) -> tuple[list[dict], float, int]:
+    """Map closed-PnL records back to source channels via DB.
+
+    Phase 6.C.3 (audit #22): per-channel breakdown helps spot
+    channels whose signals systematically lose money. Hedge closes
+    are attributed back to the parent signal's channel with a
+    "(hedge)" tag (Phase 6 follow-up 2026-05-02).
+    """
+    sym_side_to_channels, _ = _build_attribution_maps(db_trades, db_signals)
 
     by_chan: dict[str, list[float]] = defaultdict(list)
     unmatched_pnl: list[float] = []
@@ -258,20 +321,12 @@ def per_channel_pnl(closed: list, db_trades: list[dict],
 def per_signal_type_pnl(
     closed: list, db_trades: list[dict], db_signals: dict[int, dict],
 ) -> list[dict]:
-    """Per signal_type breakdown (dynamic / swing / fixed). Audit #8."""
-    sym_side_to_types: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for t in db_trades:
-        sig_id = t.get("signal_id")
-        if sig_id is None:
-            continue
-        sig = db_signals.get(int(sig_id))
-        if not sig:
-            continue
-        st = sig.get("signal_type") or "?"
-        direction = (sig.get("direction") or "").upper()
-        side = "Buy" if direction == "LONG" else "Sell"
-        sym = sig.get("symbol") or "?"
-        sym_side_to_types[(sym, side)].append(st)
+    """Per signal_type breakdown (dynamic / swing / fixed). Audit #8.
+
+    Includes hedge PnL — hedge closes are attributed to the parent
+    signal's signal_type via the shared attribution map.
+    """
+    _, sym_side_to_types = _build_attribution_maps(db_trades, db_signals)
 
     by_type: dict[str, list[float]] = defaultdict(list)
     for c in closed:
