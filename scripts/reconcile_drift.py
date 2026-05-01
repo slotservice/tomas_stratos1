@@ -220,6 +220,66 @@ def find_ghosts(
     return ghosts
 
 
+def find_untracked_positions(
+    positions: list,
+    resolved: list[dict],
+) -> list[dict]:
+    """Bybit positions with no matching DB-active trade.
+
+    Opposite drift direction from ``find_ghosts``. These are usually
+    hedges whose parent trade was closed (cleaned up via reconcile)
+    leaving the hedge orphaned on Bybit, or positions opened before
+    the bot started tracking. They commonly have NO SL / NO trailing
+    because the WS handler that should have set them up missed the
+    fill event (pre-Phase-5c bug).
+    """
+    db_keys = {
+        (t["symbol"], t["side"], t["position_idx"])
+        for t in resolved
+        if t["symbol"] and t["side"] and t["position_idx"] is not None
+    }
+    out = []
+    for p in positions:
+        sym = p.get("symbol")
+        side = p.get("side")
+        try:
+            idx = int(p.get("positionIdx") or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        if (sym, side, idx) in db_keys:
+            continue
+        try:
+            sl = float(p.get("stopLoss") or 0) or None
+        except (TypeError, ValueError):
+            sl = None
+        try:
+            trailing = float(p.get("trailingStop") or 0) or None
+        except (TypeError, ValueError):
+            trailing = None
+        try:
+            size = float(p.get("size") or 0)
+            avg_price = float(p.get("avgPrice") or 0)
+        except (TypeError, ValueError):
+            size = 0
+            avg_price = 0
+        try:
+            unreal = float(p.get("unrealisedPnl") or 0)
+        except (TypeError, ValueError):
+            unreal = 0
+        out.append({
+            "symbol": sym,
+            "side": side,
+            "position_idx": idx,
+            "size": size,
+            "avg_price": avg_price,
+            "stop_loss": sl,
+            "trailing_stop": trailing,
+            "unrealised_pnl": unreal,
+            "raw": p,
+        })
+    return out
+
+
 def find_orphan_orders(
     orders: list, positions: list,
 ) -> list[dict]:
@@ -306,6 +366,78 @@ def close_db_ghost(db_path: str, ghost: dict) -> None:
         conn.close()
 
 
+def protect_untracked_position(
+    client: HTTP, pos: dict, hedge_hard_sl_pct: float = 2.0,
+    hedge_trailing_pct: float = 1.2,
+) -> bool:
+    """Set hedge-spec SL + trailing on an untracked Bybit position.
+
+    Uses the hedge model's hard SL (% from current entry) + trailing
+    (% native). active_price is OMITTED so Bybit defaults to immediate
+    activation. Same path as the WS-driven _maybe_activate_hedge_from_fill
+    in the live bot.
+
+    For SHORT (Sell): SL above entry.
+    For LONG  (Buy):  SL below entry.
+    """
+    sym = pos["symbol"]
+    side = pos["side"]
+    idx = pos["position_idx"]
+    avg = pos["avg_price"]
+    if avg <= 0:
+        print(f"  skip {sym} idx={idx}: avg_price unknown", file=sys.stderr)
+        return False
+    sl_pct = hedge_hard_sl_pct / 100.0
+    tr_pct = hedge_trailing_pct / 100.0
+    if side == "Sell":
+        sl_price = round(avg * (1 + sl_pct), 8)
+    else:
+        sl_price = round(avg * (1 - sl_pct), 8)
+    trailing_distance = round(avg * tr_pct, 8)
+    try:
+        client.set_trading_stop(
+            category="linear",
+            symbol=sym,
+            positionIdx=idx,
+            stopLoss=str(sl_price),
+            trailingStop=str(trailing_distance),
+            slTriggerBy="LastPrice",
+        )
+        return True
+    except Exception as exc:
+        print(
+            f"  set_trading_stop failed for {sym} idx={idx}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+
+def close_untracked_position(client: HTTP, pos: dict) -> bool:
+    """Market reduce-only close on an untracked Bybit position."""
+    sym = pos["symbol"]
+    side = pos["side"]
+    idx = pos["position_idx"]
+    size = pos["size"]
+    close_side = "Sell" if side == "Buy" else "Buy"
+    try:
+        client.place_order(
+            category="linear",
+            symbol=sym,
+            side=close_side,
+            orderType="Market",
+            qty=str(size),
+            positionIdx=idx,
+            reduceOnly=True,
+        )
+        return True
+    except Exception as exc:
+        print(
+            f"  close failed for {sym} idx={idx}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+
 def cancel_orphan_order(client: HTTP, order: dict) -> bool:
     try:
         client.cancel_order(
@@ -329,6 +461,8 @@ def cancel_orphan_order(client: HTTP, order: dict) -> bool:
 
 def main() -> None:
     apply = "--apply" in sys.argv
+    protect_untracked = "--protect-untracked" in sys.argv
+    close_untracked = "--close-untracked" in sys.argv
     db_path = str(PROJECT_ROOT / "stratos1.db")
     client = _client()
 
@@ -338,6 +472,7 @@ def main() -> None:
     resolved = resolve_trade_keys(trades, signals)
     ghosts = find_ghosts(resolved, positions)
     orphan_orders = find_orphan_orders(orders, positions)
+    untracked = find_untracked_positions(positions, resolved)
 
     print(f"DB active rows:        {len(resolved)}")
     print(f"Bybit open positions:  {len(positions)}")
@@ -360,40 +495,91 @@ def main() -> None:
             f"reduce_only={o['reduce_only']}  why={o['why']}  "
             f"order_id={o['order_id']}"
         )
-
-    if not apply:
+    print()
+    print(f"Untracked Bybit positions (open on Bybit, no DB row): {len(untracked)}")
+    for u in untracked:
+        prot = (
+            f"SL={u['stop_loss']}  trail={u['trailing_stop']}"
+        )
+        print(
+            f"  {u['symbol']:<12}  {u['side']:<5}  idx={u['position_idx']}  "
+            f"size={u['size']}  entry={u['avg_price']}  "
+            f"pnl={u['unrealised_pnl']:+.2f}  {prot}"
+        )
+    if untracked:
         print()
         print(
-            "DRY RUN. Re-run with --apply to actually close the ghost DB "
-            "rows and cancel the orphan orders."
+            "  Untracked positions usually mean a hedge whose parent "
+            "trade was closed (often via reconcile). They will NOT "
+            "auto-self-manage — operator must choose:"
+        )
+        print(
+            "    --protect-untracked : set hedge-spec SL+trailing "
+            "(2.0% / 1.2%, LastPrice)"
+        )
+        print(
+            "    --close-untracked   : Market reduce-only close right now"
+        )
+
+    if not (apply or protect_untracked or close_untracked):
+        print()
+        print(
+            "DRY RUN. Re-run with --apply to clean up DB ghosts + "
+            "orphan orders, --protect-untracked to set SL+trailing on "
+            "untracked positions, --close-untracked to flatten them."
         )
         return
 
-    print()
-    print("APPLYING CLEANUP ...")
-    closed_count = 0
-    for g in ghosts:
-        try:
-            close_db_ghost(db_path, g)
-            closed_count += 1
-            print(f"  marked CLOSED in DB: trade_id={g['trade_id']}")
-        except Exception as exc:
-            print(
-                f"  FAILED to close trade_id={g['trade_id']}: {exc}",
-                file=sys.stderr,
-            )
+    if apply:
+        print()
+        print("APPLYING DB + ORDER CLEANUP ...")
+        closed_count = 0
+        for g in ghosts:
+            try:
+                close_db_ghost(db_path, g)
+                closed_count += 1
+                print(f"  marked CLOSED in DB: trade_id={g['trade_id']}")
+            except Exception as exc:
+                print(
+                    f"  FAILED to close trade_id={g['trade_id']}: {exc}",
+                    file=sys.stderr,
+                )
+        cancelled_count = 0
+        for o in orphan_orders:
+            if cancel_orphan_order(client, o):
+                cancelled_count += 1
+                print(f"  cancelled order: {o['symbol']} {o['order_id']}")
+        print()
+        print(
+            f"DONE. Closed {closed_count} ghost rows, "
+            f"cancelled {cancelled_count} orphan orders."
+        )
 
-    cancelled_count = 0
-    for o in orphan_orders:
-        if cancel_orphan_order(client, o):
-            cancelled_count += 1
-            print(f"  cancelled order: {o['symbol']} {o['order_id']}")
+    if protect_untracked and untracked:
+        print()
+        print("APPLYING --protect-untracked ...")
+        protected_count = 0
+        for u in untracked:
+            if protect_untracked_position(client, u):
+                protected_count += 1
+                print(
+                    f"  protected: {u['symbol']} {u['side']} "
+                    f"idx={u['position_idx']} (SL+trailing set)"
+                )
+        print(f"DONE. Protected {protected_count}/{len(untracked)} positions.")
 
-    print()
-    print(
-        f"DONE. Closed {closed_count} ghost rows, "
-        f"cancelled {cancelled_count} orphan orders."
-    )
+    if close_untracked and untracked:
+        print()
+        print("APPLYING --close-untracked ...")
+        closed_count = 0
+        for u in untracked:
+            if close_untracked_position(client, u):
+                closed_count += 1
+                print(
+                    f"  closed: {u['symbol']} {u['side']} "
+                    f"idx={u['position_idx']} (Market reduce-only)"
+                )
+        print(f"DONE. Closed {closed_count}/{len(untracked)} positions.")
 
 
 if __name__ == "__main__":
