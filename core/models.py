@@ -70,25 +70,36 @@ class ParsedSignal:
 # ===================================================================
 
 class TradeState(enum.Enum):
-    """All possible states a trade can be in."""
+    """All possible states a trade can be in.
 
-    PENDING           = "PENDING"
-    ENTRY1_PLACED     = "ENTRY1_PLACED"
-    ENTRY1_FILLED     = "ENTRY1_FILLED"
-    ENTRY2_PLACED     = "ENTRY2_PLACED"
-    ENTRY2_FILLED     = "ENTRY2_FILLED"
-    POSITION_OPEN     = "POSITION_OPEN"
-    BREAKEVEN_ACTIVE  = "BREAKEVEN_ACTIVE"
-    SCALING_STEP_1    = "SCALING_STEP_1"
-    SCALING_STEP_2    = "SCALING_STEP_2"
-    SCALING_STEP_3    = "SCALING_STEP_3"
-    SCALING_STEP_4    = "SCALING_STEP_4"
-    TRAILING_ACTIVE   = "TRAILING_ACTIVE"
-    HEDGE_ACTIVE      = "HEDGE_ACTIVE"
-    REENTRY_WAITING   = "REENTRY_WAITING"
-    CLOSED            = "CLOSED"
-    CANCELLED         = "CANCELLED"
-    ERROR             = "ERROR"
+    Phase 4 (client 2026-05-01) will replace this enum with the
+    explicit 13-state list Tomas dictated. For Phase 1 we add
+    PROTECTION_FAILED so a trade whose SL/TP/trailing setup did not
+    complete can be marked unsafe and force-closed without leaking
+    a "POSITION ÖPPNAD" message that would imply the protection is
+    in place. Tomas explicit rule: "If SL / TP / trailing is not
+    verified: stop the trade, mark it as INCOMPLETE, send an error,
+    do not send a normal Telegram notification."
+    """
+
+    PENDING            = "PENDING"
+    ENTRY1_PLACED      = "ENTRY1_PLACED"
+    ENTRY1_FILLED      = "ENTRY1_FILLED"
+    ENTRY2_PLACED      = "ENTRY2_PLACED"
+    ENTRY2_FILLED      = "ENTRY2_FILLED"
+    POSITION_OPEN      = "POSITION_OPEN"
+    PROTECTION_FAILED  = "PROTECTION_FAILED"
+    BREAKEVEN_ACTIVE   = "BREAKEVEN_ACTIVE"
+    SCALING_STEP_1     = "SCALING_STEP_1"
+    SCALING_STEP_2     = "SCALING_STEP_2"
+    SCALING_STEP_3     = "SCALING_STEP_3"
+    SCALING_STEP_4     = "SCALING_STEP_4"
+    TRAILING_ACTIVE    = "TRAILING_ACTIVE"
+    HEDGE_ACTIVE       = "HEDGE_ACTIVE"
+    REENTRY_WAITING    = "REENTRY_WAITING"
+    CLOSED             = "CLOSED"
+    CANCELLED          = "CANCELLED"
+    ERROR              = "ERROR"
 
 
 # ===================================================================
@@ -210,13 +221,28 @@ class Trade:
         """
         Move to a new state and update the timestamp.
 
+        Logs every transition for the audit trail (client 2026-05-01
+        audit point #10: "Every trade must have ... state transitions.
+        The full lifecycle must be traceable.").
+
         Parameters
         ----------
         new_state:
             The target ``TradeState``.
         """
+        prev_state = self.state.value if self.state else None
         self.state = new_state
         self.touch()
+        try:
+            import structlog
+            structlog.get_logger(__name__).info(
+                "trade.state_transition",
+                trade_id=self.id,
+                from_state=prev_state,
+                to_state=new_state.value,
+            )
+        except Exception:
+            pass
 
     @property
     def is_terminal(self) -> bool:

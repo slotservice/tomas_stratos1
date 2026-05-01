@@ -461,6 +461,37 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def protection_failed(
+        self,
+        trade,
+        signal,
+        failed_steps: list,
+        action: str = "force-closed",
+    ) -> str:
+        """Sent INSTEAD of position_opened when SL/TP/trailing setup
+        could not be verified on Bybit (client 2026-05-01 audit point #18:
+        "If SL / TP / trailing is not verified: stop the trade, mark it
+        as INCOMPLETE, send an error, do not send a normal Telegram
+        notification."). The bot must NOT emit position_opened in this
+        path — Tomas's "no false success" rule.
+        """
+        steps_str = ", ".join(failed_steps) if failed_steps else "okänd"
+        text = (
+            f"<b>❌ POSITION OFÖRSVARAD (PROTECTION FAILED)</b>\n"
+            f"\n"
+            f"   Tid: {_ts()}\n"
+            f"   Från kanal: {_chan(signal.channel_name)}\n"
+            f"   Symbol: {_sym(signal.symbol)}\n"
+            f"   Riktning: {signal.direction}\n"
+            f"\n"
+            f"   Misslyckade skydd: {steps_str}\n"
+            f"   Åtgärd: positionen {action} (Market reduce-only).\n"
+            f"\n"
+            f"   Ingen 'POSITION ÖPPNAD' skickas — boten rapporterar "
+            f"endast positioner som har verifierat skydd på Bybit."
+        )
+        return await self._send_notify(text)
+
     async def position_opened(
         self,
         trade,
@@ -1534,12 +1565,19 @@ class TelegramNotifier:
         self,
         positions_verified: int,
         sl_tp_restored: int,
+        build_hash: str = "unknown",
     ) -> str:
-        """State restored after restart."""
+        """State restored after restart.
+
+        ``build_hash`` is the short git SHA the process is running, so
+        Tomas can verify from Telegram alone that the bot picked up the
+        latest deploy (client 2026-05-01 audit point #19).
+        """
         text = (
             f"<b>🧷 ÅTERSTÄLLNING GENOMFÖRD</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
+            f"   Build: <code>{build_hash}</code>\n"
             f"   Positioner verifierade: {positions_verified}\n"
             f"   SL/TP återställda: {sl_tp_restored}\n"
             f"\n"

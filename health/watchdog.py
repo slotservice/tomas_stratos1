@@ -479,9 +479,11 @@ class HealthChecker:
         if not db_trades:
             log.info("state_recovery.no_active_trades")
             try:
+                from core.build_info import get_build_hash
                 await self._tg_notifier.state_restored(
                     positions_verified=0,
                     sl_tp_restored=0,
+                    build_hash=get_build_hash(),
                 )
             except Exception:
                 log.exception("state_recovery.notify_failed")
@@ -801,9 +803,11 @@ class HealthChecker:
 
         # 7. Send notification.
         try:
+            from core.build_info import get_build_hash
             await self._tg_notifier.state_restored(
                 positions_verified=counts["positions_verified"],
                 sl_tp_restored=counts["sl_tp_restored"],
+                build_hash=get_build_hash(),
             )
         except Exception:
             log.exception("state_recovery.notify_failed")

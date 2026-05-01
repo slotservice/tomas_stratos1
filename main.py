@@ -219,8 +219,11 @@ async def main() -> None:
         log_level=settings.general.log_level,
         log_file=settings.general.log_file,
     )
+    from core.build_info import get_build_hash
+    build_hash = get_build_hash()
     log.info(
         "stratos1.starting",
+        build=build_hash,
         timezone=settings.general.timezone,
         demo=settings.bybit.demo,
         groups=len(settings.telegram_groups),

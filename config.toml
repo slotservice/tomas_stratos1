@@ -54,18 +54,23 @@ trailing_distance_pct = 2.5       # 2.5% trailing distance
 trigger_type = "LastPrice"        # Trailing stop trigger (client 2026-04-29: trailing = Last)
 
 [hedge]
-# Client 2026-04-30 production-stable hedge model:
+# Client 2026-05-01 hedge model (revised, BACKUP-only hard SL):
 #   trigger_pct                = -1.5  (Last price, Bybit conditional)
-#   hard_sl_pct                = 1.2   (% from hedge's own entry)
-#   trailing_pct               = 1.2   (Bybit native trailing, Last)
-#   original_force_close_pct   = 2.0   (close original at -2% adverse)
+#   hard_sl_pct                = 2.0   (% from hedge's own entry — BACKUP
+#                                       only, MUST be further than trailing
+#                                       so trailing always exits first)
+#   trailing_pct               = 1.2   (Bybit native trailing, Last —
+#                                       primary exit)
+#   original_force_close_pct   = 2.0   (close original at -2% adverse —
+#                                       Phase 2 will move this to a Bybit
+#                                       conditional armed at trade open)
 #   timeout_minutes            = 20    (close hedge if no meaningful move)
 #   no_move_threshold_pct      = 0.5   ("meaningful" = 0.5% from entry)
 #   use_bybit_conditional_only = true  (kill bot-side check_and_activate)
 enabled = true
 trigger_pct = -1.5
 max_hedge_count = 1
-hard_sl_pct = 1.2
+hard_sl_pct = 2.0
 trailing_pct = 1.2
 timeout_minutes = 20
 no_move_threshold_pct = 0.5

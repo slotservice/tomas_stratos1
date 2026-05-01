@@ -1114,6 +1114,14 @@ class PositionManager:
         # the bot.
         valid_sl = sl_price
 
+        # Protection-failure tracker (Phase 1, client 2026-05-01 audit
+        # point #18). Each protection step (SL, TP, trailing) appends
+        # its name on Bybit-side failure. After all steps run, if this
+        # list is non-empty, the trade is marked PROTECTION_FAILED, the
+        # position is force-closed via Market reduce-only, and the
+        # normal "POSITION ÖPPNAD" notification is SUPPRESSED.
+        protection_failures: list[str] = []
+
         # ---------- Place the SL via set_trading_stop ----------
         # SL must always use the position-wide trading-stop (not a
         # conditional order) because it applies to the whole position.
@@ -1142,26 +1150,7 @@ class PositionManager:
                 log.exception(
                     "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
-                # Dedupe per (symbol, direction): on volatile symbols
-                # we sometimes hit this twice in quick succession
-                # (initial + a retry from elsewhere) — operator only
-                # needs ONE alert.
-                if self._should_send_reject_notify(
-                    "sl_error", symbol, direction,
-                ):
-                    try:
-                        await self._notifier.error_sl_not_executed(
-                            signal=trade.signal,
-                            error_detail=(
-                                "SL kunde inte sättas på börsen. "
-                                "Manuell åtgärd kan krävas."
-                            ),
-                        )
-                    except Exception:
-                        log.exception(
-                            "notify.sl_error_failed",
-                            trade_id=trade.id, symbol=symbol,
-                        )
+                protection_failures.append("SL")
 
         # ---------- Place PARTIAL TPs — one reduce-only conditional
         # order per TP level (from TP2 onwards). Client IZZU
@@ -1261,6 +1250,8 @@ class PositionManager:
                         trade_id=trade.id, symbol=symbol,
                         tp_index=i + 1, tp_price=tp_price,
                     )
+                    if "TP" not in protection_failures:
+                        protection_failures.append("TP")
 
             trade.tp_order_ids = tp_order_ids
             log.info(
@@ -1355,6 +1346,86 @@ class PositionManager:
                 "trade.trailing_arm_failed",
                 trade_id=trade.id, symbol=symbol,
             )
+            protection_failures.append("trailing")
+
+        # ----------------------------------------------------------
+        # 14c. PROTECTION GATE (Phase 1, client 2026-05-01 audit #18).
+        # If any protection step (SL, TP, trailing) failed to verify
+        # on Bybit, the position is unsafe. Force-close it via
+        # Market reduce-only and emit a single PROTECTION_FAILED
+        # error in place of POSITION ÖPPNAD.
+        # ----------------------------------------------------------
+        if protection_failures:
+            log.error(
+                "trade.protection_failed",
+                trade_id=trade.id, symbol=symbol,
+                failed_steps=protection_failures,
+            )
+            close_side = "Sell" if direction == "LONG" else "Buy"
+            close_action = "force-stängd"
+            try:
+                if trade.quantity and trade.quantity > 0:
+                    await self._bybit.place_market_order(
+                        symbol=symbol,
+                        side=close_side,
+                        qty=trade.quantity,
+                        position_idx=position_idx,
+                        reduce_only=True,
+                    )
+                    log.info(
+                        "trade.protection_failed.force_closed",
+                        trade_id=trade.id, symbol=symbol,
+                        qty=trade.quantity,
+                    )
+            except Exception as exc:
+                ret_code = getattr(exc, "ret_code", None)
+                if ret_code == 110017:
+                    log.warning(
+                        "trade.protection_failed.position_already_zero",
+                        trade_id=trade.id, symbol=symbol,
+                    )
+                    close_action = "redan stängd på Bybit"
+                else:
+                    log.exception(
+                        "trade.protection_failed.force_close_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
+                    close_action = "stängning MISSLYCKADES — manuell åtgärd"
+            trade.transition(TradeState.PROTECTION_FAILED)
+            await self._persist_trade_state(
+                trade,
+                avg_entry=avg_entry,
+                margin=trade.margin,
+                quantity=trade.quantity,
+            )
+            try:
+                await self._db.log_event(
+                    trade_id=int(trade.id),
+                    event_type="protection_failed",
+                    details={
+                        "failed_steps": protection_failures,
+                        "close_action": close_action,
+                    },
+                )
+            except Exception:
+                pass
+            if self._should_send_reject_notify(
+                "protection_failed", symbol, direction,
+            ):
+                try:
+                    await self._notifier.protection_failed(
+                        trade=trade,
+                        signal=signal,
+                        failed_steps=protection_failures,
+                        action=close_action,
+                    )
+                except Exception:
+                    log.exception(
+                        "notify.protection_failed_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
+            self._active_trades.pop(trade.id, None)
+            return None
 
         # ----------------------------------------------------------
         # 15. Transition to POSITION_OPEN.
@@ -1395,13 +1466,24 @@ class PositionManager:
         except Exception:
             log.exception("notify.position_opened_failed")
 
+        # Audit fields (client 2026-05-01 audit point #10): every trade
+        # log line must include signal_id (DB row), db_id (= trade.id
+        # after save_trade), bybit order IDs, leverage, state. structlog
+        # adds the timestamp automatically.
         log.info(
             "trade.opened",
             trade_id=trade.id,
+            db_id=trade.id,
+            signal_id=signal_db_id,
             symbol=symbol,
             direction=direction,
             avg_entry=avg_entry,
             leverage=leverage,
+            sl_price=trade.sl_price,
+            tp_count=len(valid_tps),
+            bybit_order_ids=trade.bybit_order_ids,
+            tp_order_ids=trade.tp_order_ids,
+            state=trade.state.value,
         )
 
         # Phase 3 — pre-arm the hedge on Bybit as a conditional market
