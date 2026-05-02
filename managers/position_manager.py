@@ -2456,11 +2456,43 @@ class PositionManager:
 
         # Bybit call. set_trading_stop is idempotent on the Bybit side
         # (returns 34040 if unchanged, swallowed by the adapter).
+        #
+        # 2026-05-02 fix: also re-pass the existing trailing fields
+        # so that calling set_trading_stop with only stop_loss does
+        # not (in some Bybit-demo paths) reset trailing to 0.
+        # BTCUSDT trade #31 incident: trailing was armed at trade
+        # open with distance 1956.4 / activation 83029.7. After a
+        # later set_trading_stop call that only passed stop_loss,
+        # trailing went to 0 and 'trailingstop missing' alert fired.
+        # Read the current trailing from get_position so we always
+        # carry it forward.
+        existing_trailing = None
+        existing_active = None
+        try:
+            verify_side = "Buy" if direction == "LONG" else "Sell"
+            cur_pos = await self._bybit.get_position(symbol, verify_side)
+            if cur_pos:
+                try:
+                    et = float(cur_pos.get("trailingStop") or 0)
+                    if et > 0:
+                        existing_trailing = et
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    ea = float(cur_pos.get("activePrice") or 0)
+                    if ea > 0:
+                        existing_active = ea
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            pass
         try:
             await self._bybit.set_trading_stop(
                 symbol=symbol,
                 position_idx=position_idx,
                 stop_loss=round(new_sl_price, 8),
+                trailing_stop=existing_trailing,
+                active_price=existing_active,
                 sl_trigger_by="LastPrice",
             )
         except Exception:

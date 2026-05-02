@@ -656,10 +656,45 @@ class HealthChecker:
                 if needs_restore:
                     try:
                         position_idx = 1 if direction == "LONG" else 2
-                        sl_to_set = trailing_in_db or sl_in_db
+                        sl_to_set = sl_in_db
+                        # 2026-05-02 fix: preserve trailing on the
+                        # restore call. Earlier behavior passed only
+                        # stop_loss, which (in some Bybit-demo paths)
+                        # wiped any existing trailing on the position
+                        # — BTCUSDT trade #31 lost its trailing on
+                        # bot restart even though trailing WAS still
+                        # set on Bybit. Pull current trailing from
+                        # the live position dict and pass it back so
+                        # it is never zeroed by the SL re-set.
+                        trailing_now = pos.get("trailingStop")
+                        active_now = pos.get("activePrice")
+                        try:
+                            trailing_to_set = (
+                                float(trailing_now)
+                                if trailing_now and float(trailing_now) > 0
+                                else None
+                            )
+                        except (TypeError, ValueError):
+                            trailing_to_set = None
+                        try:
+                            active_to_set = (
+                                float(active_now)
+                                if active_now and float(active_now) > 0
+                                else None
+                            )
+                        except (TypeError, ValueError):
+                            active_to_set = None
+                        # If Bybit has no trailing but DB does, restore from DB.
+                        if trailing_to_set is None and trailing_in_db:
+                            try:
+                                trailing_to_set = float(trailing_in_db)
+                            except (TypeError, ValueError):
+                                trailing_to_set = None
                         await self._bybit.set_trading_stop(
                             symbol=symbol,
                             stop_loss=float(sl_to_set),
+                            trailing_stop=trailing_to_set,
+                            active_price=active_to_set,
                             position_idx=position_idx,
                         )
                         counts["sl_tp_restored"] += 1
@@ -668,6 +703,8 @@ class HealthChecker:
                             trade_id=trade_id,
                             symbol=symbol,
                             sl=sl_to_set,
+                            trailing=trailing_to_set,
+                            active=active_to_set,
                         )
                     except Exception:
                         log.exception(
