@@ -1503,6 +1503,16 @@ class PositionManager:
             quantity=trade.quantity,
         )
 
+        # 2026-05-02 fix: ``tp_price`` is only defined inside the
+        # ``for tp_price in valid_tps`` loop. When all signal TPs were
+        # skipped (every TP within 2% of entry — Phase 5 ``MIN_TP_
+        # DISTANCE_PCT``), the loop never runs and ``tp_price`` is
+        # unbound. Referencing it here raised UnboundLocalError mid-
+        # process_signal, leaving an opened position on Bybit but
+        # NO trade row in _active_trades and NO hedge pre-arm + NO
+        # force-close conditional armed (ONDOUSDT trade #17 incident
+        # 2026-05-02 05:59 — all 3 TPs within 0.7% of entry, all
+        # skipped, then crash; position became OBEVAKAD spam).
         await self._db.log_event(
             trade_id=int(trade.id),
             event_type="position_opened",
@@ -1511,7 +1521,7 @@ class PositionManager:
                 "quantity": quantity,
                 "leverage": leverage,
                 "sl": sl_price,
-                "tp": tp_price,
+                "tps": valid_tps,
                 "auto_sl": auto_sl_applied,
                 "is_reentry": is_reentry,
             },
