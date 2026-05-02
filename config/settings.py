@@ -230,6 +230,10 @@ class GeneralSettings(BaseModel):
     log_level: str = "INFO"
     log_file: str = "stratos1.log"
     db_path: str = "stratos1.db"
+    # Client 2026-05-02: every bot restart MUST flatten Bybit +
+    # reset DB-active trades to a clean slate. No state inheritance
+    # across restarts.
+    clean_start_on_restart: bool = True
 
 
 # ===================================================================

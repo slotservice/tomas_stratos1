@@ -8,6 +8,11 @@ timezone = "Europe/Stockholm"
 log_level = "INFO"                # DEBUG, INFO, WARNING, ERROR
 log_file = "stratos1.log"
 db_path = "stratos1.db"
+# Client 2026-05-02: every bot restart MUST flatten Bybit + reset
+# DB-active trades to a clean slate. No state inheritance across
+# restarts. Set to false only for deliberate position-preserving
+# restarts (rare).
+clean_start_on_restart = true
 
 [wallet]
 bot_wallet = 402.1                # Fixed internal theoretical wallet (USDT)
