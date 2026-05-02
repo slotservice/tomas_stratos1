@@ -59,9 +59,22 @@ def clean_bybit() -> tuple[int, int]:
         recv_window=15000,
     )
 
-    pos_resp = client.get_positions(category="linear", settleCoin="USDT")
+    # Paginate — Bybit default limit=20 truncates accounts holding more.
+    raw_positions: list = []
+    cursor = ""
+    while True:
+        kwargs = dict(category="linear", settleCoin="USDT", limit=200)
+        if cursor:
+            kwargs["cursor"] = cursor
+        pos_resp = client.get_positions(**kwargs)
+        result = pos_resp.get("result", {}) or {}
+        batch = result.get("list", []) or []
+        raw_positions.extend(batch)
+        cursor = result.get("nextPageCursor", "") or ""
+        if not cursor or not batch:
+            break
     active = [
-        p for p in pos_resp.get("result", {}).get("list", [])
+        p for p in raw_positions
         if float(p.get("size", "0") or 0) > 0
     ]
     closed = 0

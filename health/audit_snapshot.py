@@ -72,18 +72,29 @@ async def collect_snapshot(
     All Bybit-side data is fetched live; DB data is read directly.
     No state is mutated. Safe to call from the close-trade hot path.
     """
+    # CRITICAL: paginate. Bybit's get_positions defaults to limit=20.
+    # Without pagination an account holding > 20 positions returns
+    # a truncated snapshot — we'd silently report wrong counts /
+    # miss orphans.
     open_positions: list[dict] = []
     open_orders: list[dict] = []
     try:
-        positions_resp = await bybit_adapter._call_with_retry(
-            bybit_adapter._rest.get_positions,
-            category="linear",
-            settleCoin="USDT",
-        )
-        raw = (positions_resp.get("result", {}) or {}).get("list", []) or []
-        open_positions = [
-            p for p in raw if float(p.get("size", 0) or 0) > 0
-        ]
+        cursor = ""
+        for _ in range(20):
+            kwargs = dict(category="linear", settleCoin="USDT", limit=200)
+            if cursor:
+                kwargs["cursor"] = cursor
+            positions_resp = await bybit_adapter._call_with_retry(
+                bybit_adapter._rest.get_positions, **kwargs,
+            )
+            result = positions_resp.get("result", {}) or {}
+            batch = result.get("list", []) or []
+            for p in batch:
+                if float(p.get("size", 0) or 0) > 0:
+                    open_positions.append(p)
+            cursor = result.get("nextPageCursor", "") or ""
+            if not cursor or not batch:
+                break
     except Exception:
         log.exception("audit_snapshot.positions_fetch_failed")
     try:

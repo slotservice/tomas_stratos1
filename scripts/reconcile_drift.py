@@ -70,9 +70,29 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 def fetch_open_positions(client: HTTP) -> list:
-    resp = client.get_positions(category="linear", settleCoin="USDT")
-    raw = (resp.get("result", {}) or {}).get("list", []) or []
-    return [p for p in raw if float(p.get("size", 0) or 0) > 0]
+    """Fetch ALL non-zero positions across the account.
+
+    CRITICAL: Bybit's get_positions defaults to limit=20. Without
+    pagination, accounts holding more than 20 positions return a
+    truncated snapshot and any position past the 20th looks
+    'missing' to the caller — which previously caused
+    reconcile_drift to wrongly mark live trades as DB ghosts and
+    close them. Always paginate via nextPageCursor.
+    """
+    out: list = []
+    cursor = ""
+    for _ in range(20):  # safety bound on page count
+        kwargs = dict(category="linear", settleCoin="USDT", limit=200)
+        if cursor:
+            kwargs["cursor"] = cursor
+        resp = client.get_positions(**kwargs)
+        result = resp.get("result", {}) or {}
+        batch = result.get("list", []) or []
+        out.extend(batch)
+        cursor = result.get("nextPageCursor", "") or ""
+        if not cursor or not batch:
+            break
+    return [p for p in out if float(p.get("size", 0) or 0) > 0]
 
 
 def fetch_open_orders(client: HTTP) -> list:

@@ -154,9 +154,21 @@ def fetch_transactions(
 
 
 def fetch_open_positions(client: HTTP) -> list:
-    resp = client.get_positions(category="linear", settleCoin="USDT")
-    raw = (resp.get("result", {}) or {}).get("list", []) or []
-    return [p for p in raw if float(p.get("size", 0) or 0) > 0]
+    """Paginated fetch — Bybit default limit=20 will under-report."""
+    out: list = []
+    cursor = ""
+    for _ in range(20):
+        kwargs = dict(category="linear", settleCoin="USDT", limit=200)
+        if cursor:
+            kwargs["cursor"] = cursor
+        resp = client.get_positions(**kwargs)
+        result = resp.get("result", {}) or {}
+        batch = result.get("list", []) or []
+        out.extend(batch)
+        cursor = result.get("nextPageCursor", "") or ""
+        if not cursor or not batch:
+            break
+    return [p for p in out if float(p.get("size", 0) or 0) > 0]
 
 
 # ---------------------------------------------------------------------------
