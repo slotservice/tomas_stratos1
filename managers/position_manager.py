@@ -424,24 +424,53 @@ class PositionManager:
             )
 
         # ----------------------------------------------------------
-        # 5. Leverage. Three classification paths (client 2026-05-02):
-        #    - signal_type=fixed (auto-SL signals): always
-        #      auto_sl.fallback_leverage (default x10).
-        #    - signal_type=swing (SL distance > 4 % from entry):
-        #      ALWAYS leverage.min_leverage (default x6) regardless
-        #      of formula. Tomas explicit clarification 2026-05-02:
-        #      'Swing always x6, everything over x6 is dynamic and
-        #       start on x7.5'.
-        #    - signal_type=dynamic (SL distance <= 4 %): use the
-        #      bucketed formula, which floors to neutral_zone_upper
-        #      (x7.5) and caps at max_entry_leverage (x25).
+        # 5. Leverage + signal_type classification (client 2026-05-02
+        #    consolidated rule — only this logic is approved):
+        #
+        #    If SL is missing       -> class FIXED, lev x10, auto-SL -3%
+        #    Else compute raw leverage from the risk formula:
+        #       risk_amount = wallet × risk%
+        #       SL_distance = abs(entry - SL) / entry
+        #       notional    = risk_amount / SL_distance
+        #       raw         = notional / IM
+        #
+        #    Then bucket:
+        #       raw < 6.75    -> class SWING,   leverage x6
+        #       raw >= 6.75   -> class DYNAMIC, min x7.5, max x25
+        #
+        #    No other method of calculating or setting leverage is
+        #    approved. signal_type is now derived from the raw
+        #    leverage bucket — NOT from the SL-distance heuristic
+        #    that signal_parser.py applies as a default.
         # ----------------------------------------------------------
-        sig_type = (getattr(signal, "signal_type", "") or "").lower()
-        if auto_sl_applied or sig_type == "fixed":
+        if auto_sl_applied:
             leverage = float(self._settings.auto_sl.fallback_leverage)
-        elif sig_type == "swing":
-            leverage = float(self._settings.leverage.min_leverage)
+            try:
+                signal.signal_type = "fixed"
+            except Exception:
+                pass
         else:
+            from core.leverage import compute_raw_leverage
+            try:
+                raw_lev = compute_raw_leverage(
+                    entry=entry_price,
+                    sl=sl_price,
+                    settings=(self._settings.wallet, self._settings.leverage),
+                )
+            except Exception:
+                raw_lev = 0.0
+            # Override the parser's heuristic with the bucket-based
+            # classification (the approved rule). Both leverage value
+            # and signal_type label are derived from the same raw
+            # value so they can never drift apart.
+            split_pct = float(self._settings.leverage.neutral_zone_split)
+            try:
+                if raw_lev < split_pct:
+                    signal.signal_type = "swing"
+                else:
+                    signal.signal_type = "dynamic"
+            except Exception:
+                pass
             leverage = calculate_leverage(
                 entry=entry_price,
                 sl=sl_price,

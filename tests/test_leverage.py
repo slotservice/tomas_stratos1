@@ -14,6 +14,7 @@ from core.leverage import (
     calculate_leverage,
     classify_leverage,
     classify_leverage_with_settings,
+    compute_raw_leverage,
 )
 
 
@@ -113,6 +114,51 @@ class TestClassifyLeverage:
         """Settings-aware classify with a custom min_leverage."""
         assert classify_leverage_with_settings(8.0, min_leverage=8.0) == "FIXED"
         assert classify_leverage_with_settings(8.01, min_leverage=8.0) == "DYNAMIC"
+
+
+class TestRawLeverageAndClassification:
+    """Client 2026-05-02 consolidated rule: signal_type follows the
+    RAW leverage bucket, not SL distance.
+       raw < 6.75   -> SWING (leverage clamped to x6)
+       raw >= 6.75  -> DYNAMIC (min x7.5, max x25)
+    """
+
+    def test_iotausdt_reference_signal(self):
+        # Tomas's verification example:
+        #   entry 0.2215, SL 0.2149, SL distance ~ 2.98 %
+        #   raw ≈ 13.49 -> DYNAMIC
+        raw = compute_raw_leverage(entry=0.2215, sl=0.2149)
+        assert 13.0 < raw < 14.0
+        # Bucketed leverage matches the raw (since 7.5 <= raw <= 25).
+        lev = calculate_leverage(entry=0.2215, sl=0.2149)
+        assert lev == pytest.approx(raw, abs=0.01)
+        # Class derived from raw >= 6.75 -> DYNAMIC
+        assert raw >= 6.75
+
+    def test_swing_classification(self):
+        # SL distance large enough to push raw under 6.75.
+        # raw = 0.4021 / Δ; raw < 6.75 -> Δ > 0.05957 (~5.96 %).
+        # Use SL 7 % away.
+        raw = compute_raw_leverage(entry=100.0, sl=93.0)
+        assert raw < 6.75
+        # Bucketed leverage clamps to x6.
+        lev = calculate_leverage(entry=100.0, sl=93.0)
+        assert lev == 6.0
+
+    def test_dynamic_classification(self):
+        raw = compute_raw_leverage(entry=100.0, sl=97.0)
+        assert raw >= 6.75
+        lev = calculate_leverage(entry=100.0, sl=97.0)
+        assert 7.5 <= lev <= 25.0
+
+    def test_compute_raw_does_not_bucket(self):
+        # raw = 0.4021 / 0.04 = 10.0525 (NOT bucketed). compare to
+        # calculate_leverage which would also return ~10.05 here.
+        raw = compute_raw_leverage(entry=100.0, sl=96.0)
+        assert pytest.approx(raw, rel=1e-3) == 10.0525
+        lev = calculate_leverage(entry=100.0, sl=96.0)
+        # Both should agree in the 7.5-25 band.
+        assert pytest.approx(lev, rel=1e-3) == 10.05
 
 
 class TestLeverageEdgeCases:

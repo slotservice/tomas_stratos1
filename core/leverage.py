@@ -50,6 +50,39 @@ _DEFAULT_UPPER = 7.5
 _DEFAULT_MAX_ENTRY = 25.0
 
 
+def compute_raw_leverage(
+    entry: float,
+    sl: float,
+    wallet: float = _DEFAULT_WALLET,
+    risk_pct: float = _DEFAULT_RISK_PCT,
+    initial_margin: float = _DEFAULT_INITIAL_MARGIN,
+    settings: Optional[tuple] = None,
+) -> float:
+    """Return the unbucketed raw leverage from the risk formula.
+
+    Useful for classifying signal_type (swing vs dynamic) per the
+    client 2026-05-02 consolidated rule:
+      raw < 6.75   -> SWING
+      raw >= 6.75  -> DYNAMIC
+
+    The actual leverage applied to the trade still goes through
+    :func:`calculate_leverage`, which buckets / floors / caps the
+    raw value to the configured limits.
+    """
+    if settings is not None:
+        wallet_cfg, _ = settings
+        wallet = wallet_cfg.bot_wallet
+        risk_pct = wallet_cfg.risk_pct
+        initial_margin = wallet_cfg.initial_margin
+
+    if entry == 0:
+        raise ValueError("Entry price must not be zero.")
+    stop_distance_pct = abs(entry - sl) / entry
+    if stop_distance_pct == 0:
+        raise ValueError("Stop distance is zero (entry == SL).")
+    return (wallet * risk_pct) / (initial_margin * stop_distance_pct)
+
+
 def calculate_leverage(
     entry: float,
     sl: float,
