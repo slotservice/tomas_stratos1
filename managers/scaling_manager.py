@@ -386,8 +386,17 @@ class ScalingManager:
         liquidation price is dangerously close (< 1 % from current mark
         price).
         """
+        # get_position requires both symbol and side (Buy/Sell). Earlier
+        # code passed only symbol -> TypeError -> caught silently below
+        # -> safety check became a no-op (always returned True).
+        direction = ""
+        if trade.signal is not None:
+            direction = (trade.signal.direction or "").upper()
+        side = "Buy" if direction == "LONG" else "Sell"
         try:
-            position = await self._bybit.get_position(symbol=symbol)
+            position = await self._bybit.get_position(
+                symbol=symbol, side=side,
+            )
         except Exception:
             log.exception(
                 "scaling.position_fetch_error",

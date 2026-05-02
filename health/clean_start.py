@@ -77,9 +77,15 @@ async def _cancel_all_orders(rest: Any) -> int:
     """Cancel every open order on the account, by order-filter
     category. Bybit's cancel_all_orders takes a category and
     optional symbol; we issue it without a symbol but with each
-    of the three relevant filter values."""
+    relevant filter value.
+
+    For category=linear the valid filters are "Order" (active)
+    and "StopOrder" (conditional / TP / SL / trailing). The
+    "tpslOrder" filter is spot-only and Bybit returns a 10001
+    "params error" on linear, so it's excluded here.
+    """
     cancelled = 0
-    for order_filter in ("Order", "StopOrder", "tpslOrder"):
+    for order_filter in ("Order", "StopOrder"):
         try:
             resp = await _run(
                 rest.cancel_all_orders,

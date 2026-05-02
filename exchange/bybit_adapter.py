@@ -897,16 +897,37 @@ class BybitAdapter:
         return orders[0] if orders else {}
 
     async def get_open_orders(self, symbol: str = None) -> list:
-        """Fetch all open orders, optionally filtered by symbol."""
-        kwargs: dict = {"category": CATEGORY}
-        if symbol:
-            kwargs["symbol"] = symbol
+        """Fetch every open order, paginated.
 
-        resp = await self._call_with_retry(
-            self._rest.get_open_orders,
-            **kwargs,
-        )
-        return resp.get("result", {}).get("list", [])
+        Bybit defaults to ``limit=20`` with a ``nextPageCursor`` for the
+        next page. Earlier callers that took the raw response truncated
+        silently at 20 — that's the root cause of the 2026-05-02
+        drift-cleanup incident where positions past the 20th looked
+        "missing" and 26 live trades were wrongly closed in DB.
+        Pagination here makes every callsite see the full set.
+        """
+        out: list = []
+        cursor = ""
+        for _ in range(50):  # safety cap; 50 * 200 = 10 000 orders
+            kwargs: dict = {"category": CATEGORY, "limit": 200}
+            if symbol:
+                kwargs["symbol"] = symbol
+            else:
+                # /v5/order/realtime requires settleCoin when symbol omitted
+                kwargs["settleCoin"] = "USDT"
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = await self._call_with_retry(
+                self._rest.get_open_orders,
+                **kwargs,
+            )
+            result = resp.get("result", {}) or {}
+            batch = result.get("list", []) or []
+            out.extend(batch)
+            cursor = result.get("nextPageCursor", "") or ""
+            if not cursor or not batch:
+                break
+        return out
 
     # ------------------------------------------------------------------
     # Position Management (Trading Stop)
@@ -959,6 +980,54 @@ class BybitAdapter:
             kwargs["activePrice"] = str(
                 self.round_price(active_price, symbol)
             )
+
+        # Trailing-preservation safety net (2026-05-02 incident class).
+        # Some Bybit-demo paths reset trailingStop to 0 when
+        # set_trading_stop is called with stopLoss but no trailingStop.
+        # Whenever the caller is touching SL/TP without explicitly
+        # specifying a new trailing distance, read the position's
+        # current trailing first and re-pass it. Callers who genuinely
+        # want to clear trailing must pass trailing_stop=0.0 explicitly.
+        # If the read fails we fall through silently and accept the
+        # legacy risk (logged, not raised).
+        if (
+            (stop_loss is not None or take_profit is not None)
+            and trailing_stop is None
+        ):
+            try:
+                side = "Buy" if position_idx == 1 else "Sell"
+                cur = await self._call_with_retry(
+                    self._rest.get_positions,
+                    category=CATEGORY,
+                    symbol=symbol,
+                )
+                for p in (cur.get("result", {}) or {}).get("list", []) or []:
+                    if p.get("symbol") != symbol or p.get("side") != side:
+                        continue
+                    et = p.get("trailingStop") or 0
+                    try:
+                        et_f = float(et)
+                    except (TypeError, ValueError):
+                        et_f = 0.0
+                    if et_f > 0:
+                        kwargs["trailingStop"] = str(
+                            self.round_price(et_f, symbol)
+                        )
+                        ea = p.get("activePrice") or 0
+                        try:
+                            ea_f = float(ea)
+                        except (TypeError, ValueError):
+                            ea_f = 0.0
+                        if ea_f > 0 and "activePrice" not in kwargs:
+                            kwargs["activePrice"] = str(
+                                self.round_price(ea_f, symbol)
+                            )
+                    break
+            except Exception:
+                self._log.warning(
+                    "set_trading_stop.trailing_preserve_read_failed",
+                    symbol=symbol, position_idx=position_idx,
+                )
 
         self._log.info("setting_trading_stop", **kwargs)
 

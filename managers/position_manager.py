@@ -1211,13 +1211,20 @@ class PositionManager:
             )
 
         if not valid_tps and tp_list:
+            # Could be direction-mismatch (TP on wrong side of mark) or
+            # all-too-close (<2% from entry) or both. Include the per-TP
+            # filter reason so the log is honest about why nothing
+            # remained.
             log.warning(
-                "trade.all_tps_already_passed",
+                "trade.no_valid_tps_after_filter",
                 trade_id=trade.id,
                 symbol=symbol,
+                direction=direction,
                 avg_entry=avg_entry,
                 current_mark=current_mark,
                 tps=tp_list,
+                skipped_too_close=skipped_too_close,
+                min_pct=min_tp_distance_pct,
             )
 
         # SL direction validation REMOVED 2026-04-28. The signal's SL
@@ -1766,7 +1773,10 @@ class PositionManager:
         """
         if not order_id:
             return
-        for tr in self._active_trades.values():
+        # list() snapshot — _active_trades can be mutated by concurrent
+        # WS callbacks, raising "dictionary changed size during
+        # iteration" mid-loop.
+        for tr in list(self._active_trades.values()):
             if (
                 getattr(tr, "original_force_close_order_id", None) == order_id
                 and not tr.is_terminal
@@ -1821,8 +1831,9 @@ class PositionManager:
         if not order_id:
             return
         # Find the parent trade whose hedge conditional just filled.
+        # list() snapshot to survive concurrent mutation by WS callbacks.
         parent: Optional[Trade] = None
-        for tr in self._active_trades.values():
+        for tr in list(self._active_trades.values()):
             if tr.hedge_conditional_order_id == order_id and not tr.hedge_trade_id:
                 parent = tr
                 break
@@ -3970,7 +3981,8 @@ class PositionManager:
         Used to translate a Bybit position-side close event back to the
         corresponding bot trade. Direction must be ``"LONG"`` or ``"SHORT"``.
         """
-        for trade in self._active_trades.values():
+        # list() snapshot to survive concurrent mutation by WS callbacks.
+        for trade in list(self._active_trades.values()):
             if trade.is_terminal:
                 continue
             if trade.signal is None:

@@ -235,6 +235,14 @@ class Database:
             self._db = None
             logger.info("database.closed")
 
+    async def stop(self) -> None:
+        """Alias for :meth:`close` — main.py's graceful-shutdown loop
+        calls ``comp.stop()`` uniformly across every registered
+        component. Without this alias, shutdown logged AttributeError
+        for the Database every time and systemd ended up SIGKILL'ing
+        the process after the 30 s SIGTERM timeout."""
+        await self.close()
+
     @property
     def _conn(self) -> aiosqlite.Connection:
         """Return the active connection, raising if not initialised."""
