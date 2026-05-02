@@ -1317,6 +1317,20 @@ class PositionManager:
                         protection_failures.append("TP")
 
             trade.tp_order_ids = tp_order_ids
+            # 2026-05-02 fix: persist tp_order_ids to DB so Phase 5b
+            # mutual-exclusion (cascade vs profit-lock fallback)
+            # survives restart. Without this, after any restart the
+            # in-memory list is empty and the fallback fires instead
+            # of the cascade — ICPUSDT trade #6 BE+buffer at +0.2%
+            # was supposed to use the TP-cascade path.
+            try:
+                if trade.id and str(trade.id).isdigit():
+                    await self._db.update_trade(
+                        int(trade.id),
+                        tp_order_ids=tp_order_ids,
+                    )
+            except Exception:
+                pass
             log.info(
                 "trade.partial_tps_summary",
                 trade_id=trade.id, symbol=symbol,

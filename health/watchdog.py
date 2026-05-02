@@ -728,6 +728,19 @@ class HealthChecker:
                         tp_hits = _json.loads(tp_hits_raw) if isinstance(tp_hits_raw, str) else (tp_hits_raw or [])
                     except Exception:
                         tp_hits = []
+                    # 2026-05-02 fix #2: also restore tp_order_ids so
+                    # Phase 5b mutual-exclusion (cascade vs profit-lock
+                    # fallback) works after restart. Without this, the
+                    # in-memory list is empty and the fallback fires
+                    # instead of the TP-cascade — ICPUSDT trade #6
+                    # BE+buffer at +0.2 % was supposed to use the
+                    # cascade path (TP2 -> BE) but fell back because
+                    # tp_order_ids was empty in memory.
+                    tp_order_ids_raw = trade.get("tp_order_ids") or "[]"
+                    try:
+                        tp_order_ids = _json.loads(tp_order_ids_raw) if isinstance(tp_order_ids_raw, str) else (tp_order_ids_raw or [])
+                    except Exception:
+                        tp_order_ids = []
                     restored_trade = Trade(
                         signal=signal_obj,
                         state=state_enum,
@@ -755,6 +768,7 @@ class HealthChecker:
                         original_force_close_order_id=trade.get(
                             "original_force_close_order_id"
                         ),
+                        tp_order_ids=tp_order_ids,
                         reentry_count=int(trade.get("reentry_count") or 0),
                         scaling_step=int(trade.get("scaling_step") or 0),
                         tp_hits=[float(t) for t in tp_hits if t],

@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS trades (
     hedge_trade_id       INTEGER,
     hedge_conditional_order_id TEXT,           -- Bybit orderId of pre-armed hedge conditional (Phase 3)
     original_force_close_order_id TEXT,        -- Bybit orderId of -2% force-close conditional (Phase 2 / 2026-05-01)
+    tp_order_ids        TEXT,                  -- JSON array of Bybit orderIds for the partial-TP conditionals (Phase 5b mutual-exclusion needs these post-restart)
     reentry_count        INTEGER DEFAULT 0,
     scaling_step         INTEGER DEFAULT 0,
     tp_hits              TEXT,              -- JSON array of hit TP indices
@@ -210,6 +211,7 @@ class Database:
         for ddl in (
             "ALTER TABLE trades ADD COLUMN hedge_conditional_order_id TEXT",
             "ALTER TABLE trades ADD COLUMN original_force_close_order_id TEXT",
+            "ALTER TABLE trades ADD COLUMN tp_order_ids TEXT",
         ):
             try:
                 await self._db.execute(ddl)
@@ -385,7 +387,7 @@ class Database:
             return
 
         # Auto-encode JSON list fields.
-        for key in ("tp_hits",):
+        for key in ("tp_hits", "tp_order_ids"):
             if key in fields and isinstance(fields[key], (list, tuple)):
                 fields[key] = json.dumps(fields[key])
 
