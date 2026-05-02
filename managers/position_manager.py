@@ -520,13 +520,23 @@ class PositionManager:
                 ):
                     try:
                         from telegram.notifier import _chan, _ts
+                        from core.symbol_notes import get_note
+                        # Per-symbol operator note (client 2026-05-02):
+                        # if symbol_notes.toml has an entry for this
+                        # symbol, use it instead of 'Kontrolera
+                        # manuellt'. Lets Tomas mark already-checked
+                        # symbols (e.g. delisted FETUSDT) so the
+                        # rejection message says
+                        # 'FETUSDT checked 2026-05-01' instead of the
+                        # generic instruction.
+                        note = get_note(symbol, default="Kontrolera manuellt")
                         await self._safe_notify(
                             f"⚠️ Finns inte på bybit ⚠️\n"
                             f"🕒 Tid: {_ts()}\n"
                             f"📢 Från kanal: {_chan(_chan_name)}\n"
                             f"📊 Symbol: #{symbol}\n"
                             f"📈 Riktning: {direction}\n"
-                            f"📍 Fel: Kontrolera manuellt"
+                            f"📍 Fel: {note}"
                         )
                     except Exception:
                         log.exception("notify.not_on_bybit_failed")

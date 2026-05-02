@@ -1,0 +1,33 @@
+# Stratos1 — Per-symbol operator notes
+# ============================================================
+#
+# Edit this file with any text editor. The bot reloads it
+# automatically on every signal — no restart required.
+#
+# When the bot sends a "Finns inte på bybit" rejection
+# notification (e.g. for a delisted or unavailable symbol),
+# it normally writes:
+#
+#   📍 Fel: Kontrolera manuellt
+#
+# If you add a note for that symbol below, the bot replaces
+# the default text with your note. Useful for marking symbols
+# you've already investigated so the operator knows the
+# rejection isn't a new problem.
+#
+# Format:
+#   SYMBOL = "your note text here"
+#
+# Symbol must be the full Bybit-style ticker (uppercase,
+# ending in USDT).
+#
+# Examples:
+#
+# [symbol_notes]
+# FETUSDT     = "FETUSDT checked 2026-05-01 — delisted on Bybit perpetuals (FET+AGIX+OCEAN merger -> ASI)"
+# XYZ123USDT  = "checked 2026-04-15 — Bybit delisted, no new symbol"
+#
+# Add real entries below this line.
+
+[symbol_notes]
+FETUSDT = "FETUSDT checked 2026-05-01 — delisted on Bybit perpetuals (FET+AGIX+OCEAN merger -> ASI)"
