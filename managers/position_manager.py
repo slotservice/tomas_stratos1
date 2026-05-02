@@ -2944,6 +2944,38 @@ class PositionManager:
                     "on_execution.hedge_fill_detection_failed",
                     order_id=order_id, symbol=symbol,
                 )
+            # 2026-05-02 fix #3: same Bybit-conditional-fill bug
+            # affects the FORCE-CLOSE detector and the CLOSE
+            # CLASSIFIER. When the original-trade -2% conditional
+            # fires (Phase 2 path), Bybit emits Triggered +
+            # execution_update execType=Trade — but no Filled.
+            # The Phase 4 _maybe_record_force_close_fill and the
+            # Phase 1 _classify_bybit_close_fill were both wired
+            # only into on_order_update gated on status=Filled,
+            # so they silently miss the close. Trade stays
+            # POSITION_OPEN in DB forever (TRBUSDT trade #1
+            # incident 2026-05-02 21:18: force-close fired,
+            # position closed on Bybit, DB still POSITION_OPEN
+            # — phantom trade row).
+            #
+            # Both handlers are idempotent (close_trade has its
+            # own is_terminal guard; _maybe_record_force_close_fill
+            # bails if order_id doesn't match). Safe to call from
+            # both paths.
+            try:
+                await self._maybe_record_force_close_fill(order_id)
+            except Exception:
+                log.exception(
+                    "on_execution.force_close_record_failed",
+                    order_id=order_id, symbol=symbol,
+                )
+            try:
+                await self._classify_bybit_close_fill(order_id, fill_view)
+            except Exception:
+                log.exception(
+                    "on_execution.close_classify_failed",
+                    order_id=order_id, symbol=symbol,
+                )
 
     # ==================================================================
     # Price update handler -- delegates to sub-managers
