@@ -420,7 +420,7 @@ class PositionManager:
                 auto_sl=sl_price,
                 fallback_pct=self._settings.auto_sl.fallback_pct,
                 fallback_leverage=self._settings.auto_sl.fallback_leverage,
-                channel_name=channel_name,
+                channel_name=getattr(signal, "channel_name", ""),
             )
 
         # ----------------------------------------------------------
@@ -496,11 +496,12 @@ class PositionManager:
                 or "not exists" in err_str
                 or "110074" in err_str
             ):
+                _chan_name = getattr(signal, "channel_name", "")
                 log.info(
                     "signal.symbol_not_on_bybit",
                     symbol=symbol,
                     direction=direction,
-                    channel_name=channel_name,
+                    channel_name=_chan_name,
                     error=err_str[:120],
                 )
                 if self._should_send_reject_notify(
@@ -511,7 +512,7 @@ class PositionManager:
                         await self._safe_notify(
                             f"⚠️ Finns inte på bybit ⚠️\n"
                             f"🕒 Tid: {_ts()}\n"
-                            f"📢 Från kanal: {_chan(channel_name)}\n"
+                            f"📢 Från kanal: {_chan(_chan_name)}\n"
                             f"📊 Symbol: #{symbol}\n"
                             f"📈 Riktning: {direction}\n"
                             f"📍 Fel: Kontrolera manuellt"
@@ -543,6 +544,7 @@ class PositionManager:
             sl_distance_pct = abs(entry_price - sl_price) / entry_price
             est_liq_distance = max(1.0 / leverage - 0.005, 0.005)
             if sl_distance_pct > est_liq_distance * 0.85:
+                _chan_name_liq = getattr(signal, "channel_name", "")
                 log.warning(
                     "signal.sl_beyond_liq_rejected",
                     symbol=symbol,
@@ -551,7 +553,7 @@ class PositionManager:
                     sl_distance_pct=round(sl_distance_pct * 100, 4),
                     est_liq_distance_pct=round(est_liq_distance * 100, 4),
                     leverage=leverage,
-                    channel_name=channel_name,
+                    channel_name=_chan_name_liq,
                 )
                 if self._should_send_reject_notify(
                     "sl_beyond_liq", symbol, direction,
@@ -561,7 +563,7 @@ class PositionManager:
                         await self._safe_notify(
                             f"⚠️ SIGNAL AVVISAD (SL bortom likvidationsavstånd)\n"
                             f"🕒 Tid: {_ts()}\n"
-                            f"📢 Från kanal: {_chan(channel_name)}\n"
+                            f"📢 Från kanal: {_chan(_chan_name_liq)}\n"
                             f"📊 Symbol: #{symbol}\n"
                             f"📈 Riktning: {direction}\n"
                             f"💥 Entry: {entry_price}\n"
