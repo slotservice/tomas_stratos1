@@ -424,12 +424,23 @@ class PositionManager:
             )
 
         # ----------------------------------------------------------
-        # 5. Leverage. Auto-SL signals get a FIXED leverage (per
-        #    client spec 2026-05-02); real-SL signals get the
-        #    dynamic formula bucketed by SL distance.
+        # 5. Leverage. Three classification paths (client 2026-05-02):
+        #    - signal_type=fixed (auto-SL signals): always
+        #      auto_sl.fallback_leverage (default x10).
+        #    - signal_type=swing (SL distance > 4 % from entry):
+        #      ALWAYS leverage.min_leverage (default x6) regardless
+        #      of formula. Tomas explicit clarification 2026-05-02:
+        #      'Swing always x6, everything over x6 is dynamic and
+        #       start on x7.5'.
+        #    - signal_type=dynamic (SL distance <= 4 %): use the
+        #      bucketed formula, which floors to neutral_zone_upper
+        #      (x7.5) and caps at max_entry_leverage (x25).
         # ----------------------------------------------------------
-        if auto_sl_applied:
+        sig_type = (getattr(signal, "signal_type", "") or "").lower()
+        if auto_sl_applied or sig_type == "fixed":
             leverage = float(self._settings.auto_sl.fallback_leverage)
+        elif sig_type == "swing":
+            leverage = float(self._settings.leverage.min_leverage)
         else:
             leverage = calculate_leverage(
                 entry=entry_price,
