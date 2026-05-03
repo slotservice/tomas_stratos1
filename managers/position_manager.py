@@ -580,54 +580,85 @@ class PositionManager:
         except Exception:
             leverage = round(leverage, 2)
 
-        # SL-vs-liquidation guard. Reject signals where the SL sits
-        # outside the position's liquidation distance — there is no
-        # safe way to honour such an SL because Bybit will liquidate
-        # the position before the SL can fire. BSBUSDT trade 3340
-        # incident 2026-04-30: SHORT entry 0.3313, signal SL 0.44
-        # (+33 % adverse) with 6x leverage (liq distance ~16.7 %) —
-        # liquidated at -16.6 USDT before the SL had any chance.
+        # SL-vs-liquidation guard. When the signal's SL sits OUTSIDE
+        # the position's liquidation distance, Bybit would liquidate
+        # the position before the SL could trigger.
+        #
+        # Tomas (client) 2026-05-04: do NOT reject these signals.
+        # ADJUST the SL to a safe distance inside liquidation (with a
+        # 20% safety buffer) and trade with the adjusted SL.
+        # Operator is notified with "SL JUSTERAD" instead of the old
+        # "SIGNAL AVVISAD". Reference incident BSBUSDT trade 3340
+        # 2026-04-30 (SHORT entry 0.3313, signal SL 0.44 = +33%
+        # adverse, x6 leverage, liq ~16.7% — liquidated at -16.6 USDT
+        # before SL had any chance).
+        #
         # Estimate liq distance as ~1/leverage minus a small
-        # maintenance-margin buffer (Bybit linear typical ~0.5 %).
-        # Reject if signal_sl_distance > 0.85 * liq_distance.
+        # maintenance-margin buffer (Bybit linear typical ~0.5%).
+        # Trigger adjustment when signal_sl_distance > 0.85 * liq_distance.
+        # Adjusted SL distance = 0.80 * liq_distance (extra buffer
+        # below the trigger threshold so we leave headroom for
+        # mark/last divergence).
         try:
             sl_distance_pct = abs(entry_price - sl_price) / entry_price
             est_liq_distance = max(1.0 / leverage - 0.005, 0.005)
             if sl_distance_pct > est_liq_distance * 0.85:
                 _chan_name_liq = getattr(signal, "channel_name", "")
+                adjusted_sl_distance = est_liq_distance * 0.80
+                old_sl_price = sl_price
+                if direction == "LONG":
+                    sl_price = round(
+                        entry_price * (1 - adjusted_sl_distance), 8,
+                    )
+                else:
+                    sl_price = round(
+                        entry_price * (1 + adjusted_sl_distance), 8,
+                    )
+                # Mutate the signal so downstream code sees the
+                # adjusted SL (matches the auto_sl pattern above).
+                try:
+                    signal.sl = sl_price
+                except Exception:
+                    pass
                 log.warning(
-                    "signal.sl_beyond_liq_rejected",
+                    "signal.sl_adjusted_inside_liq",
                     symbol=symbol,
                     entry=entry_price,
-                    sl=sl_price,
-                    sl_distance_pct=round(sl_distance_pct * 100, 4),
+                    old_sl=old_sl_price,
+                    new_sl=sl_price,
+                    old_distance_pct=round(sl_distance_pct * 100, 4),
+                    new_distance_pct=round(adjusted_sl_distance * 100, 4),
                     est_liq_distance_pct=round(est_liq_distance * 100, 4),
                     leverage=leverage,
                     channel_name=_chan_name_liq,
                 )
                 if self._should_send_reject_notify(
-                    "sl_beyond_liq", symbol, direction,
+                    "sl_adjusted_inside_liq", symbol, direction,
                 ):
                     try:
                         from telegram.notifier import _chan, _ts
                         await self._safe_notify(
-                            f"⚠️ SIGNAL AVVISAD (SL bortom likvidationsavstånd)\n"
+                            f"⚙️ SL JUSTERAD (var bortom likvidationsavstånd)\n"
                             f"🕒 Tid: {_ts()}\n"
                             f"📢 Från kanal: {_chan(_chan_name_liq)}\n"
                             f"📊 Symbol: #{symbol}\n"
                             f"📈 Riktning: {direction}\n"
                             f"💥 Entry: {entry_price}\n"
-                            f"🚩 Signal-SL: {sl_price} "
+                            f"🚩 Signal-SL: {old_sl_price} "
                             f"({sl_distance_pct*100:.2f}% från entry)\n"
                             f"⚙️ Hävstång: x{leverage} "
-                            f"(likvidation ~{est_liq_distance*100:.2f}% från entry)\n"
-                            f"📍 Anledning: SL ligger längre bort än "
-                            f"likvidationsavståndet — Bybit hade likviderat "
-                            f"positionen innan SL hann triggra."
+                            f"(likvidation ~{est_liq_distance*100:.2f}% "
+                            f"från entry)\n"
+                            f"✅ Justerad SL: {sl_price} "
+                            f"({adjusted_sl_distance*100:.2f}% från entry)\n"
+                            f"📍 Anledning: Original SL hade triggat efter "
+                            f"likvidation. SL flyttad innanför "
+                            f"likvidationsavståndet (20% säkerhetsmarginal)."
                         )
                     except Exception:
-                        log.exception("notify.sl_beyond_liq_failed")
-                return None
+                        log.exception("notify.sl_adjusted_failed")
+                # Continue with the trade — adjusted SL is now in
+                # place. Do NOT return None.
         except Exception:
             log.exception("signal.sl_liq_check_error", symbol=symbol)
 
