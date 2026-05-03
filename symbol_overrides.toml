@@ -1,0 +1,30 @@
+# ============================================================
+# Stratos1 — Operator-managed symbol overrides
+#
+# Edit this file to:
+#   * skip a signal entirely (symbol not on Bybit perp, scam, etc.)
+#   * rename a symbol before placing the order (BYBIT lists 1000SHIB
+#     instead of SHIB)
+#   * attach a free-form note that shows in warning notifications
+#     for that symbol (so the operator can see why the bot is
+#     behaving a particular way)
+#
+# Reload: bot reloads this file ONLY on restart. After editing,
+# restart the systemd service.
+#
+# Symbol keys are case-insensitive and the USDT suffix is added
+# automatically. Both [SHIB] and [SHIBUSDT] resolve to SHIBUSDT.
+#
+# Example (DO NOT use these literally — they are illustrative):
+#
+#   [SHIB]
+#   rename_to = "1000SHIBUSDT"
+#   note      = "Bybit lists 1000SHIB instead of SHIB"
+#
+#   [TAG]
+#   skip = true
+#   note = "Checked 2026-05-03 — not on Bybit perpetuals"
+#
+#   [BTC]
+#   note = "Operator: high-conviction symbol, watch closely"
+# ============================================================

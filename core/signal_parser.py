@@ -70,6 +70,12 @@ class ParseResult:
     sl: Optional[float] = None
     channel_id: int = 0
     channel_name: str = ""
+    # Operator-attached free-form note from symbol_overrides.toml.
+    # Carried so the notifier can append it to relevant warnings
+    # (e.g. instrument-info-fetch-failed for a "skip" override) so
+    # the operator's own context is visible alongside the bot's
+    # automatic message.
+    override_note: Optional[str] = None
 
 # ---------------------------------------------------------------------------
 # Known USDT-paired symbols on Bybit (common ones used for bare-symbol
@@ -885,6 +891,39 @@ def parse_signal_detailed(
                            channel_id=channel_id,
                            channel_name=channel_name)
 
+    # --- Operator overrides (Tomas 2026-05-03) ---
+    # symbol_overrides.toml lets the operator skip non-tradable
+    # symbols, rename them to Bybit's canonical form, or attach a
+    # note that the notifier will surface on warnings. Lookup is
+    # case-insensitive and module-cached.
+    from core.symbol_overrides import get_override
+    override = get_override(symbol)
+    override_note = (override or {}).get("note")
+    if override and override.get("skip"):
+        log.info(
+            "signal_parse.skipped_by_operator_override",
+            symbol=symbol,
+            note=override_note,
+            channel_name=channel_name,
+        )
+        return ParseResult(
+            reason="skipped_by_override",
+            symbol=symbol,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            override_note=override_note,
+        )
+    if override and override.get("rename_to"):
+        renamed = override["rename_to"]
+        log.info(
+            "signal_parse.symbol_renamed_by_operator",
+            original=symbol,
+            renamed=renamed,
+            note=override_note,
+            channel_name=channel_name,
+        )
+        symbol = renamed
+
     # --- Direction ---
     direction = extract_direction(clean)
     if not direction:
@@ -929,7 +968,8 @@ def parse_signal_detailed(
                            tps=tps,
                            sl=sl,
                            channel_id=channel_id,
-                           channel_name=channel_name)
+                           channel_name=channel_name,
+                           override_note=override_note)
 
     if not tps:
         log.debug(
@@ -947,7 +987,8 @@ def parse_signal_detailed(
                            entry=entry,
                            sl=sl,
                            channel_id=channel_id,
-                           channel_name=channel_name)
+                           channel_name=channel_name,
+                           override_note=override_note)
 
     # --- Build signal ---
     signal = ParsedSignal(
@@ -987,7 +1028,8 @@ def parse_signal_detailed(
                            tps=tps,
                            sl=sl,
                            channel_id=channel_id,
-                           channel_name=channel_name)
+                           channel_name=channel_name,
+                           override_note=override_note)
 
     log.info(
         "signal_parsed",
@@ -1009,7 +1051,8 @@ def parse_signal_detailed(
                        tps=tps,
                        sl=sl,
                        channel_id=channel_id,
-                       channel_name=channel_name)
+                       channel_name=channel_name,
+                       override_note=override_note)
 
 
 def parse_signal(

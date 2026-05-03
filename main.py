@@ -263,6 +263,19 @@ async def main() -> None:
     shutdown.register(db)
 
     # ---------------------------------------------------------------
+    # 3b. Load operator-managed symbol overrides (Tomas 2026-05-03).
+    # symbol_overrides.toml lets the operator skip non-tradable
+    # symbols, rename to Bybit's canonical form, and attach notes
+    # that surface in warning notifications. Failure to load is
+    # non-fatal (logged warning, bot continues with no overrides).
+    # ---------------------------------------------------------------
+    try:
+        from core.symbol_overrides import load_overrides
+        load_overrides(PROJECT_ROOT / "symbol_overrides.toml")
+    except Exception:
+        log.exception("symbol_overrides.startup_load_failed")
+
+    # ---------------------------------------------------------------
     # 4. Initialize Bybit adapter
     # ---------------------------------------------------------------
     bybit = C["BybitAdapter"](settings.bybit)
