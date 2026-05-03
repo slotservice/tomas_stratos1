@@ -14,13 +14,24 @@ What it does:
 
 The script reads credentials from .env in the project root.
 
+Default: DRY-RUN. Counts what would be touched and prints it. No
+mutation happens until ``--apply`` is passed. Tomas (client)
+2026-05-03: scripts that mutate state must default to dry-run; the
+historical drift_cleanup_2026_05_02 incident was a script that ran
+without preview and corrupted 26 live trades.
+
 Usage:
+  # Preview (default — safe, no mutation):
   cd /opt/stratos1
   venv/bin/python scripts/clean_state.py
+
+  # Actually do it:
+  venv/bin/python scripts/clean_state.py --apply
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sqlite3
 import sys
@@ -48,8 +59,12 @@ def _read_env() -> dict[str, str]:
     return env
 
 
-def clean_bybit() -> tuple[int, int]:
-    """Close all positions + cancel all orders. Returns (closed, cancelled)."""
+def clean_bybit(apply: bool = False) -> tuple[int, int]:
+    """Close all positions + cancel all orders. Returns (closed, cancelled).
+
+    With apply=False (default) the script only counts what would be
+    touched — no place_order / cancel_all_orders calls go to Bybit.
+    """
     s = load_settings()
     client = HTTP(
         testnet=False,
@@ -84,6 +99,10 @@ def clean_bybit() -> tuple[int, int]:
         size = p["size"]
         position_idx = int(p.get("positionIdx") or 0)
         close_side = "Sell" if side == "Buy" else "Buy"
+        if not apply:
+            print(f"  [dry-run] would close {sym} {side} size={size}")
+            closed += 1
+            continue
         try:
             client.place_order(
                 category="linear",
@@ -113,6 +132,11 @@ def clean_bybit() -> tuple[int, int]:
 
     cancelled = 0
     for sym in sorted({o["symbol"] for o in open_orders}):
+        if not apply:
+            sym_orders = [o for o in open_orders if o["symbol"] == sym]
+            print(f"  [dry-run] would cancel {len(sym_orders)} orders on {sym}")
+            cancelled += len(sym_orders)
+            continue
         for filt in ("Order", "StopOrder"):
             try:
                 resp = client.cancel_all_orders(
@@ -126,9 +150,13 @@ def clean_bybit() -> tuple[int, int]:
     return closed, cancelled
 
 
-def clean_db() -> int:
+def clean_db(apply: bool = False) -> int:
     """Mark every non-terminal bot trade as CLOSED with reason
-    'manual_cleanup_post_update'. Returns the row count."""
+    'manual_cleanup_post_update'. Returns the row count.
+
+    With apply=False (default) only counts the rows that would be
+    updated — no DB write happens.
+    """
     ghost_states = (
         "POSITION_OPEN", "HEDGE_ACTIVE",
         "SCALING_STEP_1", "SCALING_STEP_2", "SCALING_STEP_3", "SCALING_STEP_4",
@@ -143,6 +171,10 @@ def clean_db() -> int:
     rows = list(conn.execute(
         f"SELECT id FROM trades WHERE state IN ({placeholders})", ghost_states,
     ))
+    if not apply:
+        print(f"  [dry-run] would mark {len(rows)} trades CLOSED")
+        conn.close()
+        return len(rows)
     conn.execute(
         f"UPDATE trades SET state='CLOSED', "
         f"close_reason='manual_cleanup_post_update', "
@@ -154,8 +186,12 @@ def clean_db() -> int:
     return len(rows)
 
 
-async def clean_wishingbell() -> int:
-    """Delete every WishingBell message visible to the user session."""
+async def clean_wishingbell(apply: bool = False) -> int:
+    """Delete every WishingBell message visible to the user session.
+
+    With apply=False (default) just counts the messages that would be
+    deleted — no DeleteMessagesRequest is sent.
+    """
     env = _read_env()
     api_id = int(env["TG_API_ID"])
     api_hash = env["TG_API_HASH"]
@@ -169,6 +205,11 @@ async def clean_wishingbell() -> int:
     ids: list[int] = []
     async for msg in client.iter_messages(chan, limit=None):
         ids.append(msg.id)
+
+    if not apply:
+        print(f"  [dry-run] would delete {len(ids)} channel messages")
+        await client.disconnect()
+        return len(ids)
 
     deleted = 0
     for i in range(0, len(ids), 100):
@@ -184,17 +225,37 @@ async def clean_wishingbell() -> int:
 
 
 async def main() -> None:
-    print("== Stratos1 clean_state ==")
-    closed, cancelled = clean_bybit()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Reset Stratos1 to a clean baseline. "
+            "Default: dry-run preview only. Pass --apply to mutate."
+        ),
+    )
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="Actually mutate state. Without this flag, only counts.",
+    )
+    args = parser.parse_args()
+    apply = args.apply
+
+    mode = "APPLYING" if apply else "DRY-RUN"
+    print(f"== Stratos1 clean_state ({mode}) ==")
+    if not apply:
+        print("  (no mutation will happen — re-run with --apply to execute)")
+    closed, cancelled = clean_bybit(apply=apply)
     print(f"Bybit: closed={closed} positions, cancelled={cancelled} orders")
 
-    db_rows = clean_db()
+    db_rows = clean_db(apply=apply)
     print(f"DB:    marked {db_rows} ghost trades CLOSED")
 
-    deleted = await clean_wishingbell()
+    deleted = await clean_wishingbell(apply=apply)
     print(f"WishingBell: deleted {deleted} messages")
 
-    print("Done.")
+    if not apply:
+        print()
+        print("DRY-RUN complete. Re-run with --apply to actually do it.")
+    else:
+        print("Done.")
 
 
 if __name__ == "__main__":
