@@ -156,6 +156,23 @@ _STATUS_UPDATE_PATTERNS = [
     ),
     # "So far profit (X%)" — running-PnL update style
     re.compile(r"\bso\s+far\s+profit\b", re.IGNORECASE),
+    # "Entry 1 ✅" / "Entry 2 ✅" / "Entry 3 ✅" — entry-fill confirmation.
+    # Some channels post a separate status message when the entry fills,
+    # echoing the symbol but with no entry/SL/TP. Without this pattern
+    # the bot reparses the message as a new signal and emits "Entre
+    # saknas" warnings (ONT + THETA "Entry 1 ✅" incidents 2026-05-04).
+    re.compile(
+        r"\bentry\s*\d+\s*[✅✓☑]",
+        re.IGNORECASE,
+    ),
+    # "Average Entry Price: X" — same channels follow up with the
+    # avg-fill-price report. Status, not a signal.
+    re.compile(r"\baverage\s+entry\s+price\b", re.IGNORECASE),
+    # "Trade Update" / "Position Update" — explicit update-style header.
+    re.compile(
+        r"\b(?:trade|position)\s+update\b",
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -275,8 +292,15 @@ _TP_PATTERNS = [
     # / "TP1.➝2.500" — allow any non-digit, non-newline separators
     # (colons, periods, arrows like ➝ → ⇒ = etc.) between the TP
     # number and the price.
+    #
+    # 2026-05-04 fix: label-to-index gap is [^\S\n]* (whitespace
+    # except newline) NOT \s*. Otherwise a header line like
+    # "Take Profit Target\n0.0180" matches "Target", \s* eats the
+    # newline, (\d+) grabs the leading "0" of "0.0180", and the price
+    # extractor sees ".0180" -> "180.0". Live BOB signal incident
+    # 2026-05-04 (#1000000BOBUSDT, all 4 TPs collapsed to [180.0]).
     re.compile(
-        r"(?:tp|t|target|take[\s_-]*profit)\s*(\d+)[^\d\n]{0,6}" + _PRICE_RE,
+        r"(?:tp|t|target|take[\s_-]*profit)[^\S\n]*(\d+)[^\d\n]{0,6}" + _PRICE_RE,
         re.IGNORECASE,
     ),
     # Numbered list under a "Targets :" / "Take Profits :" / "Take
@@ -291,10 +315,19 @@ _TP_PATTERNS = [
     # — that header followed by a single price was making the parser
     # capture the ENTRY price as TP1. "Take-Profit Targets" still
     # matches anywhere because the "take..." prefix is unambiguous.
+    # 2026-05-04 fix: inner repeated unit now requires an explicit
+    # list-marker between index and price (\d{1,2}\s*[)\:\-]\s*[\d.]+)
+    # instead of the previous `\d+[^\d\n\w]{1,4}[\d.]+` which happily
+    # treated a bare price-per-line list ("0.0180\n0.0172\n0.0156")
+    # as numbered, shredding "0.0180" -> idx=80 + price=0.0172.
+    # Bare-price lists now correctly fall through to pattern 5
+    # (entry-to-SL block scanner), which handles them as intended.
+    # Live BOB incident 2026-05-04 (#1000000BOBUSDT, "Take Profit
+    # Target\n0.0180\n0.0172\n...").
     re.compile(
         r"(?:take[\s_-]*profits?(?:\s+targets?)?|(?:^|\n)\s*(?:tps?|targets?))"
         r"\s*[:=]?\s*-?"
-        r"\s*\n\s*((?:\d+[^\d\n\w]{1,4}[\d.]+\s*\n?\s*){1,8})",
+        r"\s*\n\s*((?:\d{1,2}\s*[)\:\-]\s*[^\d\n]{0,5}[\d.]+\s*\n?\s*){1,8})",
         re.IGNORECASE | re.MULTILINE,
     ),
     # "Targets: 3300/3400/3500" / "Targets: 3300, 3400, 3500" / "Targets:
@@ -579,8 +612,12 @@ def extract_prices(text: str) -> dict:
             # incident 2026-04-28). Bare-price-per-line lists fall
             # through to Pattern 5 below, which is the right home
             # for them.
+            # Inner mirrors the outer's strict form: index 1-2 digits,
+            # explicit list-marker [)\:\-], optional emoji/symbol gap
+            # before price ("1)🟥 1.3731", "1)> 0.096" CRYPTO WORLD
+            # UPTADES). Outer already filtered to this shape.
             for item in re.finditer(
-                r"(\d+)[)\:\-\s][^\d\n\w]{0,3}([\d.]+)", block
+                r"(\d{1,2})\s*[)\:\-]\s*[^\d\n]{0,5}([\d.]+)", block
             ):
                 idx = int(item.group(1))
                 price = _parse_price(item.group(2))

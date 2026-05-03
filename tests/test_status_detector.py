@@ -27,6 +27,13 @@ STATUS_MESSAGES = [
     "#DASH/USDT Take-Profit target 1 ✅\nProfit: 20.8981%",
     "TAG/USDT UPDATE\nALL TARGETS DONE\n+646% GAIN",
     "Trade closed at TP3",
+    # 2026-05-04 ONT/THETA "Entry N ✅" entry-fill confirmations.
+    "#Free Signal ✅ Long #ONT/USDT Entry Palm: 0.0668 0.0689\n"
+    "#ONT/USDT Entry 1 ✅\nAverage Entry Price: 0.0689 ✅",
+    "🔴 Short Pair: #THETA/USDT Entry Price: 1) 0.2155 2) 0.2219\n"
+    "#THETA/USDT Entry 1 ✅\nAverage Entry Price: 0.2155 ✅",
+    "#BTC/USDT Trade update — Entry 1 filled",
+    "ETH Position Update — TP1 hit",
     "Position closed in profit",
     "TP1 hit, TP2 taken",
     "Stopped out at SL",

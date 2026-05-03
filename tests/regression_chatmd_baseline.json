@@ -98,7 +98,9 @@
     "symbol": "MAGMAUSDT",
     "direction": "LONG",
     "tps": [
-      0.263
+      0.263,
+      0.275,
+      0.299
     ],
     "sl": 0.245,
     "has_signal": true
@@ -564,7 +566,9 @@
     "symbol": "OPNUSDT",
     "direction": "SHORT",
     "tps": [
-      0.17
+      0.17,
+      0.164,
+      0.155
     ],
     "sl": 0.182,
     "has_signal": true
@@ -576,8 +580,11 @@
     "symbol": "THETAUSDT",
     "direction": "SHORT",
     "tps": [
+      0.2054,
+      0.1992,
+      0.193,
       0.1867,
-      0.1992
+      0.1805
     ],
     "sl": 0.220955,
     "has_signal": true
@@ -589,7 +596,9 @@
     "symbol": "OPGUSDT",
     "direction": "LONG",
     "tps": [
-      0.275
+      0.275,
+      0.29,
+      0.32
     ],
     "sl": 0.24,
     "has_signal": true
@@ -601,7 +610,9 @@
     "symbol": "UBUSDT",
     "direction": "LONG",
     "tps": [
-      0.1598
+      0.1598,
+      0.165,
+      0.175
     ],
     "sl": 0.1465,
     "has_signal": true
@@ -804,7 +815,9 @@
     "symbol": "BABYUSDT",
     "direction": "LONG",
     "tps": [
-      0.0238
+      0.0238,
+      0.026,
+      0.032
     ],
     "sl": 0.0182,
     "has_signal": true
@@ -1092,7 +1105,9 @@
     "symbol": "MAGMAUSDT",
     "direction": "LONG",
     "tps": [
-      0.263
+      0.263,
+      0.275,
+      0.299
     ],
     "sl": 0.245,
     "has_signal": true
@@ -1291,7 +1306,9 @@
     "symbol": "CHILLGUYUSDT",
     "direction": "SHORT",
     "tps": [
-      0.0144
+      0.0144,
+      0.0135,
+      0.0125
     ],
     "sl": 0.0166,
     "has_signal": true
@@ -1409,8 +1426,11 @@
     "symbol": "ONTUSDT",
     "direction": "LONG",
     "tps": [
+      0.0696,
       0.0717,
-      0.0758
+      0.0737,
+      0.0758,
+      0.0779
     ],
     "sl": 0.064449,
     "has_signal": true
@@ -1474,8 +1494,11 @@
     "symbol": "ALGOUSDT",
     "direction": "SHORT",
     "tps": [
+      0.1111,
+      0.1077,
+      0.1044,
       0.101,
-      0.1077
+      0.0976
     ],
     "sl": 0.119519,
     "has_signal": true
@@ -1487,8 +1510,11 @@
     "symbol": "UBUSDT",
     "direction": "LONG",
     "tps": [
+      0.1503907,
       0.1548578,
-      0.1637919
+      0.1593248,
+      0.1637919,
+      0.1682589
     ],
     "sl": 0.1391745,
     "has_signal": true
@@ -1500,8 +1526,11 @@
     "symbol": "ZECUSDT",
     "direction": "LONG",
     "tps": [
+      374.38,
       385.5,
-      407.74
+      396.62,
+      407.74,
+      418.86
     ],
     "sl": 346.4622,
     "has_signal": true
@@ -1513,8 +1542,11 @@
     "symbol": "KNCUSDT",
     "direction": "SHORT",
     "tps": [
+      0.17133,
+      0.16613,
+      0.16094,
       0.15575,
-      0.16613
+      0.15056
     ],
     "sl": 0.184254,
     "has_signal": true
@@ -1618,8 +1650,11 @@
     "symbol": "THETAUSDT",
     "direction": "SHORT",
     "tps": [
+      0.2054,
+      0.1992,
+      0.193,
       0.1867,
-      0.1992
+      0.1805
     ],
     "sl": 0.220955,
     "has_signal": true
@@ -1627,14 +1662,12 @@
   {
     "idx": 120,
     "snippet": "🖼 🚀LONG : $B/USDT | LEVERAGE: 75x |  | ✔️ENTRY PRICE: 0.4280 | ✔️ 2n",
-    "reason": "ok",
+    "reason": "no_tps",
     "symbol": "BUSDT",
     "direction": "LONG",
-    "tps": [
-      4400.0
-    ],
+    "tps": [],
     "sl": 0.39,
-    "has_signal": true
+    "has_signal": false
   },
   {
     "idx": 121,
@@ -1657,8 +1690,11 @@
     "symbol": "ALGOUSDT",
     "direction": "SHORT",
     "tps": [
+      0.1111,
+      0.1077,
+      0.1044,
       0.101,
-      0.1077
+      0.0976
     ],
     "sl": 0.119519,
     "has_signal": true
@@ -1811,7 +1847,9 @@
     "symbol": "OPNUSDT",
     "direction": "SHORT",
     "tps": [
-      0.17
+      0.17,
+      0.164,
+      0.155
     ],
     "sl": 0.182,
     "has_signal": true
@@ -1854,8 +1892,11 @@
     "symbol": "THETAUSDT",
     "direction": "SHORT",
     "tps": [
+      0.2054,
+      0.1992,
+      0.193,
       0.1867,
-      0.1992
+      0.1805
     ],
     "sl": 0.220955,
     "has_signal": true
@@ -1867,7 +1908,9 @@
     "symbol": "OPGUSDT",
     "direction": "LONG",
     "tps": [
-      0.275
+      0.275,
+      0.29,
+      0.32
     ],
     "sl": 0.24,
     "has_signal": true
@@ -1879,7 +1922,9 @@
     "symbol": "UBUSDT",
     "direction": "LONG",
     "tps": [
-      0.1598
+      0.1598,
+      0.165,
+      0.175
     ],
     "sl": 0.1465,
     "has_signal": true
@@ -2081,7 +2126,9 @@
     "symbol": "BABYUSDT",
     "direction": "LONG",
     "tps": [
-      0.0238
+      0.0238,
+      0.026,
+      0.032
     ],
     "sl": 0.0182,
     "has_signal": true
@@ -2369,7 +2416,9 @@
     "symbol": "MAGMAUSDT",
     "direction": "LONG",
     "tps": [
-      0.263
+      0.263,
+      0.275,
+      0.299
     ],
     "sl": 0.245,
     "has_signal": true
@@ -2568,7 +2617,9 @@
     "symbol": "CHILLGUYUSDT",
     "direction": "SHORT",
     "tps": [
-      0.0144
+      0.0144,
+      0.0135,
+      0.0125
     ],
     "sl": 0.0166,
     "has_signal": true
@@ -2686,8 +2737,11 @@
     "symbol": "ONTUSDT",
     "direction": "LONG",
     "tps": [
+      0.0696,
       0.0717,
-      0.0758
+      0.0737,
+      0.0758,
+      0.0779
     ],
     "sl": 0.064449,
     "has_signal": true
@@ -2977,14 +3031,18 @@
   {
     "idx": 218,
     "snippet": "#TST/USDT | #SHORT | Leverage cross 20X  |  | Entry: 0.01560 – 0.016",
-    "reason": "invalid",
+    "reason": "ok",
     "symbol": "TSTUSDT",
     "direction": "SHORT",
     "tps": [
-      152.0
+      0.0152,
+      0.0148,
+      0.0143,
+      0.0138,
+      0.0132
     ],
     "sl": 0.0177,
-    "has_signal": false
+    "has_signal": true
   },
   {
     "idx": 219,
@@ -3097,14 +3155,18 @@
   {
     "idx": 227,
     "snippet": "#TST/USDT | #SHORT | Leverage cross 20X  |  | Entry: 0.01560 – 0.016",
-    "reason": "invalid",
+    "reason": "ok",
     "symbol": "TSTUSDT",
     "direction": "SHORT",
     "tps": [
-      152.0
+      0.0152,
+      0.0148,
+      0.0143,
+      0.0138,
+      0.0132
     ],
     "sl": 0.0177,
-    "has_signal": false
+    "has_signal": true
   },
   {
     "idx": 228,
