@@ -454,17 +454,30 @@ class TelegramListener:
             if fwd_name:
                 channel_name = f"{channel_name} (fwd: {fwd_name})"
 
-            log.info(
-                "message_received",
-                chat_id=chat_id,
-                channel_name=channel_name,
-                forwarded=bool(fwd_name),
-                text_length=len(raw_text),
-                text_preview=raw_text[:100],
-            )
+            # Per-signal trace id (Tomas 2026-05-04). Bound to
+            # structlog contextvars so EVERY downstream log line
+            # produced inside this handler — parser, validator,
+            # dedup, position manager, notifier — is auto-tagged
+            # with the same signal_id. Operators can grep one id
+            # to see the full pipeline trace for a single message.
+            import uuid as _uuid
+            import structlog.contextvars as _ctx
+            signal_id = _uuid.uuid4().hex[:8]
+            _ctx.bind_contextvars(signal_id=signal_id)
+            try:
+                log.info(
+                    "message_received",
+                    chat_id=chat_id,
+                    channel_name=channel_name,
+                    forwarded=bool(fwd_name),
+                    text_length=len(raw_text),
+                    text_preview=raw_text[:100],
+                )
 
-            # Invoke the signal processing callback
-            await self._callback(raw_text, chat_id, channel_name)
+                # Invoke the signal processing callback
+                await self._callback(raw_text, chat_id, channel_name)
+            finally:
+                _ctx.unbind_contextvars("signal_id")
 
         except FloodWaitError as exc:
             log.warning(

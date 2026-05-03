@@ -203,10 +203,18 @@ class TelegramNotifier:
                 text,
                 parse_mode=parse_mode,
             )
-            log.debug(
+            # INFO (was DEBUG) — Tomas 2026-05-04 wants to be able to
+            # confirm "yes, the bot did send this signal to the
+            # channel" from the file log. With the listener-bound
+            # signal_id contextvar, this line auto-tags with the same
+            # id as message_received, so the chain
+            # message_received -> ... -> notification_sent is
+            # greppable end-to-end per signal.
+            log.info(
                 "notification_sent",
                 channel_id=channel_id,
                 text_length=len(text),
+                text_preview=text[:60],
             )
         except Exception:
             log.exception(
