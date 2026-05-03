@@ -1,0 +1,3201 @@
+[
+  {
+    "idx": 0,
+    "snippet": "❌ POSITION OFÖRSVARAD (PROTECTION FAILED) |  |    Tid: 11:31 PM | ",
+    "reason": "no_entry",
+    "symbol": "ETHUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 1,
+    "snippet": "❌ POSITION OFÖRSVARAD (PROTECTION FAILED) |  |    Tid: 02:09 AM | ",
+    "reason": "no_entry",
+    "symbol": "MASKUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 2,
+    "snippet": "❌ POSITION OFÖRSVARAD (PROTECTION FAILED) |  |    Tid: 07:40 AM | ",
+    "reason": "no_entry",
+    "symbol": "NEARUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 3,
+    "snippet": "this is intresting |  | Sl to far from liquidation |  | my opionion ",
+    "reason": "no_tps",
+    "symbol": "TRADEUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": 0.0135,
+    "has_signal": false
+  },
+  {
+    "idx": 4,
+    "snippet": "⚠️ SIGNAL AVVISAD (SL bortom likvidationsavstånd) | 🕒 Tid: 08:",
+    "reason": "no_tps",
+    "symbol": "TRADEUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": 0.0135,
+    "has_signal": false
+  },
+  {
+    "idx": 5,
+    "snippet": "smal izzu |  | missing resultat % + resultat usdt  smae like tp ",
+    "reason": "invalid",
+    "symbol": "OPNUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2.0
+    ],
+    "sl": 1.0,
+    "has_signal": false
+  },
+  {
+    "idx": 6,
+    "snippet": "🖼 samll izzu |  | USDT profit |  | if tralingstop start thels say 6,",
+    "reason": "no_direction",
+    "symbol": "USDT",
+    "direction": null,
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 7,
+    "snippet": "small izzu |  | tralingstop cant go down 21,53%?? | chech this |  |  | >",
+    "reason": "no_entry",
+    "symbol": "TIAUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 9.0,
+    "has_signal": false
+  },
+  {
+    "idx": 8,
+    "snippet": "❌ TP/SL UPPDATERING MISSLYCKADES ❌ | 🕒 Tid: 10:43 AM | 📢 Från ka",
+    "reason": "no_entry",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 9,
+    "snippet": "#MAGMA/USDT LONG   |  | 👉Leverage : Cross 20× To 50× |  | Entry :  0",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.263
+    ],
+    "sl": 0.245,
+    "has_signal": true
+  },
+  {
+    "idx": 10,
+    "snippet": "💵COIN #B🔥 |  |  : STRONG LONG🔖 |  Leverage : 20x100 |  | 🕯 Entry Zone:",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.393,
+      0.397,
+      0.405
+    ],
+    "sl": 0.32,
+    "has_signal": true
+  },
+  {
+    "idx": 11,
+    "snippet": "🖼 PAIR 🎉BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 12,
+    "snippet": "🖼 PAIR $TST/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0.",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0149,
+      0.0145,
+      0.014
+    ],
+    "sl": 0.01888,
+    "has_signal": true
+  },
+  {
+    "idx": 13,
+    "snippet": "🖼 PAIR $BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 14,
+    "snippet": "$PARTI Blow-Off Move Short Opportunity |  | Entry: 0.0465 – 0.04",
+    "reason": "ok",
+    "symbol": "PARTIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.044,
+      0.042,
+      0.04
+    ],
+    "sl": 0.0515,
+    "has_signal": true
+  },
+  {
+    "idx": 15,
+    "snippet": "🖼 PAIR $TST/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0.",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0149,
+      0.0145,
+      0.014
+    ],
+    "sl": 0.01888,
+    "has_signal": true
+  },
+  {
+    "idx": 16,
+    "snippet": "🖼 PAIR $BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 17,
+    "snippet": "$PARTI Blow-Off Move Short Opportunity |  | Entry: 0.0465 – 0.04",
+    "reason": "ok",
+    "symbol": "PARTIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.044,
+      0.042,
+      0.04
+    ],
+    "sl": 0.0515,
+    "has_signal": true
+  },
+  {
+    "idx": 18,
+    "snippet": "🖼 PAIR $TST/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0.",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0149,
+      0.0145,
+      0.014
+    ],
+    "sl": 0.01888,
+    "has_signal": true
+  },
+  {
+    "idx": 19,
+    "snippet": "🖼 PAIR $BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 20,
+    "snippet": "$PARTI Blow-Off Move Short Opportunity |  | Entry: 0.0465 – 0.04",
+    "reason": "ok",
+    "symbol": "PARTIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.044,
+      0.042,
+      0.04
+    ],
+    "sl": 0.0515,
+    "has_signal": true
+  },
+  {
+    "idx": 21,
+    "snippet": "🖼 PAIR 🎉TST/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0.",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0149,
+      0.0145,
+      0.014
+    ],
+    "sl": 0.01888,
+    "has_signal": true
+  },
+  {
+    "idx": 22,
+    "snippet": "🖼 PAIR 🎉BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 23,
+    "snippet": "🖼 $HYPEUSDT | ENTRY $40.850-41.1 | SL under 40.56 | TP 41.7++ | ߋ ru",
+    "reason": "no_direction",
+    "symbol": "HYPEUSDT",
+    "direction": null,
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 24,
+    "snippet": "⚡️⚡️ #XPL/USDT ⚡️⚡️ | Exchanges: Bingx  | Signal Type: Regular (",
+    "reason": "ok",
+    "symbol": "XPLUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.08747,
+      0.08658,
+      0.08569,
+      0.08436,
+      0.08347,
+      0.08214
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 25,
+    "snippet": "⚡️⚡️ #XAN/USDT ⚡️⚡️ | Exchanges: Bingx  | Signal Type: Regular (",
+    "reason": "ok",
+    "symbol": "XANUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.00815,
+      0.00807,
+      0.00799,
+      0.00786,
+      0.00778,
+      0.00766
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 26,
+    "snippet": "⚡️⚡️ #WAVES/USDT ⚡️⚡️ | Exchanges: Bingx  | Signal Type: Regular",
+    "reason": "ok",
+    "symbol": "WAVESUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.4009,
+      0.39683,
+      0.39276,
+      0.38665,
+      0.38258,
+      0.37648
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 27,
+    "snippet": "⚡️⚡️ #VANA/USDT ⚡️⚡️ | Exchanges: Bingx  | Signal Type: Regular ",
+    "reason": "ok",
+    "symbol": "VANAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.47455,
+      1.45958,
+      1.44461,
+      1.42215,
+      1.40718,
+      1.38473
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 28,
+    "snippet": "⚡️⚡️ #SSV/USDT ⚡️⚡️ | Exchanges: Bingx  | Signal Type: Regular (",
+    "reason": "ok",
+    "symbol": "SSVUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2.758,
+      2.73,
+      2.702,
+      2.66,
+      2.632,
+      2.59
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 29,
+    "snippet": "⚡️⚡️ #OG/USDT ⚡️⚡️ | Exchanges: Bingx  | Signal Type: Regular (S",
+    "reason": "ok",
+    "symbol": "OGUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2.98731,
+      2.95698,
+      2.92665,
+      2.88116,
+      2.85083,
+      2.80534
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 30,
+    "snippet": "📩 ETHUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Accu",
+    "reason": "ok",
+    "symbol": "ETHUSDT",
+    "direction": "LONG",
+    "tps": [
+      2312.93,
+      2314.55,
+      2327.79
+    ],
+    "sl": 2308.41,
+    "has_signal": true
+  },
+  {
+    "idx": 31,
+    "snippet": "📩 EIGENUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "EIGENUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1798,
+      0.1804,
+      0.1853
+    ],
+    "sl": 0.1781,
+    "has_signal": true
+  },
+  {
+    "idx": 32,
+    "snippet": "🔴 SHORT |  | #DOT/USDT |  | Entry :  |  | 1) 1.229 | 2) 1.265 |  | Targets :  | ",
+    "reason": "ok",
+    "symbol": "DOTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.221,
+      1.195,
+      1.169,
+      1.143
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 33,
+    "snippet": "💵COIN #BSB🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x50 |  | 🕯 Entry Zon",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.621,
+      0.605,
+      0.58
+    ],
+    "sl": 0.73,
+    "has_signal": true
+  },
+  {
+    "idx": 34,
+    "snippet": "💵COIN #LAB🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x75 |  | 🕯 Entry Zon",
+    "reason": "ok",
+    "symbol": "LABUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.94,
+      1.92,
+      1.9
+    ],
+    "sl": 2.4,
+    "has_signal": true
+  },
+  {
+    "idx": 35,
+    "snippet": "📩 MASKUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "MASKUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.5091,
+      0.5069,
+      0.4884
+    ],
+    "sl": 0.5154,
+    "has_signal": true
+  },
+  {
+    "idx": 36,
+    "snippet": "📩 EIGENUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy A",
+    "reason": "ok",
+    "symbol": "EIGENUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.177,
+      0.176,
+      0.165
+    ],
+    "sl": 0.18,
+    "has_signal": true
+  },
+  {
+    "idx": 37,
+    "snippet": "🖼 🐳 TRIA/USDT #SHORT 🐳 |  | ✳️ ENTRY :- 0.04050 - 0.04150 |  | 💢 LEV",
+    "reason": "ok",
+    "symbol": "TRIAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.039,
+      0.037,
+      0.034
+    ],
+    "sl": 0.04265,
+    "has_signal": true
+  },
+  {
+    "idx": 38,
+    "snippet": "📹 ⌛#SPK/USDT  ( LONG ) |  | 🍁 Leverage 👉 20X to 25X  |  | ⛩️ Entry ➡",
+    "reason": "no_entry",
+    "symbol": "SPKUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0369,
+      0.03729,
+      0.03764,
+      0.03801,
+      0.03845,
+      0.03878
+    ],
+    "sl": 0.03528,
+    "has_signal": false
+  },
+  {
+    "idx": 39,
+    "snippet": "Binance Futures  Call ‼️ |  | #UBUUSDT  PERP | ⬇️ Short  Call  |  | ❇️",
+    "reason": "ok",
+    "symbol": "UBUUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.14,
+      0.13,
+      0.12,
+      0.11,
+      0.1
+    ],
+    "sl": 0.18,
+    "has_signal": true
+  },
+  {
+    "idx": 40,
+    "snippet": "♻ #LAB/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 1.89 - 1.84 |  | ✅T",
+    "reason": "ok",
+    "symbol": "LABUSDT",
+    "direction": "LONG",
+    "tps": [
+      1.94,
+      1.99,
+      2.04
+    ],
+    "sl": 1.8,
+    "has_signal": true
+  },
+  {
+    "idx": 41,
+    "snippet": "🔰 OPN/USDT 🔰   |  | 🟢 SHORT (10X - 20X)   |  | ♻ ENTRY  | 1️⃣ 0.174 | 2️",
+    "reason": "ok",
+    "symbol": "OPNUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.17
+    ],
+    "sl": 0.182,
+    "has_signal": true
+  },
+  {
+    "idx": 42,
+    "snippet": "🔴 SHORT |  | #THETA/USDT |  | Entry zone : 0.2126 - 0.2065 |  | Take Pro",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.1867,
+      0.1992
+    ],
+    "sl": 0.220955,
+    "has_signal": true
+  },
+  {
+    "idx": 43,
+    "snippet": "#OPG/USDT LONG   |  | 👉Leverage : Cross 20× To 50× |  | Entry :  0.2",
+    "reason": "ok",
+    "symbol": "OPGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.275
+    ],
+    "sl": 0.24,
+    "has_signal": true
+  },
+  {
+    "idx": 44,
+    "snippet": "#UB/USDT LONG   |  | 👉Leverage : Cross 25× To 50× |  | Entry :  0.15",
+    "reason": "ok",
+    "symbol": "UBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1598
+    ],
+    "sl": 0.1465,
+    "has_signal": true
+  },
+  {
+    "idx": 45,
+    "snippet": "✅ Long |  | Pair: #ATOM/USDT |  | 📊 Entry Price:  |  | 1) 1.868 | 2) 1.811",
+    "reason": "ok",
+    "symbol": "ATOMUSDT",
+    "direction": "LONG",
+    "tps": [
+      1.878,
+      1.917,
+      1.956,
+      1.995
+    ],
+    "sl": 1.75,
+    "has_signal": true
+  },
+  {
+    "idx": 46,
+    "snippet": "🚀Setup Active 🚀 | OPG/USDT | Direction: LONG |  | Buy Range: 0.2650–",
+    "reason": "ok",
+    "symbol": "OPGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.275,
+      0.29,
+      0.32
+    ],
+    "sl": 0.24,
+    "has_signal": true
+  },
+  {
+    "idx": 47,
+    "snippet": "⚡️⚡️$UB/USDT⚡️⚡️ |  | LONG | Leverage: 25x – 50x |  | Entry: 0.1563 |  | T",
+    "reason": "ok",
+    "symbol": "UBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1598,
+      0.165,
+      0.175
+    ],
+    "sl": 0.1465,
+    "has_signal": true
+  },
+  {
+    "idx": 48,
+    "snippet": "⚡ #BIO/USDT |  | 📥 Short  |  | 💹 Buy: 0.05480 - 0.05615 |  | 🧿 Target: 0",
+    "reason": "ok",
+    "symbol": "BIOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.05426,
+      0.05372,
+      0.05329,
+      0.05275,
+      0.05223,
+      0.0517
+    ],
+    "sl": 0.0579,
+    "has_signal": true
+  },
+  {
+    "idx": 49,
+    "snippet": "❖ GENIUS/USDT |  | ❖ LONG [ 20X ] |  | ➤ Entry Zone:- 0.6150 – 0.580",
+    "reason": "ok",
+    "symbol": "GENIUSUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.645,
+      0.7,
+      0.77
+    ],
+    "sl": 0.53,
+    "has_signal": true
+  },
+  {
+    "idx": 50,
+    "snippet": "📇 Setup: #BIO/USDT  |  | SHORT Trade 🛫 |  | ✔️ Leverage : 50x |  | 👉 Ent",
+    "reason": "ok",
+    "symbol": "BIOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.05439,
+      0.0533,
+      0.0523
+    ],
+    "sl": 0.058,
+    "has_signal": true
+  },
+  {
+    "idx": 51,
+    "snippet": "#SHORT 🔴 🔤🔤🔤🔤🔤 |  | #XRP/USDT  |  | Margin Mode : Isolated💎 |  | Signal ",
+    "reason": "ok",
+    "symbol": "XRPUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.3731,
+      1.3593,
+      1.3454,
+      1.3248,
+      1.3027
+    ],
+    "sl": 1.409,
+    "has_signal": true
+  },
+  {
+    "idx": 52,
+    "snippet": "🖼 📍SIGNAL ID: #2120📍 | COIN: $TAO/USDT (2-5x) | Direction: LONG | ",
+    "reason": "no_entry",
+    "symbol": "TAOUSDT",
+    "direction": "LONG",
+    "tps": [
+      255.0,
+      265.0,
+      280.0
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 53,
+    "snippet": "📊#ALCH/USDT |  | ✅ LONG ( LEV-20X ) |  | ENTRY :- 0.0946 - 0.092 |  | Ta",
+    "reason": "ok",
+    "symbol": "ALCHUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.096,
+      0.099,
+      0.102
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 54,
+    "snippet": "🖼 🔔 Challenge Trade 💥 |  | 📈Trade No. 1 |  | ➡️Coin Name : ChillGuy_",
+    "reason": "ok",
+    "symbol": "TRADEUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.019,
+      0.025
+    ],
+    "sl": 0.0135,
+    "has_signal": true
+  },
+  {
+    "idx": 55,
+    "snippet": "🌹 #BABY/USDT |  | 🟢 LONG |  | ✅ Entry: 0.02174- 0.02129 |  | ❌ Stoploss:",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.02213,
+      0.02254,
+      0.024,
+      0.0256
+    ],
+    "sl": 0.02064,
+    "has_signal": true
+  },
+  {
+    "idx": 56,
+    "snippet": "#IN | LONG SETUP |  | 💰 Entry: $0.06939 |  | 🎯 Target1: $0.06988 | 🎯 T",
+    "reason": "ok",
+    "symbol": "INUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.06988,
+      0.07043,
+      0.07112,
+      0.07203,
+      0.073
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 57,
+    "snippet": "🔴 SHORT |  | #TRX/USDT |  | Entry :  |  | 1) 0.34109 | 2) 0.35132 |  | Targets",
+    "reason": "ok",
+    "symbol": "TRXUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.33909,
+      0.33189,
+      0.32469,
+      0.31749
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 58,
+    "snippet": "#BABY/USDT LONG   |  | 👉Leverage : Cross 25× To 50× |  | Entry :  0.",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0238
+    ],
+    "sl": 0.0182,
+    "has_signal": true
+  },
+  {
+    "idx": 59,
+    "snippet": "📩 NEARUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "NEARUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.272,
+      1.267,
+      1.226
+    ],
+    "sl": 1.286,
+    "has_signal": true
+  },
+  {
+    "idx": 60,
+    "snippet": "📩 SEIUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "SEIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0577,
+      0.0575,
+      0.0561
+    ],
+    "sl": 0.0581,
+    "has_signal": true
+  },
+  {
+    "idx": 61,
+    "snippet": "📩 LINKUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "LINKUSDT",
+    "direction": "SHORT",
+    "tps": [
+      9.06,
+      9.045,
+      8.922
+    ],
+    "sl": 9.102,
+    "has_signal": true
+  },
+  {
+    "idx": 62,
+    "snippet": "Binance Futures  Call ‼️ |  | #LABUUSDT  PERP | ⬇️  Short  |  | ❇️ Ent",
+    "reason": "ok",
+    "symbol": "LABUUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.2,
+      1.1,
+      1.0,
+      0.9,
+      0.8
+    ],
+    "sl": 1.7,
+    "has_signal": true
+  },
+  {
+    "idx": 63,
+    "snippet": "🖼 📊 #BABY/USDT – LONG 💰 |  | 🔥 Entry Zone: | ➡️ 0.0227  – 0.0220 |  | ",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0238,
+      0.026,
+      0.032
+    ],
+    "sl": 0.0182,
+    "has_signal": true
+  },
+  {
+    "idx": 64,
+    "snippet": "Coin #BABY/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0248,
+      0.0255,
+      0.0262
+    ],
+    "sl": 0.0227,
+    "has_signal": true
+  },
+  {
+    "idx": 65,
+    "snippet": "📩 BNBUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "BNBUSDT",
+    "direction": "SHORT",
+    "tps": [
+      615.26,
+      614.7,
+      610.11
+    ],
+    "sl": 616.83,
+    "has_signal": true
+  },
+  {
+    "idx": 66,
+    "snippet": "🐳 BSB/USDT #LONG 🐳 |  | ✳️ ENTRY :- 0.73 - 0.70 |  | 💢 LEVERAGE :- 2",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.76,
+      0.82,
+      0.9
+    ],
+    "sl": 0.64,
+    "has_signal": true
+  },
+  {
+    "idx": 67,
+    "snippet": "Coin #CHILLGUY/USDT |  | Position: LONG |  | Leverage:  Cross 25×  T",
+    "reason": "ok",
+    "symbol": "CHILLGUYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0162,
+      0.0167,
+      0.0172
+    ],
+    "sl": 0.0147,
+    "has_signal": true
+  },
+  {
+    "idx": 68,
+    "snippet": "$FOGO/USDT #LONG📩 |  | ✅ENTRY :-0.02030- 0.01970 |  | Target 1: 0.02",
+    "reason": "ok",
+    "symbol": "FOGOUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0208,
+      0.022,
+      0.024
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 69,
+    "snippet": "♻ #BIO/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.0544 - 0.0529",
+    "reason": "ok",
+    "symbol": "BIOUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0559,
+      0.0574,
+      0.0589
+    ],
+    "sl": 0.0514,
+    "has_signal": true
+  },
+  {
+    "idx": 70,
+    "snippet": "Long #BABY 0.02707 |  | Tp 0.02763",
+    "reason": "no_entry",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      2763.0
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 71,
+    "snippet": "📊LONG #BABY 0.02707 |  | 📌 Leverage 50X |  | 1️⃣Tp 0.02763 |  | 2️⃣Tp 0.",
+    "reason": "no_entry",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      2949.0
+    ],
+    "sl": 0.02536,
+    "has_signal": false
+  },
+  {
+    "idx": 72,
+    "snippet": "Pair: BABY/USDT | Type: LONG (Leverage 20X) | Risk: ⚠️ Use max 1",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0274,
+      0.029
+    ],
+    "sl": 0.0254,
+    "has_signal": true
+  },
+  {
+    "idx": 73,
+    "snippet": "♻ #BABY/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.0267 - 0.025",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0275,
+      0.0283,
+      0.0291
+    ],
+    "sl": 0.0251,
+    "has_signal": true
+  },
+  {
+    "idx": 74,
+    "snippet": "📩 TIAUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "TIAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.3468,
+      0.3451,
+      0.3316
+    ],
+    "sl": 0.3514,
+    "has_signal": true
+  },
+  {
+    "idx": 75,
+    "snippet": "🐳 TAG/USDT #LONG 🐳 |  | ✳️ ENTRY :- 0.00118 - 0.00108 |  | 💢 LEVERAG",
+    "reason": "ok",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0013,
+      0.00146,
+      0.0017
+    ],
+    "sl": 0.00097,
+    "has_signal": true
+  },
+  {
+    "idx": 76,
+    "snippet": "Pair: BABY/USDT | Type: LONG (Leverage 20X) | Risk: ⚠️ Use max 1",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.027,
+      0.029
+    ],
+    "sl": 0.0249,
+    "has_signal": true
+  },
+  {
+    "idx": 77,
+    "snippet": "♻ #BSB/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.75 - 0.73 |  | ✅T",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.77,
+      0.79,
+      0.81
+    ],
+    "sl": 0.71,
+    "has_signal": true
+  },
+  {
+    "idx": 78,
+    "snippet": "📩 DOGSUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Acc",
+    "reason": "invalid",
+    "symbol": "DOGSUSDT",
+    "direction": "LONG",
+    "tps": [
+      3.24e-05,
+      3.25e-05,
+      3.36e-05
+    ],
+    "sl": 3.2e-05,
+    "has_signal": false
+  },
+  {
+    "idx": 79,
+    "snippet": "#MAGMA/USDT LONG   |  | 👉Leverage : Cross 20× To 50× |  | Entry :  0",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.263
+    ],
+    "sl": 0.245,
+    "has_signal": true
+  },
+  {
+    "idx": 80,
+    "snippet": "🔰 MAGMA/USDT 🔰 |  | 🟢 LONG-20X  |  | 🔳 ENTRY :- 0.26 - 0.24 |  | ☑️ TARG",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.27,
+      0.29,
+      0.32
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 81,
+    "snippet": "🪙 Coin: #MAGMA/USDT | 🧭 Type: #LONG  |  | 📈 Entry Zone: | 0.255 – 0.",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.263,
+      0.275,
+      0.299
+    ],
+    "sl": 0.245,
+    "has_signal": true
+  },
+  {
+    "idx": 82,
+    "snippet": "📩 BNBUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Accu",
+    "reason": "ok",
+    "symbol": "BNBUSDT",
+    "direction": "LONG",
+    "tps": [
+      618.95,
+      620.11,
+      629.62
+    ],
+    "sl": 615.7,
+    "has_signal": true
+  },
+  {
+    "idx": 83,
+    "snippet": "📈 LONG #TAG/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.00",
+    "reason": "no_tps",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": 0.00117,
+    "has_signal": false
+  },
+  {
+    "idx": 84,
+    "snippet": "Coin #BSB/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50×",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.75,
+      0.77,
+      0.79
+    ],
+    "sl": 0.69,
+    "has_signal": true
+  },
+  {
+    "idx": 85,
+    "snippet": "➡️ #FOGO    /USDT (SHORT) 🔽🔽 |  | ⌛LEVERAGE : 20X TO 75X |  | 📊 Shor",
+    "reason": "no_entry",
+    "symbol": "FOGOUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.0228,
+    "has_signal": false
+  },
+  {
+    "idx": 86,
+    "snippet": "🖼 🔰 PAIR: AVAX/ USDT 💹 |  | 🔴 Position: SHORT🚀 |  | ☑️ Entry Zone: | 💠",
+    "reason": "ok",
+    "symbol": "AVAXUSDT",
+    "direction": "SHORT",
+    "tps": [
+      9.0,
+      8.93,
+      8.72
+    ],
+    "sl": 9.18,
+    "has_signal": true
+  },
+  {
+    "idx": 87,
+    "snippet": "💵COIN #B🔥 |  |  : STRONG LONG🔖 |  Leverage : 20x100 |  | 🕯 Entry Zone:",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.393,
+      0.397,
+      0.405
+    ],
+    "sl": 0.32,
+    "has_signal": true
+  },
+  {
+    "idx": 88,
+    "snippet": "♻ #TAG/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.00120 - 0.001",
+    "reason": "ok",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.00123,
+      0.00126,
+      0.00129
+    ],
+    "sl": 0.00114,
+    "has_signal": true
+  },
+  {
+    "idx": 89,
+    "snippet": "📈 LONG #BABY/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.0",
+    "reason": "no_tps",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": 0.027,
+    "has_signal": false
+  },
+  {
+    "idx": 90,
+    "snippet": "🔘 Coin : #XPIN/USDT 🔘 |  | 🔴 SHORT |  | 🔺Entry🔻: 0.001389 |  | ⭐️ Target",
+    "reason": "no_entry",
+    "symbol": "XPINUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.001376,
+      0.001371,
+      0.001362,
+      0.001349,
+      0.001333,
+      0.001305
+    ],
+    "sl": 0.001431,
+    "has_signal": false
+  },
+  {
+    "idx": 91,
+    "snippet": "Coin #TAG/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50×",
+    "reason": "ok",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.00118,
+      0.00123,
+      0.00128
+    ],
+    "sl": 0.00103,
+    "has_signal": true
+  },
+  {
+    "idx": 92,
+    "snippet": "Coin #B/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50× |  | ",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.44,
+      0.455,
+      0.47
+    ],
+    "sl": 0.395,
+    "has_signal": true
+  },
+  {
+    "idx": 93,
+    "snippet": "💵COIN #SKYAI🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x100 |  | 🕯 Entry ",
+    "reason": "ok",
+    "symbol": "SKYAIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.353,
+      0.35,
+      0.347
+    ],
+    "sl": 0.395,
+    "has_signal": true
+  },
+  {
+    "idx": 94,
+    "snippet": "#CHILLGUY/USDT SHORT   |  | 👉Leverage : Cross 10× To 50× |  | Entry ",
+    "reason": "ok",
+    "symbol": "CHILLGUYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0144
+    ],
+    "sl": 0.0166,
+    "has_signal": true
+  },
+  {
+    "idx": 95,
+    "snippet": "🖼 🔔 Challenge Trade 💥 |  | 📈Trade No. 2 |  | ➡️Coin Name : BABY-USDT",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.035,
+      0.042
+    ],
+    "sl": 0.023,
+    "has_signal": true
+  },
+  {
+    "idx": 96,
+    "snippet": "⚡️⚡️$MAGMA/USDT⚡️⚡️ |  | LONG | Leverage: 20X  |  | Entry: 0.26 - 0.24",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.27,
+      0.29,
+      0.32
+    ],
+    "sl": 0.22,
+    "has_signal": true
+  },
+  {
+    "idx": 97,
+    "snippet": "🔴 Short |  | Pair: #THETA/USDT |  | 📊 Entry Price:  |  | 1) 0.2155 | 2) 0.",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.2142,
+      0.2096,
+      0.2051,
+      0.2005
+    ],
+    "sl": 0.229,
+    "has_signal": true
+  },
+  {
+    "idx": 98,
+    "snippet": "🔴SHORT  #BTCUSDT |  | 🔶 Entry : 109200 - 109150 |  | ➡️ Leverage : 1",
+    "reason": "ok",
+    "symbol": "BTCUSDT",
+    "direction": "SHORT",
+    "tps": [
+      108500.0
+    ],
+    "sl": 109800.0,
+    "has_signal": true
+  },
+  {
+    "idx": 99,
+    "snippet": "🖼 PAIR 🎉TST/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0.",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0149,
+      0.0145,
+      0.014
+    ],
+    "sl": 0.01888,
+    "has_signal": true
+  },
+  {
+    "idx": 100,
+    "snippet": "♻ #LAB/USDT SHORT |  | 🔵Leverage:  20X |  | 💥Entries: 1.43 - 1.48 |  | ✅",
+    "reason": "ok",
+    "symbol": "LABUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.38,
+      1.33,
+      1.28
+    ],
+    "sl": 1.53,
+    "has_signal": true
+  },
+  {
+    "idx": 101,
+    "snippet": "➡️ #TST     /USDT (SHORT) 🔽🔽 |  | ⌛LEVERAGE : 20X TO 75X |  | 📊 Shor",
+    "reason": "no_entry",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.01625,
+    "has_signal": false
+  },
+  {
+    "idx": 102,
+    "snippet": "🖼 PAIR 🎉BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 103,
+    "snippet": "✅ Long |  | #ONT/USDT |  | Entry zone : 0.0672 - 0.0693 |  | Take Profit",
+    "reason": "ok",
+    "symbol": "ONTUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0717,
+      0.0758
+    ],
+    "sl": 0.064449,
+    "has_signal": true
+  },
+  {
+    "idx": 104,
+    "snippet": "🖼 🟢 LONG  - $PARTI - RISK ORDER - SMALL VOL |  | - Entry market:",
+    "reason": "ok",
+    "symbol": "THISUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.05374,
+      0.06833,
+      0.09533
+    ],
+    "sl": 0.04204,
+    "has_signal": true
+  },
+  {
+    "idx": 105,
+    "snippet": "🖼 🔴 SHORT - $TST |  | - Entry: 0.01645 | - Entry limit: 0.01697 | - ",
+    "reason": "ok",
+    "symbol": "THISUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.01489,
+      0.01291,
+      0.01085
+    ],
+    "sl": 0.01771,
+    "has_signal": true
+  },
+  {
+    "idx": 106,
+    "snippet": "📩 1000PEPEUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy",
+    "reason": "ok",
+    "symbol": "1000PEPEUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0039614,
+      0.0039775,
+      0.0041091
+    ],
+    "sl": 0.0039165,
+    "has_signal": true
+  },
+  {
+    "idx": 107,
+    "snippet": "➡️ #TST     /USDT (SHORT) 🔽🔽 |  | ⌛LEVERAGE : 20X TO 75X |  | 📊 Shor",
+    "reason": "no_entry",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.01825,
+    "has_signal": false
+  },
+  {
+    "idx": 108,
+    "snippet": "💥 Futures (Free Signal) |  | 🔴 SHORT |  | #ALGO/USDT |  | Entry zone : 0",
+    "reason": "ok",
+    "symbol": "ALGOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.101,
+      0.1077
+    ],
+    "sl": 0.119519,
+    "has_signal": true
+  },
+  {
+    "idx": 109,
+    "snippet": "🔥 RFD Indicator 🔥 |  |  15 Minutes Timeframe |  | ✅ LONG |  | #UB/USDT |  | ",
+    "reason": "ok",
+    "symbol": "UBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1548578,
+      0.1637919
+    ],
+    "sl": 0.1391745,
+    "has_signal": true
+  },
+  {
+    "idx": 110,
+    "snippet": "💥 Futures (Free Signal) |  | ✅ Long |  | #ZEC/USDT |  | Entry zone : 361",
+    "reason": "ok",
+    "symbol": "ZECUSDT",
+    "direction": "LONG",
+    "tps": [
+      385.5,
+      407.74
+    ],
+    "sl": 346.4622,
+    "has_signal": true
+  },
+  {
+    "idx": 111,
+    "snippet": "💥 Futures (Free Signal) |  | 🔴 SHORT |  | #KNC/USDT |  | Entry zone : 0.",
+    "reason": "ok",
+    "symbol": "KNCUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.15575,
+      0.16613
+    ],
+    "sl": 0.184254,
+    "has_signal": true
+  },
+  {
+    "idx": 112,
+    "snippet": "📍Coin : #BABY/USDT |  | 🔴 SHORT  |  | 👉 Entry: 0.01982 - 0.02055 |  | 🌐 ",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.01963,
+      0.01944,
+      0.01925,
+      0.01906,
+      0.01888,
+      0.01869
+    ],
+    "sl": 0.021,
+    "has_signal": true
+  },
+  {
+    "idx": 113,
+    "snippet": "#BSBUSDT On Binance ( Futures ) ‼️ |  | 📈LONG: 0.529 |  | Leverage :",
+    "reason": "no_entry",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.545,
+      0.561,
+      0.577
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 114,
+    "snippet": "#BIOUSDT On Binance ( Futures ) ‼️ |  | 📈LONG: 0.0422 |  | Leverage ",
+    "reason": "no_entry",
+    "symbol": "BIOUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0435,
+      0.0448,
+      0.046
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 115,
+    "snippet": "#TAGUSDT On Binance ( Futures ) ‼️ |  | 📈LONG: 0.000820 |  | Leverag",
+    "reason": "no_entry",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.00084,
+      0.00087,
+      0.00089
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 116,
+    "snippet": "#PLAY / #SHORT / 10X |  | OPEN : 0.133 |  | PROFIT : 0.128 - 0.122 -",
+    "reason": "no_tps",
+    "symbol": "PLAYUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 117,
+    "snippet": "#LAB / #SHORT / 10X |  | OPEN : 3.99 |  | PROFIT : 3.83 - 3.67 - 3.3",
+    "reason": "no_tps",
+    "symbol": "LABUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 118,
+    "snippet": "🖼 🔔 Challenge Trade 💥 |  | 📈Trade No. 1 |  | ➡️Coin Name : ChillGuy_",
+    "reason": "ok",
+    "symbol": "TRADEUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.019,
+      0.025
+    ],
+    "sl": 0.0135,
+    "has_signal": true
+  },
+  {
+    "idx": 119,
+    "snippet": "💥 Futures (Free Signal) |  | 🔴 SHORT |  | #THETA/USDT |  | Entry zone : ",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.1867,
+      0.1992
+    ],
+    "sl": 0.220955,
+    "has_signal": true
+  },
+  {
+    "idx": 120,
+    "snippet": "🖼 🚀LONG : $B/USDT | LEVERAGE: 75x |  | ✔️ENTRY PRICE: 0.4280 | ✔️ 2n",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      4400.0
+    ],
+    "sl": 0.39,
+    "has_signal": true
+  },
+  {
+    "idx": 121,
+    "snippet": "GMT/USDT                                            | Signal T",
+    "reason": "ok",
+    "symbol": "GMTUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.01094,
+      0.01106,
+      0.01116
+    ],
+    "sl": 0.0107,
+    "has_signal": true
+  },
+  {
+    "idx": 122,
+    "snippet": "🔴 SHORT |  | #ALGO/USDT |  | Entry zone : 0.1150 - 0.1117 |  | Take Prof",
+    "reason": "ok",
+    "symbol": "ALGOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.101,
+      0.1077
+    ],
+    "sl": 0.119519,
+    "has_signal": true
+  },
+  {
+    "idx": 123,
+    "snippet": "📩 ETHUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Accu",
+    "reason": "ok",
+    "symbol": "ETHUSDT",
+    "direction": "LONG",
+    "tps": [
+      2312.93,
+      2314.55,
+      2327.79
+    ],
+    "sl": 2308.41,
+    "has_signal": true
+  },
+  {
+    "idx": 124,
+    "snippet": "📩 EIGENUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "EIGENUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1798,
+      0.1804,
+      0.1853
+    ],
+    "sl": 0.1781,
+    "has_signal": true
+  },
+  {
+    "idx": 125,
+    "snippet": "🔴 SHORT |  | #DOT/USDT |  | Entry :  |  | 1) 1.229 | 2) 1.265 |  | Targets :  | ",
+    "reason": "ok",
+    "symbol": "DOTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.221,
+      1.195,
+      1.169,
+      1.143
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 126,
+    "snippet": "📩 MASKUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "MASKUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.5161,
+      0.5183,
+      0.5363
+    ],
+    "sl": 0.5099,
+    "has_signal": true
+  },
+  {
+    "idx": 127,
+    "snippet": "💵COIN #BSB🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x50 |  | 🕯 Entry Zon",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.621,
+      0.605,
+      0.58
+    ],
+    "sl": 0.73,
+    "has_signal": true
+  },
+  {
+    "idx": 128,
+    "snippet": "💵COIN #LAB🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x75 |  | 🕯 Entry Zon",
+    "reason": "ok",
+    "symbol": "LABUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.94,
+      1.92,
+      1.9
+    ],
+    "sl": 2.4,
+    "has_signal": true
+  },
+  {
+    "idx": 129,
+    "snippet": "📩 MASKUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "MASKUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.5091,
+      0.5069,
+      0.4884
+    ],
+    "sl": 0.5154,
+    "has_signal": true
+  },
+  {
+    "idx": 130,
+    "snippet": "📩 EIGENUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy A",
+    "reason": "ok",
+    "symbol": "EIGENUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.177,
+      0.176,
+      0.165
+    ],
+    "sl": 0.18,
+    "has_signal": true
+  },
+  {
+    "idx": 131,
+    "snippet": "⚡️⚡️$UB/USDT⚡️⚡️ |  | LONG | Leverage: 25x – 50x |  | Entry: 0.1563 |  | T",
+    "reason": "ok",
+    "symbol": "UBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1598,
+      0.165,
+      0.175
+    ],
+    "sl": 0.1465,
+    "has_signal": true
+  },
+  {
+    "idx": 132,
+    "snippet": "🖼 🐳 TRIA/USDT #SHORT 🐳 |  | ✳️ ENTRY :- 0.04050 - 0.04150 |  | 💢 LEV",
+    "reason": "ok",
+    "symbol": "TRIAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.039,
+      0.037,
+      0.034
+    ],
+    "sl": 0.04265,
+    "has_signal": true
+  },
+  {
+    "idx": 133,
+    "snippet": "🔰 OPN/USDT 🔰   |  | 🟢 SHORT (10X - 20X)   |  | ♻ ENTRY  | 1️⃣ 0.174 | 2️",
+    "reason": "ok",
+    "symbol": "OPNUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.17
+    ],
+    "sl": 0.182,
+    "has_signal": true
+  },
+  {
+    "idx": 134,
+    "snippet": "📇 Setup: #BIO/USDT  |  | SHORT Trade 🛫 |  | ✔️ Leverage : 50x |  | 👉 Ent",
+    "reason": "ok",
+    "symbol": "BIOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.05439,
+      0.0533,
+      0.0523
+    ],
+    "sl": 0.058,
+    "has_signal": true
+  },
+  {
+    "idx": 135,
+    "snippet": "📹 ⌛#SPK/USDT  ( LONG ) |  | 🍁 Leverage 👉 20X to 25X  |  | ⛩️ Entry ➡",
+    "reason": "no_entry",
+    "symbol": "SPKUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0369,
+      0.03729,
+      0.03764,
+      0.03801,
+      0.03845,
+      0.03878
+    ],
+    "sl": 0.03528,
+    "has_signal": false
+  },
+  {
+    "idx": 136,
+    "snippet": "🔴 SHORT |  | #THETA/USDT |  | Entry zone : 0.2126 - 0.2065 |  | Take Pro",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.1867,
+      0.1992
+    ],
+    "sl": 0.220955,
+    "has_signal": true
+  },
+  {
+    "idx": 137,
+    "snippet": "#OPG/USDT LONG   |  | 👉Leverage : Cross 20× To 50× |  | Entry :  0.2",
+    "reason": "ok",
+    "symbol": "OPGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.275
+    ],
+    "sl": 0.24,
+    "has_signal": true
+  },
+  {
+    "idx": 138,
+    "snippet": "#UB/USDT LONG   |  | 👉Leverage : Cross 25× To 50× |  | Entry :  0.15",
+    "reason": "ok",
+    "symbol": "UBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.1598
+    ],
+    "sl": 0.1465,
+    "has_signal": true
+  },
+  {
+    "idx": 139,
+    "snippet": "⚡ #BIO/USDT |  | 📥 Short  |  | 💹 Buy: 0.05480 - 0.05615 |  | 🧿 Target: 0",
+    "reason": "ok",
+    "symbol": "BIOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.05426,
+      0.05372,
+      0.05329,
+      0.05275,
+      0.05223,
+      0.0517
+    ],
+    "sl": 0.0579,
+    "has_signal": true
+  },
+  {
+    "idx": 140,
+    "snippet": "Binance Futures  Call ‼️ |  | #UBUUSDT  PERP | ⬇️ Short  Call  |  | ❇️",
+    "reason": "ok",
+    "symbol": "UBUUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.14,
+      0.13,
+      0.12,
+      0.11,
+      0.1
+    ],
+    "sl": 0.18,
+    "has_signal": true
+  },
+  {
+    "idx": 141,
+    "snippet": "🚀Setup Active 🚀 | OPG/USDT | Direction: LONG |  | Buy Range: 0.2650–",
+    "reason": "ok",
+    "symbol": "OPGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.275,
+      0.29,
+      0.32
+    ],
+    "sl": 0.24,
+    "has_signal": true
+  },
+  {
+    "idx": 142,
+    "snippet": "♻ #LAB/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 1.89 - 1.84 |  | ✅T",
+    "reason": "ok",
+    "symbol": "LABUSDT",
+    "direction": "LONG",
+    "tps": [
+      1.94,
+      1.99,
+      2.04
+    ],
+    "sl": 1.8,
+    "has_signal": true
+  },
+  {
+    "idx": 143,
+    "snippet": "❖ GENIUS/USDT |  | ❖ LONG [ 20X ] |  | ➤ Entry Zone:- 0.6150 – 0.580",
+    "reason": "ok",
+    "symbol": "GENIUSUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.645,
+      0.7,
+      0.77
+    ],
+    "sl": 0.53,
+    "has_signal": true
+  },
+  {
+    "idx": 144,
+    "snippet": "Long #LAB 1.2914 |  | Tp 1.3225",
+    "reason": "no_entry",
+    "symbol": "LABUSDT",
+    "direction": "LONG",
+    "tps": [
+      3225.0
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 145,
+    "snippet": "#SHORT 🔴 🔤🔤🔤🔤🔤 |  | #XRP/USDT  |  | Margin Mode : Isolated💎 |  | Signal ",
+    "reason": "ok",
+    "symbol": "XRPUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.3731,
+      1.3593,
+      1.3454,
+      1.3248,
+      1.3027
+    ],
+    "sl": 1.409,
+    "has_signal": true
+  },
+  {
+    "idx": 146,
+    "snippet": "🖼 📍SIGNAL ID: #2120📍 | COIN: $TAO/USDT (2-5x) | Direction: LONG | ",
+    "reason": "no_entry",
+    "symbol": "TAOUSDT",
+    "direction": "LONG",
+    "tps": [
+      255.0,
+      265.0,
+      280.0
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 147,
+    "snippet": "📊#ALCH/USDT |  | ✅ LONG ( LEV-20X ) |  | ENTRY :- 0.0946 - 0.092 |  | Ta",
+    "reason": "ok",
+    "symbol": "ALCHUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.096,
+      0.099,
+      0.102
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 148,
+    "snippet": "🖼 🔔 Challenge Trade 💥 |  | 📈Trade No. 1 |  | ➡️Coin Name : ChillGuy_",
+    "reason": "ok",
+    "symbol": "TRADEUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.019,
+      0.025
+    ],
+    "sl": 0.0135,
+    "has_signal": true
+  },
+  {
+    "idx": 149,
+    "snippet": "🌹 #BABY/USDT |  | 🟢 LONG |  | ✅ Entry: 0.02174- 0.02129 |  | ❌ Stoploss:",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.02213,
+      0.02254,
+      0.024,
+      0.0256
+    ],
+    "sl": 0.02064,
+    "has_signal": true
+  },
+  {
+    "idx": 150,
+    "snippet": "#IN | LONG SETUP |  | 💰 Entry: $0.06939 |  | 🎯 Target1: $0.06988 | 🎯 T",
+    "reason": "ok",
+    "symbol": "INUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.06988,
+      0.07043,
+      0.07112,
+      0.07203,
+      0.073
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 151,
+    "snippet": "🔴 SHORT |  | #TRX/USDT |  | Entry :  |  | 1) 0.34109 | 2) 0.35132 |  | Targets",
+    "reason": "ok",
+    "symbol": "TRXUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.33909,
+      0.33189,
+      0.32469,
+      0.31749
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 152,
+    "snippet": "#BABY/USDT LONG   |  | 👉Leverage : Cross 25× To 50× |  | Entry :  0.",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0238
+    ],
+    "sl": 0.0182,
+    "has_signal": true
+  },
+  {
+    "idx": 153,
+    "snippet": "📩 NEARUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "NEARUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.272,
+      1.267,
+      1.226
+    ],
+    "sl": 1.286,
+    "has_signal": true
+  },
+  {
+    "idx": 154,
+    "snippet": "📩 SEIUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "SEIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0577,
+      0.0575,
+      0.0561
+    ],
+    "sl": 0.0581,
+    "has_signal": true
+  },
+  {
+    "idx": 155,
+    "snippet": "📩 LINKUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Ac",
+    "reason": "ok",
+    "symbol": "LINKUSDT",
+    "direction": "SHORT",
+    "tps": [
+      9.06,
+      9.045,
+      8.922
+    ],
+    "sl": 9.102,
+    "has_signal": true
+  },
+  {
+    "idx": 156,
+    "snippet": "Binance Futures  Call ‼️ |  | #LABUUSDT  PERP | ⬇️  Short  |  | ❇️ Ent",
+    "reason": "ok",
+    "symbol": "LABUUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.2,
+      1.1,
+      1.0,
+      0.9,
+      0.8
+    ],
+    "sl": 1.7,
+    "has_signal": true
+  },
+  {
+    "idx": 157,
+    "snippet": "🖼 📊 #BABY/USDT – LONG 💰 |  | 🔥 Entry Zone: | ➡️ 0.0227  – 0.0220 |  | ",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0238,
+      0.026,
+      0.032
+    ],
+    "sl": 0.0182,
+    "has_signal": true
+  },
+  {
+    "idx": 158,
+    "snippet": "Coin #BABY/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0248,
+      0.0255,
+      0.0262
+    ],
+    "sl": 0.0227,
+    "has_signal": true
+  },
+  {
+    "idx": 159,
+    "snippet": "📩 BNBUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "BNBUSDT",
+    "direction": "SHORT",
+    "tps": [
+      615.26,
+      614.7,
+      610.11
+    ],
+    "sl": 616.83,
+    "has_signal": true
+  },
+  {
+    "idx": 160,
+    "snippet": "🐳 BSB/USDT #LONG 🐳 |  | ✳️ ENTRY :- 0.73 - 0.70 |  | 💢 LEVERAGE :- 2",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.76,
+      0.82,
+      0.9
+    ],
+    "sl": 0.64,
+    "has_signal": true
+  },
+  {
+    "idx": 161,
+    "snippet": "Coin #CHILLGUY/USDT |  | Position: LONG |  | Leverage:  Cross 25×  T",
+    "reason": "ok",
+    "symbol": "CHILLGUYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0162,
+      0.0167,
+      0.0172
+    ],
+    "sl": 0.0147,
+    "has_signal": true
+  },
+  {
+    "idx": 162,
+    "snippet": "$FOGO/USDT #LONG📩 |  | ✅ENTRY :-0.02030- 0.01970 |  | Target 1: 0.02",
+    "reason": "ok",
+    "symbol": "FOGOUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0208,
+      0.022,
+      0.024
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 163,
+    "snippet": "♻ #BIO/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.0544 - 0.0529",
+    "reason": "ok",
+    "symbol": "BIOUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0559,
+      0.0574,
+      0.0589
+    ],
+    "sl": 0.0514,
+    "has_signal": true
+  },
+  {
+    "idx": 164,
+    "snippet": "Long #BABY 0.02707 |  | Tp 0.02763",
+    "reason": "no_entry",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      2763.0
+    ],
+    "sl": null,
+    "has_signal": false
+  },
+  {
+    "idx": 165,
+    "snippet": "📊LONG #BABY 0.02707 |  | 📌 Leverage 50X |  | 1️⃣Tp 0.02763 |  | 2️⃣Tp 0.",
+    "reason": "no_entry",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      2949.0
+    ],
+    "sl": 0.02536,
+    "has_signal": false
+  },
+  {
+    "idx": 166,
+    "snippet": "Pair: BABY/USDT | Type: LONG (Leverage 20X) | Risk: ⚠️ Use max 1",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0274,
+      0.029
+    ],
+    "sl": 0.0254,
+    "has_signal": true
+  },
+  {
+    "idx": 167,
+    "snippet": "♻ #BABY/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.0267 - 0.025",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0275,
+      0.0283,
+      0.0291
+    ],
+    "sl": 0.0251,
+    "has_signal": true
+  },
+  {
+    "idx": 168,
+    "snippet": "📩 TIAUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "TIAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.3468,
+      0.3451,
+      0.3316
+    ],
+    "sl": 0.3514,
+    "has_signal": true
+  },
+  {
+    "idx": 169,
+    "snippet": "🐳 TAG/USDT #LONG 🐳 |  | ✳️ ENTRY :- 0.00118 - 0.00108 |  | 💢 LEVERAG",
+    "reason": "ok",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0013,
+      0.00146,
+      0.0017
+    ],
+    "sl": 0.00097,
+    "has_signal": true
+  },
+  {
+    "idx": 170,
+    "snippet": "Pair: BABY/USDT | Type: LONG (Leverage 20X) | Risk: ⚠️ Use max 1",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.027,
+      0.029
+    ],
+    "sl": 0.0249,
+    "has_signal": true
+  },
+  {
+    "idx": 171,
+    "snippet": "♻ #BSB/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.75 - 0.73 |  | ✅T",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.77,
+      0.79,
+      0.81
+    ],
+    "sl": 0.71,
+    "has_signal": true
+  },
+  {
+    "idx": 172,
+    "snippet": "📩 DOGSUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Acc",
+    "reason": "invalid",
+    "symbol": "DOGSUSDT",
+    "direction": "LONG",
+    "tps": [
+      3.24e-05,
+      3.25e-05,
+      3.36e-05
+    ],
+    "sl": 3.2e-05,
+    "has_signal": false
+  },
+  {
+    "idx": 173,
+    "snippet": "#MAGMA/USDT LONG   |  | 👉Leverage : Cross 20× To 50× |  | Entry :  0",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.263
+    ],
+    "sl": 0.245,
+    "has_signal": true
+  },
+  {
+    "idx": 174,
+    "snippet": "🔰 MAGMA/USDT 🔰 |  | 🟢 LONG-20X  |  | 🔳 ENTRY :- 0.26 - 0.24 |  | ☑️ TARG",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.27,
+      0.29,
+      0.32
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 175,
+    "snippet": "🪙 Coin: #MAGMA/USDT | 🧭 Type: #LONG  |  | 📈 Entry Zone: | 0.255 – 0.",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.263,
+      0.275,
+      0.299
+    ],
+    "sl": 0.245,
+    "has_signal": true
+  },
+  {
+    "idx": 176,
+    "snippet": "📈 LONG #TAG/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.00",
+    "reason": "no_tps",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": 0.00117,
+    "has_signal": false
+  },
+  {
+    "idx": 177,
+    "snippet": "📩 BNBUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy Accu",
+    "reason": "ok",
+    "symbol": "BNBUSDT",
+    "direction": "LONG",
+    "tps": [
+      618.95,
+      620.11,
+      629.62
+    ],
+    "sl": 615.7,
+    "has_signal": true
+  },
+  {
+    "idx": 178,
+    "snippet": "Coin #BSB/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50×",
+    "reason": "ok",
+    "symbol": "BSBUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.75,
+      0.77,
+      0.79
+    ],
+    "sl": 0.69,
+    "has_signal": true
+  },
+  {
+    "idx": 179,
+    "snippet": "➡️ #FOGO    /USDT (SHORT) 🔽🔽 |  | ⌛LEVERAGE : 20X TO 75X |  | 📊 Shor",
+    "reason": "no_entry",
+    "symbol": "FOGOUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.0228,
+    "has_signal": false
+  },
+  {
+    "idx": 180,
+    "snippet": "🖼 🔰 PAIR: AVAX/ USDT 💹 |  | 🔴 Position: SHORT🚀 |  | ☑️ Entry Zone: | 💠",
+    "reason": "ok",
+    "symbol": "AVAXUSDT",
+    "direction": "SHORT",
+    "tps": [
+      9.0,
+      8.93,
+      8.72
+    ],
+    "sl": 9.18,
+    "has_signal": true
+  },
+  {
+    "idx": 181,
+    "snippet": "💵COIN #B🔥 |  |  : STRONG LONG🔖 |  Leverage : 20x100 |  | 🕯 Entry Zone:",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.393,
+      0.397,
+      0.405
+    ],
+    "sl": 0.32,
+    "has_signal": true
+  },
+  {
+    "idx": 182,
+    "snippet": "♻ #TAG/USDT LONG |  | 🔵Leverage:  20X |  | 💥Entries: 0.00120 - 0.001",
+    "reason": "ok",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.00123,
+      0.00126,
+      0.00129
+    ],
+    "sl": 0.00114,
+    "has_signal": true
+  },
+  {
+    "idx": 183,
+    "snippet": "Coin #B/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50× |  | ",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.44,
+      0.455,
+      0.47
+    ],
+    "sl": 0.395,
+    "has_signal": true
+  },
+  {
+    "idx": 184,
+    "snippet": "📈 LONG #BABY/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.0",
+    "reason": "no_tps",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [],
+    "sl": 0.027,
+    "has_signal": false
+  },
+  {
+    "idx": 185,
+    "snippet": "Coin #TAG/USDT |  | Position: LONG |  | Leverage:  Cross 25×  To 50×",
+    "reason": "ok",
+    "symbol": "TAGUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.00118,
+      0.00123,
+      0.00128
+    ],
+    "sl": 0.00103,
+    "has_signal": true
+  },
+  {
+    "idx": 186,
+    "snippet": "💵COIN #SKYAI🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x100 |  | 🕯 Entry ",
+    "reason": "ok",
+    "symbol": "SKYAIUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.353,
+      0.35,
+      0.347
+    ],
+    "sl": 0.395,
+    "has_signal": true
+  },
+  {
+    "idx": 187,
+    "snippet": "🔘 Coin : #XPIN/USDT 🔘 |  | 🔴 SHORT |  | 🔺Entry🔻: 0.001389 |  | ⭐️ Target",
+    "reason": "no_entry",
+    "symbol": "XPINUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.001376,
+      0.001371,
+      0.001362,
+      0.001349,
+      0.001333,
+      0.001305
+    ],
+    "sl": 0.001431,
+    "has_signal": false
+  },
+  {
+    "idx": 188,
+    "snippet": "#CHILLGUY/USDT SHORT   |  | 👉Leverage : Cross 10× To 50× |  | Entry ",
+    "reason": "ok",
+    "symbol": "CHILLGUYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0144
+    ],
+    "sl": 0.0166,
+    "has_signal": true
+  },
+  {
+    "idx": 189,
+    "snippet": "🖼 🔔 Challenge Trade 💥 |  | 📈Trade No. 2 |  | ➡️Coin Name : BABY-USDT",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.035,
+      0.042
+    ],
+    "sl": 0.023,
+    "has_signal": true
+  },
+  {
+    "idx": 190,
+    "snippet": "⚡️⚡️$MAGMA/USDT⚡️⚡️ |  | LONG | Leverage: 20X  |  | Entry: 0.26 - 0.24",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.27,
+      0.29,
+      0.32
+    ],
+    "sl": 0.22,
+    "has_signal": true
+  },
+  {
+    "idx": 191,
+    "snippet": "🔴 Short |  | Pair: #THETA/USDT |  | 📊 Entry Price:  |  | 1) 0.2155 | 2) 0.",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.2142,
+      0.2096,
+      0.2051,
+      0.2005
+    ],
+    "sl": 0.229,
+    "has_signal": true
+  },
+  {
+    "idx": 192,
+    "snippet": "🔴SHORT  #BTCUSDT |  | 🔶 Entry : 109200 - 109150 |  | ➡️ Leverage : 1",
+    "reason": "ok",
+    "symbol": "BTCUSDT",
+    "direction": "SHORT",
+    "tps": [
+      108500.0
+    ],
+    "sl": 109800.0,
+    "has_signal": true
+  },
+  {
+    "idx": 193,
+    "snippet": "🖼 PAIR 🎉TST/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0.",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0149,
+      0.0145,
+      0.014
+    ],
+    "sl": 0.01888,
+    "has_signal": true
+  },
+  {
+    "idx": 194,
+    "snippet": "♻ #LAB/USDT SHORT |  | 🔵Leverage:  20X |  | 💥Entries: 1.43 - 1.48 |  | ✅",
+    "reason": "ok",
+    "symbol": "LABUSDT",
+    "direction": "SHORT",
+    "tps": [
+      1.38,
+      1.33,
+      1.28
+    ],
+    "sl": 1.53,
+    "has_signal": true
+  },
+  {
+    "idx": 195,
+    "snippet": "➡️ #TST     /USDT (SHORT) 🔽🔽 |  | ⌛LEVERAGE : 20X TO 75X |  | 📊 Shor",
+    "reason": "no_entry",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.01625,
+    "has_signal": false
+  },
+  {
+    "idx": 196,
+    "snippet": "🖼 PAIR 🎉BABY/USDT |  | 📊SHORT | Cross (50-x) |  | ✔️ Entry Target: | 💡 0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0267,
+      0.02555,
+      0.023
+    ],
+    "sl": 0.032,
+    "has_signal": true
+  },
+  {
+    "idx": 197,
+    "snippet": "✅ Long |  | #ONT/USDT |  | Entry zone : 0.0672 - 0.0693 |  | Take Profit",
+    "reason": "ok",
+    "symbol": "ONTUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0717,
+      0.0758
+    ],
+    "sl": 0.064449,
+    "has_signal": true
+  },
+  {
+    "idx": 198,
+    "snippet": "🖼 🟢 LONG  - $PARTI - RISK ORDER - SMALL VOL |  | - Entry market:",
+    "reason": "ok",
+    "symbol": "THISUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.05374,
+      0.06833,
+      0.09533
+    ],
+    "sl": 0.04204,
+    "has_signal": true
+  },
+  {
+    "idx": 199,
+    "snippet": "🖼 🔴 SHORT - $TST |  | - Entry: 0.01645 | - Entry limit: 0.01697 | - ",
+    "reason": "ok",
+    "symbol": "THISUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.01489,
+      0.01291,
+      0.01085
+    ],
+    "sl": 0.01771,
+    "has_signal": true
+  },
+  {
+    "idx": 200,
+    "snippet": "📩 1000PEPEUSDT 30M | Mid-Term | 📉 Trade Type: Long |  - Strategy",
+    "reason": "ok",
+    "symbol": "1000PEPEUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.0039614,
+      0.0039775,
+      0.0041091
+    ],
+    "sl": 0.0039165,
+    "has_signal": true
+  },
+  {
+    "idx": 201,
+    "snippet": "➡️ #TST     /USDT (SHORT) 🔽🔽 |  | ⌛LEVERAGE : 20X TO 75X |  | 📊 Shor",
+    "reason": "no_entry",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.01825,
+    "has_signal": false
+  },
+  {
+    "idx": 202,
+    "snippet": "⚡️⚡️$MAGMA/USDT⚡️⚡️ |  | LONG | Leverage: 20X  |  | Entry: 0.26 - 0.24",
+    "reason": "ok",
+    "symbol": "MAGMAUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.27,
+      0.29,
+      0.32
+    ],
+    "sl": 0.22,
+    "has_signal": true
+  },
+  {
+    "idx": 203,
+    "snippet": "New signal 📈 |  | Coin:$BABY |  | Signal type:Long |   |  Entry 0.01777 | ",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.019,
+      0.02,
+      0.021,
+      0.023,
+      0.02473
+    ],
+    "sl": 0.016,
+    "has_signal": true
+  },
+  {
+    "idx": 204,
+    "snippet": "💎 #Free Signal |  | 🔴 Short |  | Pair: #THETA/USDT |  | 📊 Entry Price:  | ",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.2142,
+      0.2096,
+      0.2051,
+      0.2005
+    ],
+    "sl": 0.229,
+    "has_signal": true
+  },
+  {
+    "idx": 205,
+    "snippet": "⚡#B/USDT |  | 📥LONG |  | 💹 Buy: 0.4250 - 0.4100 |  | 🧿 Target: 0.4400 - ",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.44,
+      0.455,
+      0.47
+    ],
+    "sl": 0.395,
+    "has_signal": true
+  },
+  {
+    "idx": 206,
+    "snippet": "🟢 Opening LONG 📈 |  | 🟢 Symbol: BTCUSDT | 💰 Price: 79087.7000 |  | ⚡ O",
+    "reason": "ok",
+    "symbol": "BTCUSDT",
+    "direction": "LONG",
+    "tps": [
+      82488.4711,
+      82567.5588,
+      81381.2433
+    ],
+    "sl": 77031.4198,
+    "has_signal": true
+  },
+  {
+    "idx": 207,
+    "snippet": "🔵 Opening SHORT 📉 |  | 🔵 Symbol: BANKUSDT | 💰 Price: 0.0332 |  | ⚡ OPP",
+    "reason": "ok",
+    "symbol": "BANKUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.031872,
+      0.030278,
+      0.030179
+    ],
+    "sl": 0.036553,
+    "has_signal": true
+  },
+  {
+    "idx": 208,
+    "snippet": "💎 #Free Signal |  | 🔴 Short |  | Pair: #THETA/USDT |  | 📊 Entry Price:  | ",
+    "reason": "ok",
+    "symbol": "THETAUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.2142,
+      0.2096,
+      0.2051,
+      0.2005
+    ],
+    "sl": 0.229,
+    "has_signal": true
+  },
+  {
+    "idx": 209,
+    "snippet": "📊#ALCH/USDT |  | ✅ LONG ( LEV-20X ) |  | ENTRY :- 0.0946 - 0.092 |  | Ta",
+    "reason": "ok",
+    "symbol": "ALCHUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.096,
+      0.099,
+      0.102
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 210,
+    "snippet": "⚡#B/USDT |  | 📥LONG |  | 💹 Buy: 0.4250 - 0.4100 |  | 🧿 Target: 0.4400 - ",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.44,
+      0.455,
+      0.47
+    ],
+    "sl": 0.395,
+    "has_signal": true
+  },
+  {
+    "idx": 211,
+    "snippet": "🟢 Opening LONG 📈 |  | 🟢 Symbol: BTCUSDT | 💰 Price: 79087.7000 |  | ⚡ O",
+    "reason": "ok",
+    "symbol": "BTCUSDT",
+    "direction": "LONG",
+    "tps": [
+      82488.4711,
+      82567.5588,
+      81381.2433
+    ],
+    "sl": 77031.4198,
+    "has_signal": true
+  },
+  {
+    "idx": 212,
+    "snippet": "🔵 Opening SHORT 📉 |  | 🔵 Symbol: BANKUSDT | 💰 Price: 0.0332 |  | ⚡ OPP",
+    "reason": "ok",
+    "symbol": "BANKUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.031872,
+      0.030278,
+      0.030179
+    ],
+    "sl": 0.036553,
+    "has_signal": true
+  },
+  {
+    "idx": 213,
+    "snippet": "🖼 #MERL/USDT |  | Signal type: LONG🟢 |  | Leverage: 25x |  | Entry : 0.0",
+    "reason": "ok",
+    "symbol": "MERLUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.032,
+      0.0335,
+      0.035,
+      0.036,
+      0.03655
+    ],
+    "sl": 0.02966,
+    "has_signal": true
+  },
+  {
+    "idx": 214,
+    "snippet": "🖼 #BABY/USDT |  | Signal type: LONG🟢 |  | Leverage: 50x |  | Entry : 0.0",
+    "reason": "ok",
+    "symbol": "BABYUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.019,
+      0.021,
+      0.023,
+      0.0245,
+      0.02638
+    ],
+    "sl": 0.01568,
+    "has_signal": true
+  },
+  {
+    "idx": 215,
+    "snippet": "📊SHORT #BABY 0.02404 |  | 📌 Leverage 50X |  | 1️⃣Tp 0.02326 |  | 2️⃣Tp 0",
+    "reason": "no_entry",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2135.0
+    ],
+    "sl": 0.02581,
+    "has_signal": false
+  },
+  {
+    "idx": 216,
+    "snippet": "💵COIN #B🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x100 |  | 🕯 Entry Zone",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.455,
+      0.45,
+      0.44
+    ],
+    "sl": 0.52,
+    "has_signal": true
+  },
+  {
+    "idx": 217,
+    "snippet": "💥 #AKT LONG ALERT 💥 | © Entry: 0.6293 | 💬 Leverage 50X | 🎯 Targets",
+    "reason": "ok",
+    "symbol": "AKTUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.642,
+      0.659,
+      0.69453
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 218,
+    "snippet": "#TST/USDT | #SHORT | Leverage cross 20X  |  | Entry: 0.01560 – 0.016",
+    "reason": "invalid",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      152.0
+    ],
+    "sl": 0.0177,
+    "has_signal": false
+  },
+  {
+    "idx": 219,
+    "snippet": "📍Coin : #TST/USDT |  | 🔴 SHORT  |  | 👉 Entry: 0.01535 - 0.01560 |  | 🌐 L",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0152,
+      0.01505,
+      0.0149,
+      0.01474,
+      0.0145,
+      0.01407
+    ],
+    "sl": 0.01599,
+    "has_signal": true
+  },
+  {
+    "idx": 220,
+    "snippet": "$NEOUSDT |  | SHORT |  | RR : 2 |  | LEVERAGE : 25x |  | ENTRY : 2.769 |  | TAKE",
+    "reason": "ok",
+    "symbol": "NEOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2.712,
+      2.657
+    ],
+    "sl": 2.825,
+    "has_signal": true
+  },
+  {
+    "idx": 221,
+    "snippet": "SHORT: $BABY/USDT🚀 | LEVERAGE: 20x - 50x |  | 🤍 ENTRY PRICE: 0.024",
+    "reason": "no_tps",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.0276,
+    "has_signal": false
+  },
+  {
+    "idx": 222,
+    "snippet": "📩 SOLUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "SOLUSDT",
+    "direction": "SHORT",
+    "tps": [
+      83.63,
+      83.47,
+      82.16
+    ],
+    "sl": 84.08,
+    "has_signal": true
+  },
+  {
+    "idx": 223,
+    "snippet": "📩 1000PEPEUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strateg",
+    "reason": "ok",
+    "symbol": "1000PEPEUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0039197,
+      0.0039061,
+      0.003795
+    ],
+    "sl": 0.0039576,
+    "has_signal": true
+  },
+  {
+    "idx": 224,
+    "snippet": "📊SHORT #BABY 0.02404 |  | 📌 Leverage 50X |  | 1️⃣Tp 0.02326 |  | 2️⃣Tp 0",
+    "reason": "no_entry",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2135.0
+    ],
+    "sl": 0.02581,
+    "has_signal": false
+  },
+  {
+    "idx": 225,
+    "snippet": "💵COIN #B🔥 |  |  : STRONG SHORT🔖 |  Leverage : 20x100 |  | 🕯 Entry Zone",
+    "reason": "ok",
+    "symbol": "BUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.455,
+      0.45,
+      0.44
+    ],
+    "sl": 0.52,
+    "has_signal": true
+  },
+  {
+    "idx": 226,
+    "snippet": "💥 #AKT LONG ALERT 💥 | © Entry: 0.6293 | 💬 Leverage 50X | 🎯 Targets",
+    "reason": "ok",
+    "symbol": "AKTUSDT",
+    "direction": "LONG",
+    "tps": [
+      0.642,
+      0.659,
+      0.69453
+    ],
+    "sl": null,
+    "has_signal": true
+  },
+  {
+    "idx": 227,
+    "snippet": "#TST/USDT | #SHORT | Leverage cross 20X  |  | Entry: 0.01560 – 0.016",
+    "reason": "invalid",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      152.0
+    ],
+    "sl": 0.0177,
+    "has_signal": false
+  },
+  {
+    "idx": 228,
+    "snippet": "📍Coin : #TST/USDT |  | 🔴 SHORT  |  | 👉 Entry: 0.01535 - 0.01560 |  | 🌐 L",
+    "reason": "ok",
+    "symbol": "TSTUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0152,
+      0.01505,
+      0.0149,
+      0.01474,
+      0.0145,
+      0.01407
+    ],
+    "sl": 0.01599,
+    "has_signal": true
+  },
+  {
+    "idx": 229,
+    "snippet": "$NEOUSDT |  | SHORT |  | RR : 2 |  | LEVERAGE : 25x |  | ENTRY : 2.769 |  | TAKE",
+    "reason": "ok",
+    "symbol": "NEOUSDT",
+    "direction": "SHORT",
+    "tps": [
+      2.712,
+      2.657
+    ],
+    "sl": 2.825,
+    "has_signal": true
+  },
+  {
+    "idx": 230,
+    "snippet": "SHORT: $BABY/USDT🚀 | LEVERAGE: 20x - 50x |  | 🤍 ENTRY PRICE: 0.024",
+    "reason": "no_tps",
+    "symbol": "BABYUSDT",
+    "direction": "SHORT",
+    "tps": [],
+    "sl": 0.0276,
+    "has_signal": false
+  },
+  {
+    "idx": 231,
+    "snippet": "📩 SOLUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strategy Acc",
+    "reason": "ok",
+    "symbol": "SOLUSDT",
+    "direction": "SHORT",
+    "tps": [
+      83.63,
+      83.47,
+      82.16
+    ],
+    "sl": 84.08,
+    "has_signal": true
+  },
+  {
+    "idx": 232,
+    "snippet": "📩 1000PEPEUSDT 30M | Mid-Term | 📉 Trade Type: Short |  - Strateg",
+    "reason": "ok",
+    "symbol": "1000PEPEUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.0039197,
+      0.0039061,
+      0.003795
+    ],
+    "sl": 0.0039576,
+    "has_signal": true
+  },
+  {
+    "idx": 233,
+    "snippet": "🔵 Opening SHORT 📉 |  | 🔵 Symbol: GRIFFAINUSDT | 💰 Price: 0.016768 | ",
+    "reason": "ok",
+    "symbol": "GRIFFAINUSDT",
+    "direction": "SHORT",
+    "tps": [
+      0.015359,
+      0.015343,
+      0.015326
+    ],
+    "sl": 0.018478,
+    "has_signal": true
+  },
+  {
+    "idx": 234,
+    "snippet": "🖼 this signal have stop loss",
+    "reason": "no_symbol",
+    "symbol": null,
+    "direction": null,
+    "tps": [],
+    "sl": null,
+    "has_signal": false
+  }
+]

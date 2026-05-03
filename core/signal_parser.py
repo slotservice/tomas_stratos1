@@ -289,7 +289,6 @@ _SYMBOL_PATTERNS = [
     # "PAIR ✈️MOVR/USDT" — "PAIR" / "pair" label followed by an emoji
     # or whitespace then the ticker (CoinAura header format).
     re.compile(r"\bpair\b[^A-Za-z0-9\n]*([A-Z0-9]{1,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
-    re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰💵💴💶💷💹💲✅❌]*\s*([A-Z0-9]{2,10})\b", re.IGNORECASE),
     # FALLBACK: "#MIVR" / "#DAM" / "#Q" — hash-prefixed ticker with no
     # USDT suffix. We append USDT via normalize_symbol. Must start with
     # a LETTER (so "#123" hashtags / arbitrary numeric tags don't match)
@@ -297,7 +296,21 @@ _SYMBOL_PATTERNS = [
     # so we don't capture half of a longer word. Letter-then-0-to-9
     # chars allows 1-char tickers like Q on CoinAura's STRONG SHORT
     # format ("💵#Q🔥").
+    #
+    # 2026-05-03: this hashtag pattern moved BEFORE the line-start bare
+    # fallback below. The `#`-prefix anchors the token to a deliberate
+    # ticker tag from the operator, while the line-start pattern
+    # incorrectly fired on lines like "TP1: 0.026" and produced the
+    # TP1USDT ghost-symbol class (130+ events/day in production).
+    # Hashtag is HIGHER confidence than bare-line-start, so it must win
+    # the first-match-wins race.
     re.compile(r"#([A-Z][A-Z0-9]{0,9})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
+    # LAST-RESORT FALLBACK: bare ticker at line start, after optional
+    # emojis. Subject to the short-name + blocklist filters at
+    # _extract_symbol so "TP", "SL", "ENTRY", "LEVERAGE", etc. are
+    # rejected. Still the source of edge-case false positives — only
+    # fires when every more-specific pattern above failed.
+    re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰💵💴💶💷💹💲✅❌]*\s*([A-Z0-9]{2,10})\b", re.IGNORECASE),
 ]
 
 
@@ -696,10 +709,11 @@ def _extract_symbol(text: str) -> Optional[str]:
             raw = m.group(1)
             upper = raw.upper()
             # High-confidence patterns — the "USDT" suffix (0,1,2,4,5)
-            # or explicit "#"-prefix hash-ticker fallback (7) makes
+            # or explicit "#"-prefix hash-ticker fallback (6) makes
             # even 1-char tickers like "Q/USDT" or "#Q" unambiguous.
-            # Skip the short-name filter for those.
-            high_confidence_indices = {0, 1, 2, 4, 5, 7}
+            # Skip the short-name filter for those. Index 7 (bare
+            # line-start) is the low-confidence last-resort.
+            high_confidence_indices = {0, 1, 2, 4, 5, 6}
             if pat_idx not in high_confidence_indices:
                 # Skip very short matches that are likely false positives
                 # (e.g. "TP", "SL", "T1") unless they are known bases.
