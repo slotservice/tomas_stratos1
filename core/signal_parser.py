@@ -264,8 +264,15 @@ _ENTRY_PATTERNS = [
     # a SINGLE LINE. Without that, the leading \s* would bleed past
     # the colon/blank line and capture the "1" of a following
     # numbered-list ordinal (Pair: #QTUM regression 2026-04-24).
+    # 2026-05-04: added "between" to the entry-prefix alternates so
+    # CryptoPasta-style "ENTRY BETWEEN: 78269 - 78820" matches. Pure
+    # additive change — the inner group was already optional (`?`),
+    # so signals without "between" still resolve through the same
+    # pattern. Live BTC incident from #CryptoPasta where the bot
+    # blocked "Entre saknas" while the source signal had a valid
+    # entry range.
     re.compile(
-        r"(?:(?:entry|entries)\s*(?:zone|price|area|orders?|targets?)?|"
+        r"(?:(?:entry|entries)\s*(?:zone|price|area|orders?|targets?|between)?|"
         r"buy(?:\s*(?:zone|price|area|range|at|around|@))?|"
         r"open|limit|market\s*(?:buy|entry))"
         r"[^\S\n]*[:=@]?[^\S\n]*-?[^\S\n]*\(?[^\S\n]*"
@@ -347,14 +354,14 @@ _TP_PATTERNS = [
 _SL_PATTERNS = [
     # Accepts "SL", "Stop Loss" (any hyphen/space/none between the
     # words), "Stoploss", "Invalidation". Bare "stop" is intentionally
-    # NOT accepted — it appears in commentary text ("don't stop", "1H
-    # stop", "stop trailing 1%") and the bounded gap below was grabbing
-    # whatever digit followed (Benjamin Cowen WET regression
-    # 2026-04-28: SL captured as 1.0 from a "1H Timeframe" line).
-    # ``[^\d\n]{0,10}`` between the colon and the price absorbs an arrow
-    # / bullet / emoji prefix on the next line ("STOP LOSS:\n→ 0.027",
-    # CRYPTO WORLD UPTADES format) without crossing into a different
-    # line of the message.
+    # NOT accepted in this pattern — it appears in commentary text
+    # ("don't stop", "1H stop", "stop trailing 1%") and the bounded
+    # gap below was grabbing whatever digit followed (Benjamin Cowen
+    # WET regression 2026-04-28: SL captured as 1.0 from a "1H
+    # Timeframe" line). ``[^\d\n]{0,10}`` between the colon and the
+    # price absorbs an arrow / bullet / emoji prefix on the next line
+    # ("STOP LOSS:\n→ 0.027", CRYPTO WORLD UPTADES format) without
+    # crossing into a different line of the message.
     #
     # The trailing ``(?!\s*[-\d]*\s*%)`` negative lookahead rejects
     # percentage-based SL specs such as "Stop Loss: 5-10%" or "SL: 5%"
@@ -366,6 +373,18 @@ _SL_PATTERNS = [
     re.compile(
         r"(?:sl|stop[-\s]*loss|stoploss|invalidation)\s*[:=]?\s*"
         r"[^\d\n]{0,10}" + _PRICE_RE
+        + r"(?!\s*[-\d]*\s*%)",
+        re.IGNORECASE,
+    ),
+    # 2026-05-04: bare "STOP:" / "STOP =" with explicit punctuation
+    # only. The colon/equals anchor disambiguates from the commentary
+    # cases ("1H stop", "stop trailing", "don't stop") which have no
+    # punctuation after "stop". Live #DEEPUSDT incident from
+    # #CoinRise: signal text was "STOP: $0.02824" and the parser
+    # missed it, falling back to auto-SL -3% — Tomas saw the wrong
+    # SL in the channel notification.
+    re.compile(
+        r"\bstop\s*[:=]\s*[^\d\n]{0,5}" + _PRICE_RE
         + r"(?!\s*[-\d]*\s*%)",
         re.IGNORECASE,
     ),
@@ -712,10 +731,17 @@ def extract_prices(text: str) -> dict:
             # ordinal digits to 1-2 so 4-digit integer prices aren't
             # swallowed either. Allow an optional parenthetical
             # comment after the price ("(Close 50%)").
+            # Tail `(?:\s*[-–][^\d\n]*\d+(?:\.\d+)?\s*%?)?` allows
+            # the CryptoPasta allocation suffix "1) $79057 - 20%"
+            # without breaking real bare-price lines. The optional
+            # parenthetical "(Close 50%)" still parses via the
+            # earlier alternation.
             tp_line_re = re.compile(
                 r"^\s*\W*(?:\d{1,2}\s*[)\.\:\-]\s+)?"
                 + _PRICE_RE
-                + r"(?:\s*\([^)]*\))?\s*\W*$",
+                + r"(?:\s*\([^)]*\))?"
+                + r"(?:\s*[-–][^\d\n]*\d+(?:\.\d+)?\s*%?)?"
+                + r"\s*\W*$",
                 re.MULTILINE,
             )
             idx = 0

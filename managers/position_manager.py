@@ -128,6 +128,16 @@ class PositionManager:
         self._reject_notify_last: Dict[str, float] = {}
         self._dedup_window_s: float = 300.0  # 5 minutes
 
+        # Separate dedup map for INFORMATIONAL notifications (e.g.
+        # "SL JUSTERAD" — the trade continues, this isn't a rejection).
+        # Keeping it separate prevents informational events from
+        # poisoning the rejection-dedup map. Live #1000000BOBUSDT
+        # incident 2026-05-04: SL JUSTERAD fired first, registered
+        # the (symbol, direction) key in the rejection map, and the
+        # subsequent "Finns inte på bybit" rejection 1 second later
+        # was wrongly silenced as a duplicate.
+        self._info_notify_last: Dict[str, float] = {}
+
         # Phase 6 audit-snapshot counter (client 2026-05-02 audit #11):
         # incremented in close_trade after a successful close; once it
         # reaches reporting.audit_snapshot_every_n_trades the snapshot
@@ -165,8 +175,37 @@ class PositionManager:
         )
 
     # ==================================================================
-    # Reject-notification dedup helper
+    # Notification dedup helpers
     # ==================================================================
+
+    def _should_send_info_notify(
+        self,
+        kind: str,
+        symbol: str,
+        direction: str = "",
+    ) -> bool:
+        """Return True if this INFORMATIONAL notification (e.g.
+        SL_ADJUSTED) should fire. Uses ``_info_notify_last`` — a
+        SEPARATE dedup map from rejections — so an informational event
+        never silences a subsequent terminal rejection on the same
+        (symbol, direction) within the dedup window.
+        """
+        key = f"{symbol}:{direction}:{kind}"
+        now = time.monotonic()
+        last = self._info_notify_last.get(key)
+        if last is not None and (now - last) < self._dedup_window_s:
+            log.debug(
+                "info_notify.deduped",
+                kind=kind, symbol=symbol, direction=direction,
+                window_s=self._dedup_window_s,
+            )
+            return False
+        self._info_notify_last[key] = now
+        if len(self._info_notify_last) > 500:
+            cutoff = now - 2 * self._dedup_window_s
+            for k in [k for k, t in self._info_notify_last.items() if t < cutoff]:
+                self._info_notify_last.pop(k, None)
+        return True
 
     def _should_send_reject_notify(
         self,
@@ -632,7 +671,14 @@ class PositionManager:
                     leverage=leverage,
                     channel_name=_chan_name_liq,
                 )
-                if self._should_send_reject_notify(
+                # Use the INFORMATIONAL dedup map — SL_ADJUSTED is
+                # not a rejection (the trade continues), so it must
+                # NOT poison the rejection-dedup map. Otherwise a
+                # follow-up "not on Bybit" or other rejection on the
+                # same (symbol, direction) within 5 minutes gets
+                # wrongly silenced. Live #1000000BOBUSDT incident
+                # 2026-05-04.
+                if self._should_send_info_notify(
                     "sl_adjusted_inside_liq", symbol, direction,
                 ):
                     try:
