@@ -2226,24 +2226,64 @@ class PositionManager:
             # operator sees something.
             hedge_child_id = None
 
-        # PnL on the hedge leg.
+        # PnL on the hedge leg. Compute three numbers:
+        #   hedge_pnl_pct       — raw price-move %
+        #   hedge_pnl_pct_lev   — leveraged %, what the operator
+        #                         actually gained/lost on the margin
+        #   hedge_pnl_usdt      — USDT amount on the hedge slot
+        #
+        # Tomas (client) 2026-05-04: HEDGE STÄNGD was only showing the
+        # raw price-move %; spec wants the leveraged % + USDT amount
+        # explicitly so the operator can see real money impact, not
+        # just the underlying-price move.
         hedge_entry = parent.hedge_entry_price or 0.0
         hedge_qty = 0.0
+        hedge_leverage = float(parent.leverage or 0.0)
+        # Fetch the child trade for the actual hedge fill qty +
+        # leverage (parent.leverage was the value at hedge-open time
+        # but the child is the source of truth).
+        if hedge_child_id is not None:
+            try:
+                child_row = await self._db.get_trade(int(hedge_child_id))
+                if child_row:
+                    try:
+                        hedge_qty = float(child_row.get("quantity") or 0.0)
+                    except (TypeError, ValueError):
+                        hedge_qty = 0.0
+                    try:
+                        cl = float(child_row.get("leverage") or 0.0)
+                        if cl > 0:
+                            hedge_leverage = cl
+                    except (TypeError, ValueError):
+                        pass
+            except Exception:
+                log.exception(
+                    "hedge.close.child_lookup_failed",
+                    parent_trade_id=parent.id,
+                    hedge_trade_id=hedge_child_id,
+                )
         try:
-            # The hedge child's quantity was saved at fill time.
             hedge_pnl_pct = None
+            hedge_pnl_pct_lev = None
             hedge_pnl_usdt = None
             if hedge_entry > 0 and exit_price > 0:
                 if hedge_dir == "LONG":
                     hedge_pnl_pct = (
                         (exit_price - hedge_entry) / hedge_entry * 100.0
                     )
+                    price_diff = exit_price - hedge_entry
                 else:
                     hedge_pnl_pct = (
                         (hedge_entry - exit_price) / hedge_entry * 100.0
                     )
+                    price_diff = hedge_entry - exit_price
+                if hedge_leverage > 0:
+                    hedge_pnl_pct_lev = hedge_pnl_pct * hedge_leverage
+                if hedge_qty > 0:
+                    hedge_pnl_usdt = price_diff * hedge_qty
         except Exception:
             hedge_pnl_pct = None
+            hedge_pnl_pct_lev = None
             hedge_pnl_usdt = None
 
         # Mark the child trade row CLOSED in DB.
@@ -2332,6 +2372,14 @@ class PositionManager:
                 f"{hedge_pnl_pct:+.2f} %"
                 if hedge_pnl_pct is not None else "?"
             )
+            pnl_lev_str = (
+                f"{hedge_pnl_pct_lev:+.2f} % (med x{hedge_leverage:g} hävstång)"
+                if hedge_pnl_pct_lev is not None else "?"
+            )
+            pnl_usdt_str = (
+                f"{hedge_pnl_usdt:+.4f} USDT"
+                if hedge_pnl_usdt is not None else "?"
+            )
             await self._safe_notify(
                 f"🛡️ HEDGE STÄNGD\n"
                 f"🕒 Tid: {_ts()}\n"
@@ -2341,7 +2389,10 @@ class PositionManager:
                 f"\n"
                 f"💥 Hedge entry: {hedge_entry}\n"
                 f"💥 Exit: {exit_price}\n"
-                f"📊 Resultat: {pnl_str}\n"
+                f"💵 Stängd kvantitet: {hedge_qty}\n"
+                f"📊 Resultat (pris): {pnl_str}\n"
+                f"📊 Resultat (med hävstång): {pnl_lev_str}\n"
+                f"💰 Resultat: {pnl_usdt_str}\n"
                 f"\n"
                 f"📍 Skäl: {reason_label}\n"
                 f"🔑 Order-ID BOT (parent): {parent.id}\n"
