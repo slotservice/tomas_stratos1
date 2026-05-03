@@ -543,21 +543,21 @@ async def main() -> None:
                 # by 3 Telegram channels doesn't fire 3 identical
                 # rejection messages (client 2026-04-30).
                 if result.reason == "no_entry" and result.symbol and result.direction:
-                    # Only notify when the message has STRONG signal-
-                    # shaped evidence:
-                    #   1. SL or TP was extracted, AND
-                    #   2. raw text contains an explicit entry-keyword
-                    #      (entry / buy / sell / long here / short here).
-                    # Without #2, news + market-analysis posts that
-                    # happen to list price levels (e.g. "Bull case:
-                    # target 271.62, Bear case: 250.05 support")
-                    # would still parse as having pseudo-TPs/SLs
-                    # because the regex matches "target N" / "support".
-                    # Tomas 2026-05-02: TAOUSDT market-analysis from
-                    # CryptoPasta + SUSHIUSDT TP-status from
-                    # CryptoMasterVip + GOODUSDT scam-forward from
-                    # WessloSignalsfwdJacksonmura all triggered
-                    # "Entre saknas" via the SL/TP-only gate.
+                    # Notify when the message looks like a signal:
+                    # symbol+direction extracted PLUS at least ONE of:
+                    #   - SL or TP was extracted (signal-evidence), OR
+                    #   - raw text has an explicit entry-keyword
+                    # 2026-05-04 (Tomas): widened from AND -> OR so
+                    # operator sees more signal-shaped messages that
+                    # the parser couldn't fully extract. The per
+                    # (symbol, direction) dedup still caps to one
+                    # notification per 5 minutes so chatter that
+                    # mentions a symbol+direction can fire at most
+                    # once per ticker.
+                    # Pure chatter with no symbol or no direction
+                    # never reaches this branch. Status updates ("TP
+                    # hit", "Entry 1 ✅") are dropped earlier by
+                    # is_status_update() and never reach the parser.
                     import re as _re
                     has_signal_evidence = bool(result.sl) or bool(result.tps)
                     has_entry_keyword = bool(_re.search(
@@ -569,8 +569,7 @@ async def main() -> None:
                         _re.IGNORECASE,
                     ))
                     if (
-                        has_signal_evidence
-                        and has_entry_keyword
+                        (has_signal_evidence or has_entry_keyword)
                         and position_mgr._should_send_reject_notify(
                             "no_entry", result.symbol, result.direction,
                         )

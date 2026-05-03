@@ -983,7 +983,13 @@ def parse_signal_detailed(
     sl = prices["sl"]
 
     if entry <= 0:
-        log.debug(
+        # INFO (not DEBUG) — symbol+direction were extracted, so the
+        # message DID look like a signal. The operator needs visibility
+        # into these "looked like a signal but parser missed entry"
+        # cases (Tomas 2026-05-04: "valid signals not appearing in
+        # channel"). The downstream rejection-notify gate decides
+        # whether to surface this to the Telegram channel.
+        log.info(
             "signal_parse_no_entry",
             symbol=symbol,
             direction=direction,
@@ -1009,7 +1015,10 @@ def parse_signal_detailed(
                            override_note=override_note)
 
     if not tps:
-        log.debug(
+        # INFO (not DEBUG) — symbol+direction+entry all extracted,
+        # parser only missed TPs. Same visibility rationale as
+        # no_entry above.
+        log.info(
             "signal_parse_no_tps",
             symbol=symbol,
             direction=direction,
