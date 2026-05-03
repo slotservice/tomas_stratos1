@@ -490,29 +490,57 @@ class TelegramNotifier:
         # primary path; fallback_* reasons are the fixed-percentage
         # path that fires only when no TP orders are on Bybit (client
         # 2026-05-02 mutual-exclusion rule).
+        #
+        # 2026-05-03 (Tomas): added explicit "Låst vinst" line below
+        # so the locked-profit % is unambiguous instead of hiding
+        # inside the header label. The "från entry" parenthetical was
+        # ambiguous — could be interpreted as the SL's distance from
+        # entry rather than the profit being locked in. Now we render:
+        #   📍 Trigger: +4.00% rörelse
+        #   🔒 Låst vinst: +1.50% (SL låser denna vinst)
+        # Header still carries the short reason label.
         label_map = {
             # Primary cascade (TP-driven)
-            "tp2_hit_sl_to_breakeven":      "🟢 BREAK-EVEN aktiverad (TP2 träffad)",
-            "tp3_hit_sl_to_tp1":            "🔼 SL flyttad till TP1 (TP3 träffad)",
-            "tp4_hit_sl_to_tp2":            "🔼 SL flyttad till TP2 (TP4 träffad)",
-            "tp5_hit_sl_to_tp3":            "🔼 SL flyttad till TP3 (TP5 träffad)",
-            "tp6_hit_sl_to_tp4":            "🔼 SL flyttad till TP4 (TP6 träffad)",
-            # Fallback ladder (only when signal has no TP orders)
-            "fallback_be_buffer_at_2pct":   "🟢 BE + buffer (+2 % rörelse, fallback)",
-            "fallback_profit_lock_1_at_4pct": "🔒 PROFIT-LOCK 1 (+4 % rörelse → SL +1,5 %, fallback)",
-            "fallback_profit_lock_2_at_5pct": "🔒 PROFIT-LOCK 2 (+5 % rörelse → SL +2,5 %, fallback)",
+            "tp2_hit_sl_to_breakeven":      ("🟢 BREAK-EVEN aktiverad (TP2 träffad)", None),
+            "tp3_hit_sl_to_tp1":            ("🔼 SL flyttad till TP1 (TP3 träffad)", None),
+            "tp4_hit_sl_to_tp2":            ("🔼 SL flyttad till TP2 (TP4 träffad)", None),
+            "tp5_hit_sl_to_tp3":            ("🔼 SL flyttad till TP3 (TP5 träffad)", None),
+            "tp6_hit_sl_to_tp4":            ("🔼 SL flyttad till TP4 (TP6 träffad)", None),
+            # Fallback ladder (only when signal has no TP orders).
+            # Second tuple element is the trigger_pct (price-move that
+            # fired this lock). Used for the explicit "Trigger" line.
+            "fallback_be_buffer_at_2pct":     ("🟢 BE + buffer (fallback)", 2.0),
+            "fallback_profit_lock_1_at_4pct": ("🔒 PROFIT-LOCK 1 (fallback)", 4.0),
+            "fallback_profit_lock_2_at_5pct": ("🔒 PROFIT-LOCK 2 (fallback)", 5.0),
         }
-        header = label_map.get(reason, f"🔼 SL FLYTTAD ({reason})")
+        header_data = label_map.get(reason, (f"🔼 SL FLYTTAD ({reason})", None))
+        header, trigger_pct = header_data
 
         old_sl_str = f"{old_sl}" if old_sl else "—"
+
+        # Locked-profit %: how much profit the new SL guarantees if hit
+        # (positive = locked, zero = breakeven, negative = still a loss
+        # but smaller than before). Computed in price terms relative to
+        # entry, direction-aware.
+        locked_pct: float = 0.0
         if entry and entry > 0 and new_sl:
             if direction == "LONG":
-                pct_from_entry = (new_sl - entry) / entry * 100.0
+                locked_pct = (new_sl - entry) / entry * 100.0
             else:
-                pct_from_entry = (entry - new_sl) / entry * 100.0
-            pct_str = f" ({pct_from_entry:+.2f} % från entry)"
+                locked_pct = (entry - new_sl) / entry * 100.0
+
+        # Lines (only render trigger when we know it).
+        trigger_line = (
+            f"📍 Trigger: +{trigger_pct:.2f}% rörelse\n"
+            if trigger_pct is not None
+            else ""
+        )
+        if locked_pct > 0:
+            locked_line = f"🔒 Låst vinst: +{locked_pct:.2f}% av entry"
+        elif locked_pct == 0:
+            locked_line = "🟰 Låst vinst: 0.00% (breakeven)"
         else:
-            pct_str = ""
+            locked_line = f"🟥 Förlustbegränsning: {locked_pct:.2f}% av entry"
 
         text = (
             f"{header}\n"
@@ -522,9 +550,11 @@ class TelegramNotifier:
             f"\n"
             f"💥 Entry: {entry}\n"
             f"🚩 Tidigare SL: {old_sl_str}\n"
-            f"🚩 Ny SL: {new_sl}{pct_str}\n"
+            f"🚩 Ny SL: {new_sl}\n"
+            f"{trigger_line}"
+            f"{locked_line}\n"
             f"\n"
-            f"📍 Trigger: LastPrice (Bybit-bekräftad)\n"
+            f"📍 Trigger-typ: LastPrice (Bybit-bekräftad)\n"
             f"🔑 Order-ID BOT: {trade.id}"
         )
         return await self._send_notify(text)
@@ -838,30 +868,12 @@ class TelegramNotifier:
     # TRAILING STOP TEMPLATES
     # ===================================================================
 
-    async def trailing_activated(
-        self,
-        trade,
-        trigger_pct: float,
-        distance_pct: float,
-        new_sl: float,
-    ) -> str:
-        """Trailing stop activated."""
-        signal = trade.signal
-        text = (
-            f"<b>🔄 TRAILING STOP AKTIVERAD</b>\n"
-            f"\n"
-            f"   Tid: {_ts()}\n"
-            f"   Kanal: {_chan(signal.channel_name)}\n"
-            f"   Symbol: {_sym(signal.symbol)}\n"
-            f"   Riktning: {signal.direction}\n"
-            f"   Trigger: {_pct(trigger_pct)}\n"
-            f"   Trailing-avstånd: {distance_pct:.2f} %\n"
-            f"   Ny SL: {new_sl}\n"
-            f"\n"
-            f"   🔑 Order-ID BOT: {trade.id}\n"
-            f"   🔑 Order-ID Bybit: {', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'}"
-        )
-        return await self._send_notify(text)
+    # NOTE: a previous `trailing_activated()` template lived here. It
+    # was unused (no callers in managers/) and showed less context than
+    # `trailing_stop_activated()` below. Removed 2026-05-03 to comply
+    # with Tomas's "one function per responsibility" mandate. All
+    # callers route through `trailing_stop_activated()` which now
+    # carries the full retracement + locked-profit math.
 
     async def trailing_updated(
         self,
@@ -1363,6 +1375,20 @@ class TelegramNotifier:
             else f"💵 Skyddad kvantitet: hela positionen"
         )
 
+        # Locked-profit math (Tomas 2026-05-03):
+        # Trailing armed at activation_pct above entry, trailing distance
+        # behind the highest mark since activation. Worst-case lock
+        # (price reverses immediately after activation) =
+        #   activation_pct - distance_pct
+        # Example: 6.1% activation - 2.5% distance = 3.6% locked.
+        # Operator wants to see this number explicitly so they know the
+        # minimum profit floor the trailing stop guarantees.
+        min_locked_pct = max(0.0, activation_pct - abs(distance_pct))
+        locked_line = (
+            f"🔒 Min låst vinst: {min_locked_pct:+.2f}% "
+            f"(aktivering +{activation_pct:.2f}% − trailing {abs(distance_pct):.2f}%)"
+        )
+
         text = (
             f"✅ Trailing Stop Aktiverad\n"
             f"🕒 Tid: {_ts()}\n"
@@ -1376,6 +1402,7 @@ class TelegramNotifier:
             f"\n"
             f"{ts_line}\n"
             f"📍 Avstånd: {distance_pct:+.2f}% bakom pris ({trailing_distance})\n"
+            f"{locked_line}\n"
             f"\n"
             f"{qty_line}\n"
             f"\n"
