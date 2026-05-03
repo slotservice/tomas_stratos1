@@ -95,6 +95,81 @@ _KNOWN_BASES = {
 }
 
 # ---------------------------------------------------------------------------
+# Status-update detector (must run BEFORE the parser)
+# ---------------------------------------------------------------------------
+#
+# Tomas (client) 2026-05-03: "Trade updates from groups, for example
+# 'TP1 taken' or result messages, are being interpreted by the bot as
+# new signals." Confirmed in production: a message
+# "#PLAY ALL TARGET REACHED 🔥 So Far Profit (334%) ENTRY: 0.1336"
+# parsed as a PLAY signal with entry 0.1336.
+#
+# This regex catches the unambiguous status-update vocabulary used by
+# every monitored channel. Conservative — favour false negatives (let
+# parser handle it) over false positives (block a real signal).
+#
+# Anchors REQUIRE a completion verb (reached/done/hit/taken/triggered/
+# achieved/closed-at) within ~25 chars of a target/stop/tp/profit
+# noun, OR an explicit closure phrase (stopped out, position closed).
+# Standalone "TP1: 0.05" in a real signal does NOT match.
+_STATUS_UPDATE_PATTERNS = [
+    # "ALL TARGETS REACHED / DONE / ACHIEVED / HIT"
+    re.compile(
+        r"\ball\s+target[s]?\b[\s\W]{0,15}\b(?:reached|achieved|done|hit|taken|completed)\b",
+        re.IGNORECASE,
+    ),
+    # "Target 1 hit", "Target 3 reached", "TP2 taken", "TP1 hit"
+    re.compile(
+        r"\b(?:target|tp)\s*\d+\b[\s\W]{0,20}\b(?:reached|achieved|done|hit|taken|secured)\b",
+        re.IGNORECASE,
+    ),
+    # "Take Profit target N ✅" — Telegram bots often signal hits this way
+    re.compile(
+        r"\btake[\s_-]*profit\s+target\s+\d+\b[^\n]{0,5}[✅✓☑]",
+        re.IGNORECASE,
+    ),
+    # "Stop Target Hit", "Stop Loss Hit", "SL Hit", "Stop Hit"
+    re.compile(
+        r"\b(?:stop(?:[\s_-]*loss|[\s_-]*target)?|sl)\s+(?:hit|triggered|reached)\b",
+        re.IGNORECASE,
+    ),
+    # "Stopped out"
+    re.compile(r"\bstopped\s+out\b", re.IGNORECASE),
+    # "Closed at stoploss / take profit / TP / SL / profit / loss"
+    # Note: \bstop\b doesn't match inside "stoploss" — explicit alternates.
+    re.compile(
+        r"\bclosed\s+at\s+(?:stop[\s_-]*loss|stoploss|take[\s_-]*profit|takeprofit|stop|sl|tp|profit|loss)\b",
+        re.IGNORECASE,
+    ),
+    # "Position closed", "Trade closed"
+    re.compile(r"\b(?:position|trade)\s+closed\b", re.IGNORECASE),
+    # "+646% GAIN", "+50% Profit" — completion brag with explicit %
+    re.compile(
+        r"[+]\d+(?:\.\d+)?\s*%\s*(?:gain|profit|in\s+profit)\b",
+        re.IGNORECASE,
+    ),
+    # "So far profit (X%)" — running-PnL update style
+    re.compile(r"\bso\s+far\s+profit\b", re.IGNORECASE),
+]
+
+
+def is_status_update(text: str) -> bool:
+    """Return True if *text* is a trade-status update (TP hit, SL hit,
+    closed, etc.) rather than a new signal.
+
+    Used by the message handler to drop status messages BEFORE the
+    parser can misinterpret them. See _STATUS_UPDATE_PATTERNS for the
+    exact vocabulary.
+    """
+    if not text:
+        return False
+    for pat in _STATUS_UPDATE_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Regex building blocks
 # ---------------------------------------------------------------------------
 

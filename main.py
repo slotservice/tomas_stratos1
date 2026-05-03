@@ -490,6 +490,7 @@ async def main() -> None:
     # ---------------------------------------------------------------
     # a) TG listener -> signal parser -> position manager
     parse_signal_detailed_fn = C["parse_signal_detailed"]
+    from core.signal_parser import is_status_update
 
     async def _on_signal_message(
         raw_text: str,
@@ -498,6 +499,21 @@ async def main() -> None:
     ) -> None:
         """Full signal processing pipeline for each Telegram message."""
         try:
+            # Status-update guard (Tomas 2026-05-03). Trade-result
+            # messages like "ALL TARGETS DONE" / "TP1 taken" / "Stopped
+            # out" must NOT be parsed as new signals — when they are,
+            # the bot fabricates partial signals and emits "entry/TP
+            # missing" warnings to the operator. Drop them silently
+            # BEFORE the parser runs.
+            if is_status_update(raw_text):
+                log.info(
+                    "status_update_skipped",
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    text_preview=raw_text[:80],
+                )
+                return
+
             result = parse_signal_detailed_fn(
                 text=raw_text,
                 channel_id=channel_id,
