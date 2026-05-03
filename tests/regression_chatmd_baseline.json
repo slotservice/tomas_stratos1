@@ -1439,7 +1439,7 @@
     "idx": 104,
     "snippet": "🖼 🟢 LONG  - $PARTI - RISK ORDER - SMALL VOL |  | - Entry market:",
     "reason": "ok",
-    "symbol": "THISUSDT",
+    "symbol": "PARTIUSDT",
     "direction": "LONG",
     "tps": [
       0.05374,
@@ -1453,7 +1453,7 @@
     "idx": 105,
     "snippet": "🖼 🔴 SHORT - $TST |  | - Entry: 0.01645 | - Entry limit: 0.01697 | - ",
     "reason": "ok",
-    "symbol": "THISUSDT",
+    "symbol": "TSTUSDT",
     "direction": "SHORT",
     "tps": [
       0.01489,
@@ -2750,7 +2750,7 @@
     "idx": 198,
     "snippet": "🖼 🟢 LONG  - $PARTI - RISK ORDER - SMALL VOL |  | - Entry market:",
     "reason": "ok",
-    "symbol": "THISUSDT",
+    "symbol": "PARTIUSDT",
     "direction": "LONG",
     "tps": [
       0.05374,
@@ -2764,7 +2764,7 @@
     "idx": 199,
     "snippet": "🖼 🔴 SHORT - $TST |  | - Entry: 0.01645 | - Entry limit: 0.01697 | - ",
     "reason": "ok",
-    "symbol": "THISUSDT",
+    "symbol": "TSTUSDT",
     "direction": "SHORT",
     "tps": [
       0.01489,

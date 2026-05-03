@@ -403,22 +403,31 @@ _SYMBOL_PATTERNS = [
     # "PAIR ✈️MOVR/USDT" — "PAIR" / "pair" label followed by an emoji
     # or whitespace then the ticker (CoinAura header format).
     re.compile(r"\bpair\b[^A-Za-z0-9\n]*([A-Z0-9]{1,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
-    # FALLBACK: "#MIVR" / "#DAM" / "#Q" — hash-prefixed ticker with no
-    # USDT suffix. We append USDT via normalize_symbol. Must start with
-    # a LETTER (so "#123" hashtags / arbitrary numeric tags don't match)
-    # and be followed by a non-word char (emoji, newline, end of string)
+    # FALLBACK: "#MIVR" / "$SKYAI" / "#DAM" / "#Q" — explicitly-
+    # prefixed ticker with no USDT suffix. The `#` or `$` prefix is
+    # the operator's deliberate ticker tag and is high-confidence.
+    # We append USDT via normalize_symbol. Must start with a LETTER
+    # (so "#123" hashtags / arbitrary numeric tags don't match) and
+    # be followed by a non-word char (emoji, newline, end of string)
     # so we don't capture half of a longer word. Letter-then-0-to-9
     # chars allows 1-char tickers like Q on CoinAura's STRONG SHORT
     # format ("💵#Q🔥").
     #
-    # 2026-05-03: this hashtag pattern moved BEFORE the line-start bare
-    # fallback below. The `#`-prefix anchors the token to a deliberate
+    # 2026-05-03: this fallback moved BEFORE the line-start bare
+    # fallback below. The prefix anchors the token to a deliberate
     # ticker tag from the operator, while the line-start pattern
     # incorrectly fired on lines like "TP1: 0.026" and produced the
     # TP1USDT ghost-symbol class (130+ events/day in production).
-    # Hashtag is HIGHER confidence than bare-line-start, so it must win
-    # the first-match-wins race.
-    re.compile(r"#([A-Z][A-Z0-9]{0,9})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
+    # Higher confidence wins the first-match-wins race.
+    #
+    # 2026-05-04: now accepts BOTH `#` and `$` prefixes. Previously
+    # only `#` was honoured, so a signal like
+    #   "🟩LONG  - $SKYAI 0.40$ 🟩
+    #    Use 5x Maximum Leverage"
+    # had no `/USDT` and no `#`-prefix → the line-start fallback fired
+    # on "Use 5x..." and parsed the symbol as USEUSDT (later rejected
+    # by Bybit). Live #OBriansCryptoFamily incident 2026-05-04.
+    re.compile(r"[#$]([A-Z][A-Z0-9]{0,9})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
     # LAST-RESORT FALLBACK: bare ticker at line start, after optional
     # emojis. Subject to the short-name + blocklist filters at
     # _extract_symbol so "TP", "SL", "ENTRY", "LEVERAGE", etc. are
@@ -851,6 +860,12 @@ def _extract_symbol(text: str) -> Optional[str]:
                 "TRENDLINE", "SCALPING", "SWING", "DYNAMIC", "FIXED",
                 "HIGH", "LOW", "MID", "TERM", "OPPORTUNITY", "STRONG",
                 "RISK", "MANAGE", "MANUAL", "MANUALLY",
+                # Common English signal-prefix words that can appear
+                # at line start in body text and false-match the bare
+                # line-start fallback.
+                "USE", "USING", "MAX", "MAXIMUM", "MIN", "MINIMUM",
+                "FOR", "WITH", "FROM", "WHEN", "AFTER", "BEFORE",
+                "TIME", "DATE", "MIN", "PCT", "PERCENT", "MARGIN",
             ):
                 continue
             return normalize_symbol(raw)
