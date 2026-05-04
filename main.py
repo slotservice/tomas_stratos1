@@ -962,12 +962,22 @@ async def main() -> None:
         """Tomas (client) 2026-05-04: scan the log every interval to
         flag messages from monitored channels that never reached the
         operator's Telegram channel. The audit posts a summary ONLY
-        when silent_drops > 0 — healthy windows produce no spam."""
-        interval_min = settings.missed_signal_audit.interval_minutes
+        when silent_drops > 0 — healthy windows produce no spam.
+
+        Silent drops are also appended to silent_drops.jsonl
+        (deduped by signal_id) so the operator builds a permanent
+        backlog of unhandled signal formats that survives restarts.
+        """
+        cfg = settings.missed_signal_audit
+        interval_min = cfg.interval_minutes
         if interval_min <= 0:
             log.info("missed_signal_audit.disabled")
             return
         log_path = PROJECT_ROOT / settings.general.log_file
+        persist_path = (
+            PROJECT_ROOT / cfg.persist_path
+            if cfg.persist_silent_drops else None
+        )
         from health.missed_signal_audit import run_audit_and_notify
         while not shutdown.is_shutting_down:
             try:
@@ -978,6 +988,8 @@ async def main() -> None:
                     notifier=tg_notifier,
                     log_path=log_path,
                     window_minutes=interval_min,
+                    persist_path=persist_path,
+                    persist_max_entries=cfg.persist_max_entries,
                 )
             except asyncio.CancelledError:
                 break

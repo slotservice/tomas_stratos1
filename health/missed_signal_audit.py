@@ -100,11 +100,18 @@ def audit_log_window(
                 sid = e.get("signal_id")
                 if not sid:
                     continue
+                # text_preview is captured ONLY on message_received
+                # (the listener stores the first 2000 chars). Other
+                # events don't carry it. Persisting silent drops
+                # needs the full source text to be useful as a
+                # replay fixture, so we lift it from the
+                # message_received row when present.
                 chains[str(sid)].append({
                     "ts": ts,
                     "event": e.get("event", ""),
                     "channel": e.get("channel_name", "") or "",
                     "symbol": e.get("symbol", "") or "",
+                    "text_preview": e.get("text_preview", "") or "",
                 })
     except Exception as exc:
         return {
@@ -143,7 +150,8 @@ def audit_log_window(
             continue
 
         # Silent drop. Capture the first message_received (for channel
-        # context) and the LAST event in the chain (for diagnosis).
+        # context + raw text) and the LAST event in the chain (for
+        # diagnosis).
         mr = next(
             (ev for ev in events if ev["event"] == "message_received"), None,
         )
@@ -154,6 +162,7 @@ def audit_log_window(
             "symbol": last.get("symbol") or (mr or {}).get("symbol") or "?",
             "last_event": last.get("event", "?"),
             "ts": (mr or {}).get("ts", last["ts"]),
+            "text_preview": (mr or {}).get("text_preview", ""),
         })
 
     return {
@@ -213,15 +222,108 @@ def render_summary(audit: dict) -> Optional[str]:
     return "\n".join(lines)
 
 
+def _load_existing_signal_ids(persist_path: Path) -> set[str]:
+    """Read the persistence file and return the set of signal_ids
+    already recorded. Used for dedup on append. Returns empty set if
+    the file is missing or unreadable — the audit must never crash
+    on a persistence problem."""
+    if not persist_path.exists():
+        return set()
+    out: set[str] = set()
+    try:
+        with persist_path.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                sid = e.get("signal_id")
+                if sid:
+                    out.add(str(sid))
+    except Exception:
+        log.exception(
+            "missed_signal_audit.persist_read_failed",
+            path=str(persist_path),
+        )
+    return out
+
+
+def _persist_silent_drops(
+    persist_path: Path,
+    new_drops: list[dict],
+    max_entries: int = 5000,
+) -> int:
+    """Append *new_drops* (already deduped by caller) to the
+    persistence file. Trims oldest entries if the file would exceed
+    *max_entries*. Returns the number of newly-persisted rows.
+    Errors are logged and swallowed — persistence must never block
+    the audit from completing."""
+    if not new_drops:
+        return 0
+    try:
+        persist_path.parent.mkdir(parents=True, exist_ok=True)
+        with persist_path.open("a", encoding="utf-8") as f:
+            for d in new_drops:
+                f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    except Exception:
+        log.exception(
+            "missed_signal_audit.persist_append_failed",
+            path=str(persist_path),
+        )
+        return 0
+
+    # Trim oldest if the file overflows the cap. Read all, keep the
+    # last max_entries, rewrite. Done in-process rather than via a
+    # rotation library to keep the dependency surface tiny.
+    if max_entries > 0:
+        try:
+            lines: list[str] = []
+            with persist_path.open(encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            if len(lines) > max_entries:
+                kept = lines[-max_entries:]
+                with persist_path.open("w", encoding="utf-8") as f:
+                    f.writelines(kept)
+                log.info(
+                    "missed_signal_audit.persist_trimmed",
+                    path=str(persist_path),
+                    kept=len(kept),
+                    dropped=len(lines) - len(kept),
+                )
+        except Exception:
+            log.exception(
+                "missed_signal_audit.persist_trim_failed",
+                path=str(persist_path),
+            )
+    return len(new_drops)
+
+
 async def run_audit_and_notify(
     notifier,
     log_path: Path,
     window_minutes: int = 30,
+    persist_path: Optional[Path] = None,
+    persist_max_entries: int = 5000,
 ) -> dict:
     """Top-level entry called from the periodic task in main.py.
-    Always returns the audit dict for logging; only sends a Telegram
-    summary when there is at least one silent drop."""
+    Always returns the audit dict for logging; sends a Telegram
+    summary only when there is at least one silent drop. When
+    *persist_path* is provided, NEW silent drops (deduped against
+    existing entries by signal_id) are appended to that file."""
     audit = audit_log_window(log_path, window_minutes)
+    persisted_count = 0
+    if persist_path is not None and audit.get("silent_drops", 0) > 0:
+        try:
+            already = _load_existing_signal_ids(persist_path)
+            new_drops = [
+                d for d in audit.get("silent_drop_details", [])
+                if d.get("signal_id") not in already
+            ]
+            persisted_count = _persist_silent_drops(
+                persist_path, new_drops, max_entries=persist_max_entries,
+            )
+        except Exception:
+            log.exception("missed_signal_audit.persist_dispatch_failed")
     log.info(
         "missed_signal_audit.complete",
         window_minutes=audit.get("window_minutes"),
@@ -230,6 +332,7 @@ async def run_audit_and_notify(
         intentional=audit.get("intentional"),
         in_flight=audit.get("in_flight"),
         silent_drops=audit.get("silent_drops"),
+        persisted=persisted_count,
         error=audit.get("error"),
     )
     summary = render_summary(audit)

@@ -215,8 +215,21 @@ class MissedSignalAuditSettings(BaseModel):
     Tomas (client) 2026-05-04 explicit: "we have to monitor all
     channels and all signals — we don't have to miss any signals."
     Set ``interval_minutes`` = 0 to disable the audit entirely.
+
+    ``persist_silent_drops`` (default true) appends every newly-
+    detected silent drop to ``persist_path`` (an append-only JSONL
+    file) so the operator builds a permanent backlog of unhandled
+    signal formats. Each fix shrinks the file. The audit dedups
+    against existing entries by signal_id so re-running the audit
+    on overlapping windows does not duplicate entries.
     """
     interval_minutes: int = 30
+    persist_silent_drops: bool = True
+    persist_path: str = "silent_drops.jsonl"
+    # Cap on the persist file — if it grows past this many entries,
+    # the oldest are dropped (FIFO) so the file stays bounded. Set
+    # to 0 to disable the cap (file grows unbounded).
+    persist_max_entries: int = 5000
 
 
 class TpSlSettings(BaseModel):

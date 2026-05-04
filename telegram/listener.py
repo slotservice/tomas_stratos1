@@ -465,13 +465,18 @@ class TelegramListener:
             signal_id = _uuid.uuid4().hex[:8]
             _ctx.bind_contextvars(signal_id=signal_id)
             try:
+                # text_preview holds enough of the raw signal text
+                # for the missed-signal audit to persist + replay
+                # silent-dropped messages later. 2000 chars covers
+                # every signal format we have seen; status updates
+                # and chatter are usually < 500 chars.
                 log.info(
                     "message_received",
                     chat_id=chat_id,
                     channel_name=channel_name,
                     forwarded=bool(fwd_name),
                     text_length=len(raw_text),
-                    text_preview=raw_text[:100],
+                    text_preview=raw_text[:2000],
                 )
 
                 # Invoke the signal processing callback

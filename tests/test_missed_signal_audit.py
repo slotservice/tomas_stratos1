@@ -203,3 +203,146 @@ def test_malformed_lines_skipped(tmp_path: Path):
     audit = audit_log_window(p, window_minutes=10)
     assert audit["received"] == 1
     assert audit["visible"] == 1
+
+
+def test_text_preview_captured_on_silent_drop(tmp_path: Path):
+    """A silent-drop detail must carry the raw text from
+    message_received so it can be persisted + replayed."""
+    log = _write_log(tmp_path, [
+        _line(-60, "txt11111", "message_received",
+              channel_name="CoinAura",
+              text_preview="#FOO/USDT LONG\nEntry: 1.0"),
+        _line(-59, "txt11111", "signal_parse_no_tps",
+              symbol="FOOUSDT", direction="LONG"),
+    ])
+    audit = audit_log_window(log, window_minutes=10)
+    assert audit["silent_drops"] == 1
+    detail = audit["silent_drop_details"][0]
+    assert "#FOO/USDT LONG" in detail["text_preview"]
+
+
+# ---------- Persistence ----------
+
+from health.missed_signal_audit import (
+    _load_existing_signal_ids,
+    _persist_silent_drops,
+    run_audit_and_notify,
+)
+
+
+def test_persist_appends_new_drops(tmp_path: Path):
+    persist = tmp_path / "silent_drops.jsonl"
+    drops = [
+        {"signal_id": "d1", "channel": "A", "symbol": "BTCUSDT",
+         "last_event": "x", "ts": "2026-05-04T00:00:00Z",
+         "text_preview": "raw text 1"},
+        {"signal_id": "d2", "channel": "B", "symbol": "ETHUSDT",
+         "last_event": "y", "ts": "2026-05-04T00:01:00Z",
+         "text_preview": "raw text 2"},
+    ]
+    n = _persist_silent_drops(persist, drops)
+    assert n == 2
+    assert persist.exists()
+    lines = persist.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+
+
+def test_persist_dedup_via_load(tmp_path: Path):
+    persist = tmp_path / "silent_drops.jsonl"
+    initial = [
+        {"signal_id": "exists1", "channel": "A", "symbol": "X",
+         "last_event": "x", "ts": "2026-05-04T00:00:00Z",
+         "text_preview": "t1"},
+    ]
+    _persist_silent_drops(persist, initial)
+    existing = _load_existing_signal_ids(persist)
+    assert existing == {"exists1"}
+
+
+def test_persist_max_entries_trim(tmp_path: Path):
+    persist = tmp_path / "silent_drops.jsonl"
+    # Write 10 entries with cap = 4 — only the LAST 4 should survive.
+    drops = [
+        {"signal_id": f"sid{i}", "channel": "A", "symbol": "X",
+         "last_event": "x", "ts": f"2026-05-04T00:00:0{i}Z",
+         "text_preview": f"t{i}"}
+        for i in range(10)
+    ]
+    _persist_silent_drops(persist, drops, max_entries=4)
+    lines = persist.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 4
+    # Should be the LAST 4 (sid6..sid9).
+    sids = [json.loads(l)["signal_id"] for l in lines]
+    assert sids == ["sid6", "sid7", "sid8", "sid9"]
+
+
+def test_persist_missing_file_returns_empty_set(tmp_path: Path):
+    assert _load_existing_signal_ids(tmp_path / "nope.jsonl") == set()
+
+
+def test_persist_corrupt_lines_ignored(tmp_path: Path):
+    persist = tmp_path / "silent_drops.jsonl"
+    persist.write_text(
+        "garbage\n"
+        + json.dumps({"signal_id": "ok"}) + "\n"
+        + "more garbage\n",
+        encoding="utf-8",
+    )
+    assert _load_existing_signal_ids(persist) == {"ok"}
+
+
+import asyncio
+
+
+class _DummyNotifier:
+    def __init__(self):
+        self.sent = []
+
+    async def _send_notify(self, text):
+        self.sent.append(text)
+
+
+def test_run_audit_persists_only_new_signal_ids(tmp_path: Path):
+    """End-to-end: audit detects a silent drop, persists it, then on
+    a second audit run the same signal_id is NOT duplicated."""
+    log = _write_log(tmp_path, [
+        _line(-60, "newdrop1", "message_received",
+              channel_name="CoinAura",
+              text_preview="#X/USDT LONG"),
+        _line(-59, "newdrop1", "signal_parse_no_entry",
+              symbol="XUSDT", direction="LONG"),
+    ])
+    persist = tmp_path / "silent_drops.jsonl"
+    notifier = _DummyNotifier()
+
+    # First run — should persist the drop.
+    asyncio.run(run_audit_and_notify(
+        notifier=notifier, log_path=log, window_minutes=10,
+        persist_path=persist,
+    ))
+    first_lines = persist.read_text(encoding="utf-8").splitlines()
+    assert len(first_lines) == 1
+    assert json.loads(first_lines[0])["signal_id"] == "newdrop1"
+
+    # Second run on the SAME log — should NOT duplicate.
+    asyncio.run(run_audit_and_notify(
+        notifier=notifier, log_path=log, window_minutes=10,
+        persist_path=persist,
+    ))
+    second_lines = persist.read_text(encoding="utf-8").splitlines()
+    assert len(second_lines) == 1
+
+
+def test_run_audit_no_persistence_when_path_none(tmp_path: Path):
+    """When persist_path is None, no file is created."""
+    log = _write_log(tmp_path, [
+        _line(-60, "noper001", "message_received", channel_name="X",
+              text_preview="raw"),
+        _line(-59, "noper001", "signal_parse_no_entry",
+              symbol="YUSDT", direction="LONG"),
+    ])
+    asyncio.run(run_audit_and_notify(
+        notifier=_DummyNotifier(), log_path=log, window_minutes=10,
+        persist_path=None,
+    ))
+    assert not (tmp_path / "silent_drops.jsonl").exists()

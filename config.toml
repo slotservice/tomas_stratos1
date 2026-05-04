@@ -123,6 +123,13 @@ audit_snapshot_every_n_trades = 10
 # no notification (no spam).
 # Set interval_minutes = 0 to disable entirely.
 interval_minutes = 30
+# Persist every silent drop to silent_drops.jsonl (append-only,
+# deduped by signal_id). Survives restarts so the operator builds
+# a permanent backlog of unhandled signal formats. Use
+# scripts/show_silent_drops.py to summarise the backlog.
+persist_silent_drops = true
+persist_path = "silent_drops.jsonl"
+persist_max_entries = 5000
 
 [tp_sl]
 # Client 2026-04-29 spec:
