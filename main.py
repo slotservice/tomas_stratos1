@@ -958,6 +958,32 @@ async def main() -> None:
             except Exception:
                 log.exception("order_cleanup.error")
 
+    async def _periodic_missed_signal_audit() -> None:
+        """Tomas (client) 2026-05-04: scan the log every interval to
+        flag messages from monitored channels that never reached the
+        operator's Telegram channel. The audit posts a summary ONLY
+        when silent_drops > 0 — healthy windows produce no spam."""
+        interval_min = settings.missed_signal_audit.interval_minutes
+        if interval_min <= 0:
+            log.info("missed_signal_audit.disabled")
+            return
+        log_path = PROJECT_ROOT / settings.general.log_file
+        from health.missed_signal_audit import run_audit_and_notify
+        while not shutdown.is_shutting_down:
+            try:
+                await asyncio.sleep(interval_min * 60)
+                if shutdown.is_shutting_down:
+                    break
+                await run_audit_and_notify(
+                    notifier=tg_notifier,
+                    log_path=log_path,
+                    window_minutes=interval_min,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("periodic_missed_signal_audit.error")
+
     # Start periodic tasks.
     health_task = asyncio.create_task(_periodic_health())
     background_tasks.add(health_task)
@@ -974,6 +1000,10 @@ async def main() -> None:
     reverse_reconcile_task = asyncio.create_task(_periodic_reverse_reconciliation())
     background_tasks.add(reverse_reconcile_task)
     reverse_reconcile_task.add_done_callback(background_tasks.discard)
+
+    missed_signal_task = asyncio.create_task(_periodic_missed_signal_audit())
+    background_tasks.add(missed_signal_task)
+    missed_signal_task.add_done_callback(background_tasks.discard)
 
     # ---------------------------------------------------------------
     # 15. Run forever

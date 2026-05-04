@@ -208,6 +208,17 @@ class ReportingSettings(BaseModel):
     audit_snapshot_every_n_trades: int = 10
 
 
+class MissedSignalAuditSettings(BaseModel):
+    """Periodic scan that flags signals from monitored channels which
+    never reached the operator's Telegram channel ("silent drops").
+
+    Tomas (client) 2026-05-04 explicit: "we have to monitor all
+    channels and all signals — we don't have to miss any signals."
+    Set ``interval_minutes`` = 0 to disable the audit entirely.
+    """
+    interval_minutes: int = 30
+
+
 class TpSlSettings(BaseModel):
     """TP / SL / hedge / trailing trigger types.
 
@@ -268,6 +279,9 @@ class AppSettings(BaseModel):
     capacity: CapacitySettings = Field(default_factory=CapacitySettings)
     auto_sl: AutoSLSettings = Field(default_factory=AutoSLSettings)
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
+    missed_signal_audit: MissedSignalAuditSettings = Field(
+        default_factory=MissedSignalAuditSettings,
+    )
     tp_sl: TpSlSettings = Field(default_factory=TpSlSettings)
     telegram_groups: List[TelegramGroup] = Field(default_factory=list)
 
