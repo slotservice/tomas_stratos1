@@ -173,6 +173,21 @@ _STATUS_UPDATE_PATTERNS = [
         r"\b(?:trade|position)\s+update\b",
         re.IGNORECASE,
     ),
+    # AI Felix Crypto / similar: "#VETUSDT - Target 3 ✅",
+    # "#XAGUSDT - All Targets 💹", "#DYDXUSDT - Stop Loss ⛔️".
+    # The hashtag-symbol followed by a dash and one of
+    #   target N | all targets | stop loss
+    # with NOTHING but emoji/whitespace after (no colon, no price).
+    # The negative lookahead `(?!\s*[:=]|\s*\d)` ensures real
+    # signal lines like "#BTCUSDT - Stop loss: 60000" or
+    # "#FOO - Target 1: 0.5" are NOT flagged as status — those
+    # have a colon-or-digit after the keyword.
+    re.compile(
+        r"#\w+\s*[-–]\s*"
+        r"(?:target\s*\d+|all\s+targets?|stop[\s_-]*loss)\b"
+        r"(?!\s*[:=]|\s*\d)",
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -980,7 +995,15 @@ def parse_signal_detailed(
                     )
                 break
     if not symbol:
-        log.debug(
+        # INFO (was DEBUG) so the missed-signal audit can see this
+        # event in the file log and bin the chain as INTENTIONAL
+        # (chatter — no symbol = not a real signal). Without this,
+        # such chatter chains have only `message_received` as their
+        # last visible event and the audit miscategorises them as
+        # silent drops. 2026-05-04 audit revealed 84 chatter messages
+        # ("Payment screenshot", "Thank you 😊", "Ok") flagged as
+        # silent drops for this exact reason.
+        log.info(
             "signal_parse_no_symbol",
             channel_id=channel_id,
             channel_name=channel_name,
@@ -1026,7 +1049,12 @@ def parse_signal_detailed(
     # --- Direction ---
     direction = extract_direction(clean)
     if not direction:
-        log.debug(
+        # INFO (was DEBUG) — same rationale as no_symbol above. The
+        # missed-signal audit needs to see this event in the file
+        # log to correctly bin the chain as INTENTIONAL (chatter
+        # mentioning a symbol but no LONG/SHORT keyword = not a
+        # real signal).
+        log.info(
             "signal_parse_no_direction",
             symbol=symbol,
             channel_id=channel_id,

@@ -34,6 +34,12 @@ STATUS_MESSAGES = [
     "#THETA/USDT Entry 1 ✅\nAverage Entry Price: 0.2155 ✅",
     "#BTC/USDT Trade update — Entry 1 filled",
     "ETH Position Update — TP1 hit",
+    # 2026-05-04 AI Felix Crypto format
+    "#VETUSDT - Target 3 ✅\nProfit: 11.7245%\nIn: 1 hr 45 min",
+    "#XAGUSDT - All Targets 💹\nProfit: 27.3887%",
+    "#DYDXUSDT - Stop Loss ⛔️\nLoss: 19.1532%",
+    "#BTCUSDT - Target 1 ✅",
+    "#ETHUSDT - All Targets",
     "Position closed in profit",
     "TP1 hit, TP2 taken",
     "Stopped out at SL",
@@ -88,6 +94,18 @@ Targets:
 2) 1.99
 3) 2.04
 Stop Loss: 1.80""",
+    # 2026-05-04 negative case for the AI Felix pattern: a real
+    # signal that mentions "#BTCUSDT - Stop loss: 60000" must NOT
+    # be flagged as a status update because the colon + price after
+    # makes it clearly a signal line, not a status.
+    """#BTCUSDT - LONG
+Entry: 65000
+Target 1: 66000
+Target 2: 67500
+Stop loss: 60000""",
+    """#FOO - Target 1: 0.5
+- Target 2: 0.6
+- Stop loss: 0.4""",
 ]
 
 
