@@ -45,6 +45,18 @@ STATUS_MESSAGES = [
     "Stopped out at SL",
     "So far profit (334%)",
     "ETH stop hit, +12% gain",
+    # 2026-05-04 Whales of Investment Turkish break-even update.
+    # Verbatim from silent_drops.jsonl signal_id 31bc93d3.
+    "$**ORCA**** işlemine dair güncelleme: Stop seviyesi giriş "
+    "noktasına (başabaş) çekildi. **✅\n\nGiriş noktasından harika "
+    "bir tepki aldık, pozisyon şu an güzel bir kârda.\n**Hacmin "
+    "%50'sini tam şu an kapatıyor ve kârı realize ediyorum.** Kalan "
+    "kısmın stop seviyesini ise giriş fiyatına (sıfır noktasına) "
+    "çekiyorum. Artık sadece izliyoruz; bu işlemde bizim için zarar "
+    "ihtimali tamamen ortadan kalktı. 📊",
+    # Form variant: "yönelik" instead of "dair".
+    "$BTC işlemine yönelik güncelleme: TP1 alındı, kalan pozisyon "
+    "korunuyor.",
 ]
 
 

@@ -188,6 +188,20 @@ _STATUS_UPDATE_PATTERNS = [
         r"(?!\s*[:=]|\s*\d)",
         re.IGNORECASE,
     ),
+    # Turkish position-update header: "X işlemine dair güncelleme" /
+    # "X işlemine yönelik güncelleme" — literally "update regarding
+    # the X trade". Used by Whales of Investment (and likely other
+    # Turkish-language channels) to announce break-even moves and
+    # partial-close events on existing positions. Live incident
+    # 2026-05-04: $ORCA Turkish break-even update from Whales of
+    # Investment fell through the parser as `signal_parse_no_entry`
+    # and silent-dropped. Phrase is unambiguous — a new signal would
+    # never include "dair/yönelik güncelleme" ("regarding update"),
+    # which only describes an existing thing.
+    re.compile(
+        r"\bişlem\w*\s+(?:dair|yönelik)\s+güncelleme\b",
+        re.IGNORECASE,
+    ),
 ]
 
 
