@@ -537,6 +537,16 @@ class TelegramNotifier:
             else:
                 locked_pct = (entry - new_sl) / entry * 100.0
 
+        # Locked-profit in USDT terms (Tomas 2026-05-04 BABYUSDT
+        # screenshot: "Missing 🔒 Låst vinst: money (profit safe
+        # money)"). Computed as quantity × |new_sl - entry|. Operator
+        # wants to see the actual money amount the SL is locking in,
+        # not just the % from entry.
+        qty = trade.quantity or 0.0
+        locked_usdt: float = 0.0
+        if qty > 0 and entry and entry > 0 and new_sl:
+            locked_usdt = qty * (new_sl - entry) if direction == "LONG" else qty * (entry - new_sl)
+
         # Lines (only render trigger when we know it).
         trigger_line = (
             f"📍 Trigger: +{trigger_pct:.2f}% rörelse\n"
@@ -544,11 +554,13 @@ class TelegramNotifier:
             else ""
         )
         if locked_pct > 0:
-            locked_line = f"🔒 Låst vinst: +{locked_pct:.2f}% av entry"
+            money_str = f" / {locked_usdt:+.4f} USDT" if qty > 0 else ""
+            locked_line = f"🔒 Låst vinst: +{locked_pct:.2f}% av entry{money_str}"
         elif locked_pct == 0:
             locked_line = "🟰 Låst vinst: 0.00% (breakeven)"
         else:
-            locked_line = f"🟥 Förlustbegränsning: {locked_pct:.2f}% av entry"
+            money_str = f" / {locked_usdt:+.4f} USDT" if qty > 0 else ""
+            locked_line = f"🟥 Förlustbegränsning: {locked_pct:.2f}% av entry{money_str}"
 
         text = (
             f"{header}\n"

@@ -1157,12 +1157,15 @@
   {
     "idx": 83,
     "snippet": "📈 LONG #TAG/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.00",
-    "reason": "no_tps",
+    "reason": "ok",
     "symbol": "TAGUSDT",
     "direction": "LONG",
-    "tps": [],
+    "tps": [
+      0.00125,
+      0.00129
+    ],
     "sl": 0.00117,
-    "has_signal": false
+    "has_signal": true
   },
   {
     "idx": 84,
@@ -1233,12 +1236,15 @@
   {
     "idx": 89,
     "snippet": "📈 LONG #BABY/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.0",
-    "reason": "no_tps",
+    "reason": "ok",
     "symbol": "BABYUSDT",
     "direction": "LONG",
-    "tps": [],
+    "tps": [
+      0.0286,
+      0.0295
+    ],
     "sl": 0.027,
-    "has_signal": false
+    "has_signal": true
   },
   {
     "idx": 90,
@@ -2454,12 +2460,15 @@
   {
     "idx": 176,
     "snippet": "📈 LONG #TAG/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.00",
-    "reason": "no_tps",
+    "reason": "ok",
     "symbol": "TAGUSDT",
     "direction": "LONG",
-    "tps": [],
+    "tps": [
+      0.00125,
+      0.00129
+    ],
     "sl": 0.00117,
-    "has_signal": false
+    "has_signal": true
   },
   {
     "idx": 177,
@@ -2558,12 +2567,15 @@
   {
     "idx": 184,
     "snippet": "📈 LONG #BABY/USDT |  | Leverage : 20x - 75x |  | ✔️  ENTRY PRICE 0.0",
-    "reason": "no_tps",
+    "reason": "ok",
     "symbol": "BABYUSDT",
     "direction": "LONG",
-    "tps": [],
+    "tps": [
+      0.0286,
+      0.0295
+    ],
     "sl": 0.027,
-    "has_signal": false
+    "has_signal": true
   },
   {
     "idx": 185,

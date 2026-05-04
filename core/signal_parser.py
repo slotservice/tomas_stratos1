@@ -271,12 +271,27 @@ _ENTRY_PATTERNS = [
     # pattern. Live BTC incident from #CryptoPasta where the bot
     # blocked "Entre saknas" while the source signal had a valid
     # entry range.
+    #
+    # 2026-05-04 GALA fix: added "range" to the (entry|entries)
+    # subgroup so "Entry Range: 0.003194 - 0.003120" matches. Pure
+    # additive — same logic as "between" above.
+    #
+    # 2026-05-04 LTC fix: append both `(?=\D|$)` and `(?!\s*%)` to
+    # the range-second-price capture. The first ensures the captured
+    # digits end at a non-digit position (prevents the greedy regex
+    # from backtracking to a shorter price like "10" when the real
+    # text is "100"). The second rejects price-N% allocation suffixes
+    # where N is meant as a percentage, not a range upper bound.
+    # Combined: "Buy : 55.79 - 100%" no longer parses as range
+    # "55.79 to 100" -> midpoint 77.895; entry resolves to 55.79.
+    # Real price ranges like "0.0668 - 0.0689" still match because
+    # the next char after the second price is whitespace/end (\D).
     re.compile(
-        r"(?:(?:entry|entries)\s*(?:zone|price|area|orders?|targets?|between)?|"
+        r"(?:(?:entry|entries)\s*(?:zone|price|area|orders?|targets?|between|range)?|"
         r"buy(?:\s*(?:zone|price|area|range|at|around|@))?|"
         r"open|limit|market\s*(?:buy|entry))"
         r"[^\S\n]*[:=@]?[^\S\n]*-?[^\S\n]*\(?[^\S\n]*"
-        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r")?[^\S\n]*\)?",
+        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r"(?=\D|$)(?!\s*%))?[^\S\n]*\)?",
         re.IGNORECASE,
     ),
     # Standalone "Entry 65000" without colon
@@ -736,13 +751,19 @@ def extract_prices(text: str) -> dict:
             # without breaking real bare-price lines. The optional
             # parenthetical "(Close 50%)" still parses via the
             # earlier alternation.
+            #
+            # 2026-05-04 TAG fix: optional `(?:tp\d?|t\d?|target)\s*\W*`
+            # prefix before the price lets "TP🟢0.001970" parse — TP
+            # immediately followed by an emoji + price with NO numeric
+            # index (CoinAura TAG signal format).
             tp_line_re = re.compile(
-                r"^\s*\W*(?:\d{1,2}\s*[)\.\:\-]\s+)?"
+                r"^\s*\W*(?:tp\d?|t\d?|target)?\s*\W*"
+                r"(?:\d{1,2}\s*[)\.\:\-]\s+)?"
                 + _PRICE_RE
                 + r"(?:\s*\([^)]*\))?"
                 + r"(?:\s*[-–][^\d\n]*\d+(?:\.\d+)?\s*%?)?"
                 + r"\s*\W*$",
-                re.MULTILINE,
+                re.MULTILINE | re.IGNORECASE,
             )
             idx = 0
             for m in tp_line_re.finditer(block):
