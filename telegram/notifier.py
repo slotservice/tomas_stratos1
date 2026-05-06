@@ -1445,15 +1445,15 @@ class TelegramNotifier:
             f"\n"
             f"{qty_line}\n"
             f"\n"
-            f"🔑 Order-ID BOT: {trade.id}\n"
-            f"🔑 Order-ID Bybit: {bybit_ids}\n"
-            f"\n"
             f"✅ Uppdaterad via Market\n"
             f"✅ Post-Only: false\n"
             f"✅ Reduce-Only: true\n"
             f"\n"
             f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
-            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång"
+            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång\n"
+            f"\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
@@ -1515,15 +1515,15 @@ class TelegramNotifier:
             f"\n"
             f"💵 Skyddad kvantitet: {quantity} (100% av positionen)\n"
             f"\n"
-            f"🔑 Order-ID BOT: {trade.id}\n"
-            f"🔑 Order-ID Bybit: {bybit_ids}\n"
-            f"\n"
             f"✅ Uppdaterad via Market\n"
             f"✅ Post-Only: false\n"
             f"✅ Reduce-Only: true\n"
             f"\n"
             f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
-            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång"
+            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång\n"
+            f"\n"
+            f"🔑 Order-ID BOT: {trade.id}\n"
+            f"🔑 Order-ID Bybit: {bybit_ids}"
         )
         return await self._send_notify(text)
 
