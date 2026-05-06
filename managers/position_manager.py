@@ -2450,12 +2450,19 @@ class PositionManager:
                 if hedge_pnl_pct is not None else "?"
             )
             pnl_lev_str = (
-                f"{hedge_pnl_pct_lev:+.2f} % (med x{hedge_leverage:g} hävstång)"
+                f"{hedge_pnl_pct_lev:+.2f} %"
                 if hedge_pnl_pct_lev is not None else "?"
             )
             pnl_usdt_str = (
                 f"{hedge_pnl_usdt:+.4f} USDT"
                 if hedge_pnl_usdt is not None else "?"
+            )
+            # Tomas 2026-05-07: leverage value belongs IN the label,
+            # not duplicated in trailing parens. Renders as
+            # "📊 Resultat (med x7.6 hävstång): +1.86 %".
+            lev_label = (
+                f"med x{hedge_leverage:g} hävstång"
+                if hedge_leverage else "med hävstång"
             )
             await self._safe_notify(
                 f"🛡️ HEDGE STÄNGD\n"
@@ -2468,7 +2475,7 @@ class PositionManager:
                 f"💥 Exit: {exit_price}\n"
                 f"💵 Stängd kvantitet: {hedge_qty}\n"
                 f"📊 Resultat (pris): {pnl_str}\n"
-                f"📊 Resultat (med hävstång): {pnl_lev_str}\n"
+                f"📊 Resultat ({lev_label}): {pnl_lev_str}\n"
                 f"💰 Resultat: {pnl_usdt_str}\n"
                 f"\n"
                 f"📍 Skäl: {reason_label}\n"
@@ -2534,6 +2541,11 @@ class PositionManager:
         result_pct = tp_pct * leverage
         slice_margin = (trade.margin or 0.0) * (closed_pct / 100.0)
         result_usdt = slice_margin * (result_pct / 100.0)
+        # Tomas 2026-05-07: TAKE PROFIT N TAGEN message renders a
+        # cumulative "Låst total" line — running sum of every TP slice
+        # USDT collected on this trade so far. Increment BEFORE the
+        # notify call so the message includes the just-filled slice.
+        trade.realized_pnl_usdt_total += result_usdt
 
         try:
             await self._notifier.take_profit_hit(
@@ -2545,6 +2557,7 @@ class PositionManager:
                 closed_pct=closed_pct,
                 result_pct=result_pct,
                 result_usdt=result_usdt,
+                cumulative_usdt=trade.realized_pnl_usdt_total,
             )
             trade.tp_hits.append(trigger_price)
             # Record as pending close reason so if this fill takes the

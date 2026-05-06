@@ -39,6 +39,7 @@ class _FakeTrade:
     margin: float = 10.0
     sl_price: Optional[float] = None
     tp_hits: list = field(default_factory=list)
+    realized_pnl_usdt_total: float = 0.0
     tp_order_ids: list = field(default_factory=list)
     state: object = MagicMock(value="POSITION_OPEN")
     hedge_trade_id: Optional[int] = None

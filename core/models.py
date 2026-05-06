@@ -413,6 +413,11 @@ class Trade:
 
     # --- TP / SL tracking ---
     tp_hits: List[float] = field(default_factory=list)
+    # Cumulative realized PnL (USDT) across every TP slice that has
+    # filled on this trade. Incremented in _notify_tp_filled at the
+    # moment we emit TAKE PROFIT N TAGEN. In-memory only — clean_start
+    # closes the trade before any restart so persistence isn't needed.
+    realized_pnl_usdt_total: float = 0.0
     sl_price: Optional[float] = None
     be_price: Optional[float] = None
     trailing_sl: Optional[float] = None

@@ -554,8 +554,11 @@ class TelegramNotifier:
             else ""
         )
         if locked_pct > 0:
-            money_str = f" / {locked_usdt:+.4f} USDT" if qty > 0 else ""
-            locked_line = f"🔒 Låst vinst: +{locked_pct:.2f}% av entry{money_str}"
+            # Two-line format (Tomas 2026-05-07): % and USDT on
+            # separate 🔒 lines so each value is unambiguous.
+            locked_line = f"🔒 Låst vinst: +{locked_pct:.2f}% av entry"
+            if qty > 0:
+                locked_line += f"\n🔒 Låst vinst: {locked_usdt:+.4f} USDT"
         elif locked_pct == 0:
             locked_line = "🟰 Låst vinst: 0.00% (breakeven)"
         else:
@@ -1256,6 +1259,7 @@ class TelegramNotifier:
         closed_pct: float,
         result_pct: float,
         result_usdt: float,
+        cumulative_usdt: float = 0.0,
     ) -> str:
         """TAKE PROFIT {N} TAGEN — per-TP partial-close notification.
 
@@ -1295,13 +1299,27 @@ class TelegramNotifier:
         # Client 2026-04-29: TP-TAGEN message must also show the SL
         # line so the operator sees the full contract context — even
         # though SL hasn't fired yet, it tells them where the floor is.
+        # Tomas 2026-05-07: when the SL has been cascade-moved to a TP
+        # price level (locked profit), annotate "(TPn, låst vinst)"
+        # instead of just the percentage so it's obvious the SL is no
+        # longer at the original auto-SL.
         sl = trade.sl_price or (getattr(signal, "sl", None) if signal else None)
         if sl and entry and entry > 0:
             if signal and signal.direction == "LONG":
                 sl_pct = (sl - entry) / entry * 100.0
             else:
                 sl_pct = (entry - sl) / entry * 100.0
-            sl_line = f"🚩 SL: {sl} ({_pct(sl_pct)})"
+            tp_locked_idx = None
+            for i, tp in enumerate(all_tps, start=1):
+                if not tp:
+                    continue
+                if abs(tp - sl) / max(abs(tp), 1e-12) < 1e-4:
+                    tp_locked_idx = i
+                    break
+            if tp_locked_idx is not None:
+                sl_line = f"🚩 SL: {sl} (TP{tp_locked_idx}, låst vinst)"
+            else:
+                sl_line = f"🚩 SL: {sl} ({_pct(sl_pct)})"
         elif sl:
             sl_line = f"🚩 SL: {sl}"
         else:
@@ -1325,8 +1343,9 @@ class TelegramNotifier:
         text += (
             f"\n"
             f"💵 Stängd kvantitet: {closed_qty} ({closed_pct:.1f}% av positionen)\n"
-            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
-            f"💰 Resultat: {_pnl_sign(result_usdt)} USDT\n"
+            f"🔒 Låst vinst: {_pct(result_pct)} med hävstång\n"
+            f"🔒 Låst vinst: {_pnl_sign(result_usdt)} USDT\n"
+            f"🔒 Låst total: {cumulative_usdt:+.4f} USDT\n"
             f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
