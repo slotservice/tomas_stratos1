@@ -2732,6 +2732,27 @@ class PositionManager:
             reason=reason, state=trade.state.value,
         )
 
+        # Hedge-cleanup checkpoint #3 (Tomas 2026-05-07): once the SL
+        # is at-or-beyond breakeven the position can no longer take a
+        # loss, so the pre-armed hedge conditional becomes redundant
+        # — and worse, an unwanted wick below entry would still fire
+        # it. Cancel here. cancel_pre_armed is a no-op when no
+        # conditional is armed (already fired or never placed) and
+        # leaves an already-active hedge child trade alone (§8 spec
+        # — Bybit owns hedge close decisions).
+        sl_at_be_or_profit = (
+            (direction == "LONG" and trade.sl_price >= avg_entry)
+            or (direction == "SHORT" and trade.sl_price <= avg_entry)
+        )
+        if sl_at_be_or_profit and trade.hedge_conditional_order_id:
+            try:
+                await self._hedge_mgr.cancel_pre_armed(trade)
+            except Exception:
+                log.exception(
+                    "trade.sl_moved.hedge_pre_arm_cancel_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
+
         try:
             await self._db.update_trade(
                 int(trade.id),
