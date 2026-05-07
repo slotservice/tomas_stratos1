@@ -17,10 +17,6 @@
 #
 # Example (DO NOT use these literally — they are illustrative):
 #
-#   [SHIB]
-#   rename_to = "1000SHIBUSDT"
-#   note      = "Bybit lists 1000SHIB instead of SHIB"
-#
 #   [TAG]
 #   skip = true
 #   note = "Checked 2026-05-03 — not on Bybit perpetuals"
@@ -28,3 +24,11 @@
 #   [BTC]
 #   note = "Operator: high-conviction symbol, watch closely"
 # ============================================================
+
+# Tomas 2026-05-07: signals say #1000SHIBUSDT but Bybit's perpetual
+# is listed as SHIB1000USDT (search for "SHIB" in the Bybit UI to
+# confirm — only SHIB1000USDT and SHIB1000USDC are returned, no
+# 1000SHIB-prefixed pairs). Rename so orders go to the correct symbol.
+[1000SHIB]
+rename_to = "SHIB1000USDT"
+note = "Bybit perp is SHIB1000USDT (suffix), not 1000SHIBUSDT (prefix)"

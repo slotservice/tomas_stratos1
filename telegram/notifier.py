@@ -578,6 +578,7 @@ class TelegramNotifier:
             f"{locked_line}\n"
             f"\n"
             f"📍 Trigger-typ: LastPrice (Bybit-bekräftad)\n"
+            f"\n"
             f"🔑 Order-ID BOT: {trade.id}"
         )
         return await self._send_notify(text)
@@ -1244,6 +1245,7 @@ class TelegramNotifier:
             f"📊 Resultat (prisrörelse): {_pct(result_pct_total)}\n"
             f"📊 Resultat (med hävstång x{leverage}): {_pct(result_pct_leveraged)}\n"
             f"💰 Resultat (USDT, inkl. hävstång/notional): {_pnl_sign(result_usdt_total)} USDT\n"
+            f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
         )
