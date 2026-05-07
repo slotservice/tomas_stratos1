@@ -80,6 +80,18 @@ class ChannelStats:
     blocked_duplicate: int = 0
     blocked_other: int = 0
     invalid_signals: int = 0
+    # Signal-idea attribution (Tomas 2026-05-08): same idea = same
+    # symbol+direction+entry within 5% during the trade's life.
+    # Channels that send the same idea ALL get credited with the
+    # trade's PnL — not just the dedup-race winner. Lets us tell apart
+    # "fastest with good signal", "late but correct", and "first with
+    # worse signal that blocked others".
+    attributed_pnl_usdt: float = 0.0
+    attributed_wins: int = 0
+    attributed_losses: int = 0
+    fastest_count: int = 0           # closed trades this channel opened
+    late_but_correct_count: int = 0  # closed trades it was blocked on AND profitable
+    blocking_with_loss_count: int = 0  # losers it opened while ≥1 other channel was dedup-blocked
     verdict: str = "NO SIGNALS"
     verdict_reason: str = ""
 
@@ -87,6 +99,11 @@ class ChannelStats:
     def win_rate(self) -> float:
         total = self.wins + self.losses
         return (self.wins / total) if total else 0.0
+
+    @property
+    def attributed_win_rate(self) -> float:
+        total = self.attributed_wins + self.attributed_losses
+        return (self.attributed_wins / total) if total else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -209,11 +226,13 @@ class GroupAnalysisReporter:
                 configured=True,
             )
 
-        # Pull signal rows in window.
+        # Pull signal rows in window with the fields needed for
+        # idea-matching (symbol/direction/entry/received_at).
         try:
             cur = await self._db._conn.execute(
                 """
-                SELECT id, source_channel_id, source_channel_name,
+                SELECT id, symbol, direction, entry_price,
+                       source_channel_id, source_channel_name,
                        received_at, status
                 FROM signals
                 WHERE received_at >= ? AND received_at <= ?
@@ -226,6 +245,8 @@ class GroupAnalysisReporter:
             signal_rows = []
 
         signal_ids: Dict[int, int] = {}  # signal_id -> channel_id
+        # Index signals by (symbol, direction) for fast idea matching.
+        signals_by_dir: Dict[Tuple[str, str], List[dict]] = {}
         for r in signal_rows:
             row = dict(r)
             sid = row.get("id")
@@ -246,19 +267,30 @@ class GroupAnalysisReporter:
             # signal-save time with status='blocked_duplicate'.
             if status == "blocked_duplicate":
                 stats[ch_id].blocked_duplicate += 1
+            # Index for idea matching.
+            sym = row.get("symbol") or ""
+            direction = row.get("direction") or ""
+            if sym and direction:
+                signals_by_dir.setdefault((sym, direction), []).append(row)
 
         if not signal_ids:
             return stats
 
-        # Pull trades for these signals.
+        # Pull trades for these signals. Join in symbol/direction from
+        # the originating signal so we can match idea candidates to the
+        # trade without a second query.
         try:
             placeholders = ",".join("?" for _ in signal_ids)
             cur = await self._db._conn.execute(
                 f"""
-                SELECT id, signal_id, state, pnl_usdt, pnl_pct,
-                       reentry_count, close_reason
-                FROM trades
-                WHERE signal_id IN ({placeholders})
+                SELECT t.id, t.signal_id, t.state, t.avg_entry,
+                       t.pnl_usdt, t.pnl_pct, t.reentry_count,
+                       t.close_reason, t.created_at, t.closed_at,
+                       s.symbol AS symbol, s.direction AS direction,
+                       s.entry_price AS signal_entry
+                FROM trades t
+                JOIN signals s ON t.signal_id = s.id
+                WHERE t.signal_id IN ({placeholders})
                 """,
                 tuple(signal_ids.keys()),
             )
@@ -278,10 +310,11 @@ class GroupAnalysisReporter:
                 continue
             cs.trades_count += 1
             state = (row.get("state") or "").upper()
+            pnl = float(row.get("pnl_usdt") or 0)
             if state == "CLOSED":
                 cs.closed_count += 1
-                pnl = float(row.get("pnl_usdt") or 0)
                 cs.net_pnl_usdt += pnl
+                cs.fastest_count += 1
                 if pnl > 0:
                     cs.wins += 1
                     cs.max_profit_usdt = max(cs.max_profit_usdt, pnl)
@@ -297,7 +330,100 @@ class GroupAnalysisReporter:
             if reason in ("error", "invalid"):
                 cs.invalid_signals += 1
 
+            # ----- Signal-idea attribution (Tomas 2026-05-08) -----
+            # Find every signal sent during this trade's life that
+            # would have qualified as the same idea. Credit the
+            # trade's PnL to ALL contributing channels, not just the
+            # dedup-race winner.
+            if state != "CLOSED":
+                continue
+            symbol = row.get("symbol") or ""
+            direction = row.get("direction") or ""
+            if not symbol or not direction:
+                continue
+            avg_entry = float(
+                row.get("avg_entry") or row.get("signal_entry") or 0
+            )
+            opened_at = row.get("created_at") or ""
+            closed_at = row.get("closed_at") or end_iso
+            idea_signals = self._find_idea_signals(
+                signals_by_dir.get((symbol, direction), []),
+                opening_signal_id=sid,
+                avg_entry=avg_entry,
+                opened_at=opened_at,
+                closed_at=closed_at,
+            )
+            # One credit per channel per trade (a channel that sent
+            # three blocked dups for the same trade is still one
+            # contribution).
+            credited_channels: set = set()
+            for sig in idea_signals:
+                sig_ch = sig.get("source_channel_id") or 0
+                if sig_ch in credited_channels:
+                    continue
+                credited_channels.add(sig_ch)
+                if sig_ch not in stats:
+                    stats[sig_ch] = ChannelStats(
+                        channel_id=sig_ch,
+                        channel_name=sig.get("source_channel_name") or "?",
+                        configured=False,
+                    )
+                target = stats[sig_ch]
+                target.attributed_pnl_usdt += pnl
+                if pnl > 0:
+                    target.attributed_wins += 1
+                    if sig_ch != ch_id:
+                        target.late_but_correct_count += 1
+                elif pnl < 0:
+                    target.attributed_losses += 1
+            # If the trade lost AND another channel was dedup-blocked,
+            # the opener gets a "blocking with loss" mark — they were
+            # first with a worse signal and blocked the others.
+            if pnl < 0 and len(credited_channels) > 1:
+                cs.blocking_with_loss_count += 1
+
         return stats
+
+    @staticmethod
+    def _find_idea_signals(
+        candidate_signals: List[dict],
+        opening_signal_id: Optional[int],
+        avg_entry: float,
+        opened_at: str,
+        closed_at: str,
+        entry_tolerance_pct: float = 5.0,
+    ) -> List[dict]:
+        """Return every signal in ``candidate_signals`` (already
+        filtered to one symbol+direction) that belongs to the same
+        signal idea as the trade described by the args.
+
+        Same idea = entry within ``entry_tolerance_pct`` (default 5%,
+        matches DuplicateDetector's threshold) AND received during the
+        trade's life. The opening signal is always included even if
+        its lifecycle marker is borderline.
+        """
+        matched: List[dict] = []
+        for s in candidate_signals:
+            sid = s.get("id")
+            if sid == opening_signal_id:
+                matched.append(s)
+                continue
+            # Entry tolerance.
+            sig_entry = float(s.get("entry_price") or 0)
+            if avg_entry > 0 and sig_entry > 0:
+                diff_pct = abs(sig_entry - avg_entry) / avg_entry * 100.0
+                if diff_pct > entry_tolerance_pct:
+                    continue
+            elif sig_entry <= 0:
+                continue
+            # Time window: signal received during the trade's life.
+            sig_received = s.get("received_at") or ""
+            if opened_at and sig_received and sig_received < opened_at:
+                continue
+            if closed_at and sig_received and sig_received > closed_at:
+                continue
+            matched.append(s)
+        return matched
 
     # ------------------------------------------------------------------
     # Classification
@@ -414,16 +540,19 @@ class GroupAnalysisReporter:
             sections.append("\n".join(lines))
 
         # Detailed table — top 20 by absolute net PnL (most signal in
-        # either direction).
+        # either direction). AttPnL = idea-attributed PnL: every trade
+        # this channel was either the opener of OR sent a same-idea
+        # signal during. Lets the operator see the channel's true
+        # signal quality, not just dedup-race wins.
         active = [s for s in stats.values() if s.signals_count > 0]
-        active.sort(key=lambda s: abs(s.net_pnl_usdt), reverse=True)
+        active.sort(key=lambda s: abs(s.attributed_pnl_usdt), reverse=True)
         if active:
             lines = [
                 "",
-                "📋 Per-grupp detaljer (sorterat efter |PnL|, top 20)",
-                "Bl = blockerade kopior (signaler som dubblerade en annan kanal)",
+                "📋 Per-grupp detaljer (sorterat efter |AttPnL|, top 20)",
+                "Bl = blockerade kopior. AttPnL = signal-idé-attribuerad PnL.",
                 f"{'Grupp':<28}{'Sig':>5} {'Bl':>4} {'Tr':>4} {'W':>3} "
-                f"{'L':>3} {'PnL':>9} {'WR%':>5}",
+                f"{'L':>3} {'PnL':>9} {'AttPnL':>9} {'WR%':>5}",
             ]
             for s in active[:20]:
                 wr_str = f"{s.win_rate*100:.0f}" if (s.wins + s.losses) else "-"
@@ -431,12 +560,68 @@ class GroupAnalysisReporter:
                     f"{s.channel_name[:27]:<28}"
                     f"{s.signals_count:>5} {s.blocked_duplicate:>4} "
                     f"{s.trades_count:>4} {s.wins:>3} {s.losses:>3} "
-                    f"{s.net_pnl_usdt:>+9.2f} {wr_str:>5}"
+                    f"{s.net_pnl_usdt:>+9.2f} "
+                    f"{s.attributed_pnl_usdt:>+9.2f} {wr_str:>5}"
                 )
             if len(active) > 20:
                 lines.append(f"... {len(active) - 20} fler aktiva grupper "
                              f"(se CSV)")
             sections.append("\n".join(lines))
+
+        # Signal-idea attribution (Tomas 2026-05-08): reveal which
+        # channels are FAST, which are LATE-BUT-CORRECT, and which are
+        # BLOCKING others by being first with a losing signal.
+        idea_active = [
+            s for s in stats.values()
+            if s.fastest_count
+            or s.late_but_correct_count
+            or s.blocking_with_loss_count
+        ]
+        if idea_active:
+            sub_lines: List[str] = ["", "🚀 SIGNAL IDÉ-ATTRIBUTION"]
+            fastest = sorted(
+                [s for s in idea_active if s.fastest_count > 0],
+                key=lambda s: -s.fastest_count,
+            )[:10]
+            if fastest:
+                sub_lines.append(
+                    "  Snabbast (öppnade trade som först-i-dedup):"
+                )
+                for s in fastest:
+                    sub_lines.append(
+                        f"    • {s.channel_name} — {s.fastest_count} trades "
+                        f"(AttPnL {s.attributed_pnl_usdt:+.2f} USDT)"
+                    )
+            late = sorted(
+                [s for s in idea_active if s.late_but_correct_count > 0],
+                key=lambda s: -s.late_but_correct_count,
+            )[:10]
+            if late:
+                sub_lines.append(
+                    "  Sen men korrekt (blockerad dup på vinnande trade):"
+                )
+                for s in late:
+                    sub_lines.append(
+                        f"    • {s.channel_name} — "
+                        f"{s.late_but_correct_count} idéer korrekt sent "
+                        f"(AttPnL {s.attributed_pnl_usdt:+.2f} USDT)"
+                    )
+            blockers = sorted(
+                [s for s in idea_active if s.blocking_with_loss_count > 0],
+                key=lambda s: -s.blocking_with_loss_count,
+            )[:10]
+            if blockers:
+                sub_lines.append(
+                    "  Blockerare (öppnade förlorare medan andra hade "
+                    "samma idé blockerad):"
+                )
+                for s in blockers:
+                    sub_lines.append(
+                        f"    • {s.channel_name} — "
+                        f"{s.blocking_with_loss_count} förlorare blockerade "
+                        f"andra kanaler"
+                    )
+            sections.append("\n".join(sub_lines))
 
         # Inactive groups (no signals/no trades) — short list.
         inactive = sorted(
@@ -480,6 +665,10 @@ class GroupAnalysisReporter:
                 "open_count", "wins", "losses", "win_rate",
                 "net_pnl_usdt", "max_profit_usdt", "max_loss_usdt",
                 "reentry_count", "blocked_duplicate", "invalid_signals",
+                "attributed_pnl_usdt", "attributed_wins",
+                "attributed_losses", "attributed_win_rate",
+                "fastest_count", "late_but_correct_count",
+                "blocking_with_loss_count",
                 "verdict", "verdict_reason",
             ])
             for s in sorted(stats.values(),
@@ -494,6 +683,11 @@ class GroupAnalysisReporter:
                     f"{s.max_loss_usdt:.4f}",
                     s.reentry_count, s.blocked_duplicate,
                     s.invalid_signals,
+                    f"{s.attributed_pnl_usdt:.4f}",
+                    s.attributed_wins, s.attributed_losses,
+                    f"{s.attributed_win_rate:.4f}",
+                    s.fastest_count, s.late_but_correct_count,
+                    s.blocking_with_loss_count,
                     s.verdict, s.verdict_reason,
                 ])
 
