@@ -1428,6 +1428,22 @@ class TelegramNotifier:
             f"(aktivering +{activation_pct:.2f}% − trailing {abs(distance_pct):.2f}%)"
         )
 
+        # Tomas 2026-05-07: the bottom two lines used to be the CURRENT
+        # unrealised PnL (`📊 Resultat: ...% / ...USDT`), but the
+        # last-price activation path passes unrealised_pnl=0.0 as a
+        # placeholder, so the operator saw "+0.00 USDT" right at
+        # activation. Replace with the GUARANTEED locked profit
+        # (leveraged % + USDT) computed from min_locked_pct + qty +
+        # entry — values we always have at activation time, regardless
+        # of which path fires the notify.
+        locked_pct_lev = min_locked_pct * leverage
+        locked_qty = quantity if quantity and quantity > 0 else (trade.quantity or 0.0)
+        locked_usdt = (
+            locked_qty * entry * (min_locked_pct / 100.0)
+            if entry and entry > 0 and locked_qty > 0
+            else 0.0
+        )
+
         text = (
             f"✅ Trailing Stop Aktiverad\n"
             f"🕒 Tid: {_ts()}\n"
@@ -1449,8 +1465,8 @@ class TelegramNotifier:
             f"✅ Post-Only: false\n"
             f"✅ Reduce-Only: true\n"
             f"\n"
-            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
-            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång\n"
+            f"🔒 Låst vinst: +{locked_pct_lev:.2f}% med hävstång\n"
+            f"🔒 Låst vinst: {locked_usdt:+.4f} USDT\n"
             f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
@@ -1492,13 +1508,31 @@ class TelegramNotifier:
         else:
             trailing_stop_pct = 0.0
 
-        # Result % at current mark price (with leverage, matching the
-        # rest of the bot's PnL display convention).
-        if entry and entry > 0 and mark_price > 0:
-            move_pct = (mark_price - entry) / entry * 100
-            result_pct = move_pct * leverage if direction == "LONG" else -move_pct * leverage
+        # Tomas 2026-05-07: show the GUARANTEED locked profit at the
+        # trailing-stop floor (leveraged % + USDT), not the current
+        # mark-price unrealised. The trailing has just moved, so the
+        # operator wants to see how much profit is now locked in if
+        # the trailing fires immediately. Use Bybit-confirmed
+        # trailing_stop_price (already mirrored from the position
+        # event's stopLoss field per the 2026-04-28 Bybit-verified
+        # rule) — never recompute locally.
+        if entry and entry > 0 and trailing_stop_price:
+            locked_pct_price = abs(trailing_stop_price - entry) / entry * 100.0
+            # Sign: profitable lock for both directions
+            if direction == "LONG":
+                locked_pct_price = (trailing_stop_price - entry) / entry * 100.0
+            else:
+                locked_pct_price = (entry - trailing_stop_price) / entry * 100.0
         else:
-            result_pct = 0.0
+            locked_pct_price = 0.0
+        locked_pct_lev = locked_pct_price * leverage
+        locked_qty = quantity if quantity and quantity > 0 else (trade.quantity or 0.0)
+        locked_usdt = (
+            locked_qty * abs(trailing_stop_price - entry)
+            * (1 if locked_pct_price >= 0 else -1)
+            if entry and entry > 0 and trailing_stop_price and locked_qty > 0
+            else 0.0
+        )
 
         text = (
             f"✅ Trailing Stop uppdaterad\n"
@@ -1519,8 +1553,8 @@ class TelegramNotifier:
             f"✅ Post-Only: false\n"
             f"✅ Reduce-Only: true\n"
             f"\n"
-            f"📊 Resultat: {_pct(result_pct)} med hävstång\n"
-            f"📊 Resultat: {_pnl_sign(unrealised_pnl)} USDT inkl. hävstång\n"
+            f"🔒 Låst vinst: {locked_pct_lev:+.2f}% med hävstång\n"
+            f"🔒 Låst vinst: {locked_usdt:+.4f} USDT\n"
             f"\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
