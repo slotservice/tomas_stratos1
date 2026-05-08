@@ -3334,6 +3334,19 @@ class PositionManager:
             return
 
         trade.trailing_activated_notified = True
+        # Tomas 2026-05-08 GALAUSDT 947: seed last_trailing_stop_price
+        # with the bot's known SL so the next position event that
+        # arrives with the SAME stopLoss is recognised as "no move"
+        # rather than a phantom trailing update. Without this the
+        # last-price activation path leaves last_trailing_stop_price
+        # at None, _maybe_notify_trailing_updated treats the first
+        # stopLoss reading as a movement, and the operator sees a
+        # negative locked-profit Trailing Stop uppdaterad message
+        # because Bybit hasn't actually trailed yet. The mark-price
+        # path already seeds this field at the same point — bring
+        # the last-price path into parity.
+        if trade.sl_price and trade.last_trailing_stop_price is None:
+            trade.last_trailing_stop_price = trade.sl_price
         log.info(
             "trade.trailing_activated_via_last",
             trade_id=trade.id, symbol=trade.signal.symbol,

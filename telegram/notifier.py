@@ -51,17 +51,32 @@ def _chan(name: str) -> str:
 
     Converts e.g. "AiphaMint Signals" to "#AiphaMintSignals" so Telegram
     treats it as a clickable hashtag for history filtering.
+
+    Tomas 2026-05-08: when the listener has annotated a forward source
+    as "Receiving Channel (fwd: Source Channel)", split the receiving
+    name into a clickable hashtag and render the forward annotation
+    as readable text after it, so the operator sees
+    "#ReceivingChannel (fwd: Source Channel)" rather than the entire
+    string concatenated into one un-clickable hashtag like
+    "#ReceivingChannelfwdSourceChannel".
     """
     if not name:
         return "#Unknown"
+    fwd_suffix = ""
+    if " (fwd: " in name and name.rstrip().endswith(")"):
+        recv, _, fwd_part = name.partition(" (fwd: ")
+        fwd_source = fwd_part.rstrip().rstrip(")").strip()
+        if fwd_source:
+            fwd_suffix = f" (fwd: {fwd_source})"
+        name = recv
     # Strip # if already present, remove whitespace/special chars for hashtag.
     clean = name.lstrip("#").strip()
     # Telegram hashtags only allow alphanumerics and underscore.
     import re as _re
     hashtag = _re.sub(r"[^A-Za-z0-9_]", "", clean)
     if not hashtag:
-        return "#Unknown"
-    return f"#{hashtag}"
+        hashtag = "Unknown"
+    return f"#{hashtag}{fwd_suffix}"
 
 
 def _tp_lines(tp_list: list[float]) -> str:
@@ -509,7 +524,7 @@ class TelegramNotifier:
         # Header still carries the short reason label.
         label_map = {
             # Primary cascade (TP-driven)
-            "tp2_hit_sl_to_breakeven":      ("🟢 BREAK-EVEN aktiverad (TP2 träffad)", None),
+            "tp2_hit_sl_to_breakeven":      ("🟢 SL flyttad till BE (TP2 träffad)", None),
             "tp3_hit_sl_to_tp1":            ("🔼 SL flyttad till TP1 (TP3 träffad)", None),
             "tp4_hit_sl_to_tp2":            ("🔼 SL flyttad till TP2 (TP4 träffad)", None),
             "tp5_hit_sl_to_tp3":            ("🔼 SL flyttad till TP3 (TP5 träffad)", None),
