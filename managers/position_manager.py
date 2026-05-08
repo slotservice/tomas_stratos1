@@ -581,7 +581,7 @@ class PositionManager:
                             from telegram.notifier import _chan
                             chan = _chan(getattr(signal, "channel_name", ""))
                             await self._safe_notify(
-                                f"⚠️ SIGNAL AVVISAD (pris för långt från entry)\n"
+                                f"⚠️ Signal avvisad (pris för långt från entry)\n"
                                 f"📢 Från kanal: {chan}\n"
                                 f"📊 Symbol: #{symbol}\n"
                                 f"📈 Riktning: {direction}\n"
@@ -2026,7 +2026,7 @@ class PositionManager:
                     from telegram.notifier import _chan, _sym, _ts
                     chan = _chan(parent.signal.channel_name)
                     await self._safe_notify(
-                        f"❌ HEDGE OFÖRSVARAD (PROTECTION FAILED)\n"
+                        f"❌ Hedge oförsvarad (protection failed)\n"
                         f"🕒 Tid: {_ts()}\n"
                         f"📢 Från kanal: {chan}\n"
                         f"📊 Symbol: {_sym(symbol)}\n"
@@ -2100,7 +2100,7 @@ class PositionManager:
             leverage_val = parent.leverage or 0.0
             margin_val = parent.margin or 0.0
             await self._safe_notify(
-                f"🛡️ HEDGE AKTIVERAD (Bybit-conditional)\n"
+                f"🛡️ Hedge aktiverad (Bybit-conditional)\n"
                 f"🕒 Tid: {_ts()}\n"
                 f"📢 Från kanal: {chan}\n"
                 f"📊 Symbol: {_sym(symbol)}\n"
@@ -2495,7 +2495,7 @@ class PositionManager:
                 if hedge_leverage else "med hävstång"
             )
             await self._safe_notify(
-                f"🛡️ HEDGE STÄNGD\n"
+                f"🛡️ Hedge stängd\n"
                 f"🕒 Tid: {_ts()}\n"
                 f"📢 Från kanal: {chan}\n"
                 f"📊 Symbol: {_sym(symbol)}\n"
@@ -4138,7 +4138,7 @@ class PositionManager:
             if trade.signal else "#Unknown"
         )
         await self._safe_notify(
-            f"❌ TRADE AVBRUTEN\n"
+            f"❌ Trade avbruten\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {chan}\n"
             f"📊 Symbol: #{symbol}\n"

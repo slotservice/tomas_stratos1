@@ -1,12 +1,13 @@
 """
-_chan formatter — covers Tomas 2026-05-08 fix:
+_chan formatter tests.
 
-When the listener annotates a forward source (e.g. "DeFi Milion
-(fwd: Mastermind premium)"), the operator notification used to render
-"#DeFiMilionfwdMastermindpremium" — one un-clickable hashtag with
-"fwd" concatenated into it. The fix splits the receiving channel
-into a clickable hashtag and renders the forward annotation as
-readable text after it.
+Tomas 2026-05-08 (revised in same day): when the listener annotates a
+forward source as "Receiving Channel (fwd: Source Channel)", the
+operator only wants the receiving-channel hashtag in the
+notification — the "(fwd: ...)" annotation should be DROPPED. (An
+earlier same-day fix kept it as readable text, but Tomas reviewed
+the output and asked for it gone — bracketed/emoji-laden source
+names like "(fwd: COIN RISE [VIP] 💎)" cluttered messages.)
 """
 
 from __future__ import annotations
@@ -31,32 +32,38 @@ def test_chan_strips_existing_hash_prefix():
     assert _chan("#CoinAura") == "#CoinAura"
 
 
-def test_chan_keeps_fwd_source_as_readable_text():
+def test_chan_drops_fwd_suffix_entirely():
     assert (
         _chan("DeFi Milion (fwd: Mastermind premium)")
-        == "#DeFiMilion (fwd: Mastermind premium)"
+        == "#DeFiMilion"
     )
 
 
-def test_chan_fwd_with_spaces_preserved():
+def test_chan_drops_fwd_with_brackets_and_emoji():
+    """Tomas's literal example: source has brackets and emoji — drop
+    the whole annotation, keep only the receiving channel hashtag."""
+    assert (
+        _chan("CoinRise (fwd: COIN RISE [VIP] 💎)")
+        == "#CoinRise"
+    )
+
+
+def test_chan_drops_fwd_with_spaces_in_source():
     assert (
         _chan("Sweden Crypto (fwd: Sweden Crypto premium)")
-        == "#SwedenCrypto (fwd: Sweden Crypto premium)"
+        == "#SwedenCrypto"
     )
 
 
-def test_chan_fwd_with_emoji_in_source_kept():
-    """Forward source can contain emoji and special chars — keep
-    them in the readable suffix, only sanitize the hashtag part."""
+def test_chan_drops_fwd_with_emoji_in_source():
     assert (
         _chan("Crypto Possibility (fwd: VIP PREMIUM 99.9% 💯)")
-        == "#CryptoPossibility (fwd: VIP PREMIUM 99.9% 💯)"
+        == "#CryptoPossibility"
     )
 
 
-def test_chan_empty_fwd_source_falls_back_cleanly():
-    """Defensive: an empty forward source shouldn't produce a dangling
-    suffix — drop it and just hashtag the receiving channel."""
+def test_chan_drops_fwd_when_source_empty():
+    """Defensive: an empty forward source still drops cleanly."""
     assert _chan("Channel (fwd: )") == "#Channel"
 
 

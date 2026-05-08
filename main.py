@@ -887,7 +887,7 @@ async def main() -> None:
                             )
                             try:
                                 await tg_notifier._send_notify(
-                                    f"⚠️ OBEVAKAD POSITION PÅ BYBIT\n"
+                                    f"⚠️ Obevakad position på Bybit\n"
                                     f"📊 Symbol: #{sym}\n"
                                     f"📈 Riktning: {side}\n"
                                     f"💵 Storlek: {size}\n"

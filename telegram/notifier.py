@@ -52,22 +52,17 @@ def _chan(name: str) -> str:
     Converts e.g. "AiphaMint Signals" to "#AiphaMintSignals" so Telegram
     treats it as a clickable hashtag for history filtering.
 
-    Tomas 2026-05-08: when the listener has annotated a forward source
-    as "Receiving Channel (fwd: Source Channel)", split the receiving
-    name into a clickable hashtag and render the forward annotation
-    as readable text after it, so the operator sees
-    "#ReceivingChannel (fwd: Source Channel)" rather than the entire
-    string concatenated into one un-clickable hashtag like
-    "#ReceivingChannelfwdSourceChannel".
+    Tomas 2026-05-08 (revised): when the listener has annotated a
+    forward source as "Receiving Channel (fwd: Source Channel)",
+    DROP the "(fwd: ...)" suffix entirely. The operator only wants
+    the receiving channel hashtag — the forward source clutters
+    notifications with bracketed text, emoji, etc. that the
+    receiving-channel hashtag doesn't need.
     """
     if not name:
         return "#Unknown"
-    fwd_suffix = ""
     if " (fwd: " in name and name.rstrip().endswith(")"):
-        recv, _, fwd_part = name.partition(" (fwd: ")
-        fwd_source = fwd_part.rstrip().rstrip(")").strip()
-        if fwd_source:
-            fwd_suffix = f" (fwd: {fwd_source})"
+        recv, _, _fwd_part = name.partition(" (fwd: ")
         name = recv
     # Strip # if already present, remove whitespace/special chars for hashtag.
     clean = name.lstrip("#").strip()
@@ -76,7 +71,7 @@ def _chan(name: str) -> str:
     hashtag = _re.sub(r"[^A-Za-z0-9_]", "", clean)
     if not hashtag:
         hashtag = "Unknown"
-    return f"#{hashtag}{fwd_suffix}"
+    return f"#{hashtag}"
 
 
 def _tp_lines(tp_list: list[float]) -> str:
@@ -298,7 +293,7 @@ class TelegramNotifier:
         ends at Riktning).
         """
         text = (
-            f"⚠️ SIGNAL BLOCKERAD (Dubblett ≤5%) ⚠️\n"
+            f"⚠️ Signal blockerad (dubblett ≤5%) ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -380,7 +375,7 @@ class TelegramNotifier:
     async def tp_sl_update_failed(self, signal, reason: str = "") -> str:
         """TP/SL could not be updated on an existing trade (>5% signal)."""
         text = (
-            f"❌ TP/SL UPPDATERING MISSLYCKADES ❌\n"
+            f"❌ TP/SL uppdatering misslyckades ❌\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -393,7 +388,7 @@ class TelegramNotifier:
                                  reason: str = "") -> str:
         """Entry order could not be placed on Bybit."""
         text = (
-            f"❌ ORDER MISSLYCKADES ❌\n"
+            f"❌ Order misslyckades ❌\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -536,7 +531,7 @@ class TelegramNotifier:
             "fallback_profit_lock_1_at_4pct": ("🔒 PROFIT-LOCK 1 (fallback)", 4.0),
             "fallback_profit_lock_2_at_5pct": ("🔒 PROFIT-LOCK 2 (fallback)", 5.0),
         }
-        header_data = label_map.get(reason, (f"🔼 SL FLYTTAD ({reason})", None))
+        header_data = label_map.get(reason, (f"🔼 SL flyttad ({reason})", None))
         header, trigger_pct = header_data
 
         old_sl_str = f"{old_sl}" if old_sl else "—"
@@ -614,7 +609,7 @@ class TelegramNotifier:
         """
         steps_str = ", ".join(failed_steps) if failed_steps else "okänd"
         text = (
-            f"<b>❌ POSITION OFÖRSVARAD (PROTECTION FAILED)</b>\n"
+            f"<b>❌ Position oförsvarad (protection failed)</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
             f"   Från kanal: {_chan(signal.channel_name)}\n"
@@ -624,7 +619,7 @@ class TelegramNotifier:
             f"   Misslyckade skydd: {steps_str}\n"
             f"   Åtgärd: positionen {action} (Market reduce-only).\n"
             f"\n"
-            f"   Ingen 'POSITION ÖPPNAD' skickas — boten rapporterar "
+            f"   Ingen 'Position öppnad' skickas — boten rapporterar "
             f"endast positioner som har verifierat skydd på Bybit."
         )
         return await self._send_notify(text)
@@ -739,7 +734,7 @@ class TelegramNotifier:
         signal = trade.signal
         lev_type = signal.signal_type
         text = (
-            f"✅ ENTRY 2 TAGEN\n"
+            f"✅ Entry 2 tagen\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -772,24 +767,24 @@ class TelegramNotifier:
         lev_type = signal.signal_type
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         text = (
-            f"✅ Sammanslagning av ENTRY 1 + ENTRY 2\n"
+            f"✅ Sammanslagning av Entry 1 + Entry 2\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Typ: {lev_type}\n"
             f"\n"
-            f"📌 ENTRY 1\n"
+            f"📌 Entry 1\n"
             f"💥 Entry: {entry1}\n"
             f"💵 Kvantitet: {qty1}\n"
             f"💰 IM: {im1:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"\n"
-            f"📌 ENTRY 2\n"
+            f"📌 Entry 2\n"
             f"💥 Entry: {entry2}\n"
             f"💵 Kvantitet: {qty2}\n"
             f"💰 IM: {im2:.2f} USDT (IM totalt: {im_total:.2f} USDT)\n"
             f"\n"
-            f"📌 SAMMANSATT POSITION\n"
+            f"📌 Sammansatt position\n"
             f"💥 Genomsnittligt Entry: {avg_entry}\n"
             f"💵 Total kvantitet: {total_qty}\n"
             f"💰 IM totalt: {im_total:.2f} USDT\n"
@@ -812,7 +807,7 @@ class TelegramNotifier:
         """Take-profit level hit."""
         signal = trade.signal
         text = (
-            f"<b>✅ TAKE PROFIT {tp_level} TAGEN</b>\n"
+            f"<b>✅ Take profit {tp_level} tagen</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
             f"   Kanal: {_chan(signal.channel_name)}\n"
@@ -886,7 +881,7 @@ class TelegramNotifier:
             )
 
         text = (
-            f"<b>📈 PYRAMID STEG {step_num} ({_pct(trigger_pct)})</b>\n"
+            f"<b>📈 Pyramid steg {step_num} ({_pct(trigger_pct)})</b>\n"
             f"\n"
             f"   Tid: {_ts()}\n"
             f"   Kanal: {_chan(signal.channel_name)}\n"
@@ -990,7 +985,7 @@ class TelegramNotifier:
         old_side = signal.direction
         new_side = "SHORT" if old_side == "LONG" else "LONG"
         text = (
-            f"🛡️ HEDGE / VÄNDNING AKTIVERAD\n"
+            f"🛡️ Hedge / vändning aktiverad\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1026,7 +1021,7 @@ class TelegramNotifier:
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         old_side = "SHORT" if signal.direction == "LONG" else "LONG"
         text = (
-            f"🛡️ HEDGE / VÄNDNING AVSLUTAD\n"
+            f"🛡️ Hedge / vändning avslutad\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1055,7 +1050,7 @@ class TelegramNotifier:
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         text = (
-            f"🛡️ HEDGE AVBRUTEN\n"
+            f"🛡️ Hedge avbruten\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
@@ -1075,7 +1070,7 @@ class TelegramNotifier:
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         text = (
-            f"🛡️ HEDGE NEKAD\n"
+            f"🛡️ Hedge nekad\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
@@ -1136,7 +1131,7 @@ class TelegramNotifier:
             sl_line = f"🚩 SL: {sl if sl else 'N/A'}"
 
         text = (
-            f"♻️ RE-ENTRY / ÅTERINTRÄDE AKTIVERAD\n"
+            f"♻️ Re-entry / återinträde aktiverad\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1172,7 +1167,7 @@ class TelegramNotifier:
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         leverage = trade.leverage if trade.leverage else 0.0
         text = (
-            f"♻️ RE-ENTRY / ÅTERINTRÄDE AVSLUTAD\n"
+            f"♻️ Re-entry / återinträde avslutad\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1200,7 +1195,7 @@ class TelegramNotifier:
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         text = (
-            f"⛔ RE-ENTRY AVSTÄNGT ({max_reentries}/{max_reentries} försök gjorda)\n"
+            f"⛔ Re-entry avstängt ({max_reentries}/{max_reentries} försök gjorda)\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1246,7 +1241,7 @@ class TelegramNotifier:
         leverage = trade.leverage or 1.0
         result_pct_leveraged = result_pct_total * leverage
         text = (
-            f"✅ POSITION STÄNGD{header_suffix}\n"
+            f"✅ Position stängd{header_suffix}\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
@@ -1343,7 +1338,7 @@ class TelegramNotifier:
             sl_line = ""
 
         text = (
-            f"✅ TAKE PROFIT {tp_level} TAGEN\n"
+            f"✅ Take profit {tp_level} tagen\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
