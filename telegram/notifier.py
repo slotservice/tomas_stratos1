@@ -1237,7 +1237,7 @@ class TelegramNotifier:
         signal = trade.signal
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
-        header_suffix = f"   by {close_source}" if close_source else ""
+        header_suffix = f" av {close_source}" if close_source else ""
         # Client 2026-04-30: ``result_pct_total`` is the RAW price
         # movement (signed for direction). The previous label said
         # "med hävstång" / "with leverage" which was wrong — value

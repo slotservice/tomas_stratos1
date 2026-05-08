@@ -65,20 +65,21 @@ def _pm() -> PositionManager:
 # _format_close_source mapping
 # --------------------------------------------------------------------------
 
-def test_format_close_source_stop_loss():
-    assert _format_close_source("stop_loss") == "stop loss"
+def test_format_close_source_stop_loss_no_history():
+    """Stop-loss fire on a trade that never moved its SL — bare 'SL'."""
+    assert _format_close_source("stop_loss") == "SL"
 
 
 def test_format_close_source_trailing_stop():
-    assert _format_close_source("trailing_stop") == "trailing stop"
+    assert _format_close_source("trailing_stop") == "Trailingstop"
 
 
 def test_format_close_source_liquidation():
-    assert _format_close_source("liquidation") == "liquidation"
+    assert _format_close_source("liquidation") == "likvidation"
 
 
 def test_format_close_source_external():
-    assert _format_close_source("external_close") == "external close"
+    assert _format_close_source("external_close") == "extern stängning"
 
 
 def test_format_close_source_tp_levels():
@@ -90,6 +91,62 @@ def test_format_close_source_tp_levels():
 
 def test_format_close_source_unknown_reason_passes_through():
     assert _format_close_source("something_weird") == "something_weird"
+
+
+# --------------------------------------------------------------------------
+# Granular SL labels (Tomas 2026-05-08): when the close reason is a
+# stop-loss fire, look at the trade's last SL movement to differentiate
+# which SL the price hit. Operator can tell apart a real loss-side SL
+# fire from a profit-locked SL fire.
+# --------------------------------------------------------------------------
+
+class _SLHistoryStub:
+    def __init__(self, last_reason):
+        self.sl_movement_history = (
+            [{"reason": last_reason}] if last_reason else []
+        )
+
+
+def test_format_close_source_stop_loss_at_be_via_tp2_cascade():
+    trade = _SLHistoryStub("tp2_hit_sl_to_breakeven")
+    assert _format_close_source("stop_loss", trade=trade) == "BE, SL"
+
+
+def test_format_close_source_stop_loss_at_tp1_via_tp3_cascade():
+    trade = _SLHistoryStub("tp3_hit_sl_to_tp1")
+    assert _format_close_source("stop_loss", trade=trade) == "TP1, SL"
+
+
+def test_format_close_source_stop_loss_at_tp4_via_tp6_cascade():
+    trade = _SLHistoryStub("tp6_hit_sl_to_tp4")
+    assert _format_close_source("stop_loss", trade=trade) == "TP4, SL"
+
+
+def test_format_close_source_stop_loss_at_be_via_fallback():
+    trade = _SLHistoryStub("fallback_be_buffer_at_2pct")
+    assert _format_close_source("stop_loss", trade=trade) == "BE, SL"
+
+
+def test_format_close_source_stop_loss_profitlock_4pct():
+    trade = _SLHistoryStub("fallback_profit_lock_1_at_4pct")
+    assert _format_close_source("stop_loss", trade=trade) == "Profitlock 4%"
+
+
+def test_format_close_source_stop_loss_profitlock_5pct():
+    trade = _SLHistoryStub("fallback_profit_lock_2_at_5pct")
+    assert _format_close_source("stop_loss", trade=trade) == "Profitlock 5%"
+
+
+def test_format_close_source_stop_loss_history_empty_falls_back_bare():
+    """Empty history (no SL moves) — bare 'SL' label."""
+    trade = _SLHistoryStub(None)
+    assert _format_close_source("stop_loss", trade=trade) == "SL"
+
+
+def test_format_close_source_trade_none_doesnt_crash():
+    """Defensive: passing trade=None is allowed (callers always have
+    the trade, but the param is Optional)."""
+    assert _format_close_source("stop_loss", trade=None) == "SL"
 
 
 # --------------------------------------------------------------------------

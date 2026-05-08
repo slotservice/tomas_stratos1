@@ -52,15 +52,17 @@ def _signal(direction="LONG", tps=None, sl=None, symbol="NILUSDT"):
 async def test_skips_tp_when_new_tps_below_entry_for_long():
     """The NIL trade 805 production scenario: existing LONG @ 0.09741,
     new signal has TPs at 0.0775/0.0815/0.086 (all below entry —
-    invalid for LONG). The SL @ 0.07 is on the correct side (below
-    entry) so it can still flow through.
+    invalid for LONG). The SL @ 0.097 is on the correct side AND
+    tighter than the existing 0.094, so it can still flow through.
 
     Result: Bybit gets only stop_loss in the update — never the
     invalid TP. No "TP must be above entry" rejection, no
     operator notification spam.
     """
     pm = _pm()
-    signal = _signal(direction="LONG", tps=[0.0775, 0.0815, 0.086], sl=0.07)
+    # SL 0.097 = above existing 0.094 (tighter for LONG) but still
+    # below entry 0.09741 (correct side).
+    signal = _signal(direction="LONG", tps=[0.0775, 0.0815, 0.086], sl=0.097)
     existing = {
         "id": 805,
         "entry_price": 0.09741,
@@ -72,17 +74,19 @@ async def test_skips_tp_when_new_tps_below_entry_for_long():
     pm._bybit.set_trading_stop.assert_awaited_once()
     kwargs = pm._bybit.set_trading_stop.await_args.kwargs
     assert "take_profit" not in kwargs
-    assert kwargs.get("stop_loss") == 0.07
+    assert kwargs.get("stop_loss") == 0.097
     pm._notifier.tp_sl_update_failed.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_skips_tp_when_new_tps_above_entry_for_short():
     """Mirror case for SHORT: TP must be below entry. New TPs above
-    entry are the wrong side. SL above entry IS the correct side for
-    SHORT so it stays in the update."""
+    entry are the wrong side. SL is on the correct side for SHORT
+    AND tighter than the existing 0.103, so it stays in the update."""
     pm = _pm()
-    signal = _signal(direction="SHORT", tps=[0.105, 0.110, 0.115], sl=0.130)
+    # SL 0.101 = below existing 0.103 (tighter for SHORT) but still
+    # above entry 0.100 (correct side).
+    signal = _signal(direction="SHORT", tps=[0.105, 0.110, 0.115], sl=0.101)
     existing = {
         "id": 900,
         "entry_price": 0.100,
@@ -94,8 +98,56 @@ async def test_skips_tp_when_new_tps_above_entry_for_short():
     pm._bybit.set_trading_stop.assert_awaited_once()
     kwargs = pm._bybit.set_trading_stop.await_args.kwargs
     assert "take_profit" not in kwargs
-    assert kwargs.get("stop_loss") == 0.130
+    assert kwargs.get("stop_loss") == 0.101
     pm._notifier.tp_sl_update_failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skips_sl_when_new_sl_loosens_existing_for_long():
+    """FIL/ONDO/EDU production scenario (Tomas 2026-05-08):
+    later same-direction signals propose a wider SL than the active
+    trade's existing SL. Pushing it would loosen protection. Skip
+    silently — operator should not see a MISSLYCKADES message."""
+    pm = _pm()
+    # LONG @ 0.100, existing SL 0.097 (3% below). New signal proposes
+    # SL 0.070 (30% below — much looser). TP 0.110 is otherwise valid.
+    signal = _signal(direction="LONG", tps=[0.110], sl=0.070)
+    existing = {
+        "id": 956,
+        "entry_price": 0.100,
+        "highest_tp_price": None,
+        "tp_list": None,
+        "sl_price": 0.097,
+    }
+    await pm._update_existing_trade(signal, existing)
+    # SL skipped (loosened); TP still valid.
+    pm._bybit.set_trading_stop.assert_awaited_once()
+    kwargs = pm._bybit.set_trading_stop.await_args.kwargs
+    assert "take_profit" in kwargs
+    assert kwargs["take_profit"] == 0.110
+    assert "stop_loss" not in kwargs
+    pm._notifier.tp_sl_update_failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skips_sl_when_new_sl_loosens_existing_for_short():
+    """Mirror case for SHORT: SL must be ABOVE entry; tighter = lower."""
+    pm = _pm()
+    # SHORT @ 0.100, existing SL 0.103. New signal SL 0.130 = looser.
+    signal = _signal(direction="SHORT", tps=[0.090], sl=0.130)
+    existing = {
+        "id": 957,
+        "entry_price": 0.100,
+        "highest_tp_price": None,
+        "tp_list": None,
+        "sl_price": 0.103,
+    }
+    await pm._update_existing_trade(signal, existing)
+    pm._bybit.set_trading_stop.assert_awaited_once()
+    kwargs = pm._bybit.set_trading_stop.await_args.kwargs
+    assert "take_profit" in kwargs
+    assert kwargs["take_profit"] == 0.090
+    assert "stop_loss" not in kwargs
 
 
 @pytest.mark.asyncio
@@ -148,10 +200,14 @@ async def test_skips_update_when_new_sl_above_entry_for_long():
 
 @pytest.mark.asyncio
 async def test_legitimate_update_still_goes_through():
-    """Signal with valid TPs (above entry for LONG) and valid SL
-    (below entry for LONG) should still update normally."""
+    """Signal with valid TPs (better than existing TP) and valid SL
+    (correct side for LONG AND tighter than existing) should still
+    update normally — no guard should block it."""
     pm = _pm()
-    signal = _signal(direction="LONG", tps=[0.110, 0.115, 0.120], sl=0.092)
+    # LONG @ 0.100, existing TP 0.105, existing SL 0.094.
+    # New TP 0.120 = better. New SL 0.097 = tighter (above 0.094,
+    # still below entry).
+    signal = _signal(direction="LONG", tps=[0.110, 0.115, 0.120], sl=0.097)
     existing = {
         "id": 820,
         "entry_price": 0.100,
@@ -163,7 +219,7 @@ async def test_legitimate_update_still_goes_through():
     pm._bybit.set_trading_stop.assert_awaited_once()
     kwargs = pm._bybit.set_trading_stop.await_args.kwargs
     assert kwargs["take_profit"] == 0.120
-    assert kwargs["stop_loss"] == 0.092
+    assert kwargs["stop_loss"] == 0.097
 
 
 @pytest.mark.asyncio

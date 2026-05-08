@@ -40,25 +40,55 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
-def _format_close_source(reason: str) -> str:
+def _format_close_source(reason: str, trade: Optional["Trade"] = None) -> str:
     """Map an internal close-reason string (set by Bybit's order-fill
     classifier) to the human-readable suffix shown in the
-    "POSITION CLOSED - X" Telegram header.
+    "POSITION STÄNGD av X" Telegram header.
+
+    Tomas 2026-05-08: when the close reason is a stop-loss fire,
+    look at the trade's last SL movement to differentiate which SL
+    the price hit — original auto-SL, BE move, TP-cascade slot, or
+    profit-lock fallback. The operator can then tell apart "took the
+    real loss" from "trailing locked profit and SL fired at a TPn
+    level". Labels are Swedish to match the rest of the operator
+    channel.
     """
     if reason == "stop_loss":
-        return "stop loss"
+        suffix = "SL"
+        if trade is not None:
+            history = getattr(trade, "sl_movement_history", None) or []
+            if history:
+                last = history[-1] or {}
+                move_reason = (last.get("reason") or "").lower()
+                if "tp2_hit_sl_to_breakeven" in move_reason:
+                    suffix = "BE, SL"
+                elif "tp3_hit_sl_to_tp1" in move_reason:
+                    suffix = "TP1, SL"
+                elif "tp4_hit_sl_to_tp2" in move_reason:
+                    suffix = "TP2, SL"
+                elif "tp5_hit_sl_to_tp3" in move_reason:
+                    suffix = "TP3, SL"
+                elif "tp6_hit_sl_to_tp4" in move_reason:
+                    suffix = "TP4, SL"
+                elif "fallback_be_buffer" in move_reason:
+                    suffix = "BE, SL"
+                elif "fallback_profit_lock_1" in move_reason:
+                    suffix = "Profitlock 4%"
+                elif "fallback_profit_lock_2" in move_reason:
+                    suffix = "Profitlock 5%"
+        return suffix
     if reason == "trailing_stop":
-        return "trailing stop"
+        return "Trailingstop"
     if reason == "liquidation":
-        return "liquidation"
+        return "likvidation"
     if reason == "external_close":
-        return "external close"
+        return "extern stängning"
     if reason and reason.startswith("tp_"):
         try:
             return f"TP{int(reason.split('_', 1)[1])}"
         except (IndexError, ValueError):
             return reason
-    return reason or "unknown"
+    return reason or "okänd"
 
 
 class PositionManager:
@@ -3532,7 +3562,7 @@ class PositionManager:
             try:
                 from telegram.notifier import _chan, _ts, _sym
                 await self._notifier._send_notify(
-                    f"⏰ HEDGE TIMEOUT — STÄNGD\n"
+                    f"⏰ Hedge timeout — stängd\n"
                     f"🕒 Tid: {_ts()}\n"
                     f"📢 Från kanal: {_chan(trade.signal.channel_name)}\n"
                     f"📊 Symbol: {_sym(symbol)}\n"
@@ -3720,7 +3750,7 @@ class PositionManager:
                 qty=qty_for_msg,
                 result_pct_total=pnl_pct if pnl_pct is not None else 0.0,
                 result_usdt_total=pnl_usdt if pnl_usdt is not None else 0.0,
-                close_source=_format_close_source(reason),
+                close_source=_format_close_source(reason, trade=trade),
             )
         except Exception:
             log.exception(
@@ -4372,6 +4402,29 @@ class PositionManager:
                     direction=direction,
                     new_sl=new_sl,
                     existing_entry=existing_entry,
+                )
+                sl_changed = False
+
+        # Tomas 2026-05-08: also refuse to LOOSEN the SL via a
+        # signal-update. _move_sl_to has the same backwards-guard for
+        # cascade / profit-lock paths; mirror it here so a late
+        # duplicate signal with a wider SL (e.g. FILUSDT 956: existing
+        # SHORT @ 1.1078 with SL ~1.14, new signal proposes SL 1.305
+        # = looser by 17%) is silently skipped instead of pushed to
+        # Bybit, rejected, and surfaced as ❌ TP/SL UPPDATERING
+        # MISSLYCKADES that the operator cannot act on.
+        if sl_changed and existing_sl and existing_sl > 0 and new_sl:
+            sl_loosened = (
+                (direction == "LONG" and new_sl < existing_sl)
+                or (direction == "SHORT" and new_sl > existing_sl)
+            )
+            if sl_loosened:
+                log.info(
+                    "trade.tp_sl_update_skipped_sl_loosened",
+                    trade_id=trade_id, symbol=symbol,
+                    direction=direction,
+                    new_sl=new_sl,
+                    existing_sl=existing_sl,
                 )
                 sl_changed = False
 
