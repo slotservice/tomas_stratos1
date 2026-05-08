@@ -4312,6 +4312,56 @@ class PositionManager:
             elif abs(new_sl - existing_sl) / max(existing_sl, 1e-9) >= 0.001:
                 sl_changed = True
 
+        # --- Direction-validity guard (Tomas 2026-05-08) ---
+        # Late same-direction signals from other channels can describe
+        # a setup where the entry has shifted 20+% from the active
+        # trade. The duplicate detector routes them here as "update",
+        # but the new TPs/SL only make sense for the new entry, not
+        # the active one. Pushing them to Bybit yields a guaranteed
+        # rejection ("TP must be above entry for LONG") and an
+        # ❌ TP/SL UPPDATERING MISSLYCKADES message that the operator
+        # cannot act on. Silently skip when the new value is on the
+        # wrong side of the active trade's entry. SL above entry for
+        # LONG (or below for SHORT) is also rejected here — those are
+        # locked-profit SL moves and they belong to the cascade /
+        # profit-lock paths in _move_sl_to, not to the
+        # signal-update path.
+        existing_entry_raw = existing_trade_row.get("entry_price")
+        try:
+            existing_entry = (
+                float(existing_entry_raw) if existing_entry_raw else 0.0
+            )
+        except (TypeError, ValueError):
+            existing_entry = 0.0
+        if tp_improved and existing_entry > 0 and new_best_tp:
+            tp_wrong_side = (
+                (direction == "LONG" and new_best_tp <= existing_entry)
+                or (direction == "SHORT" and new_best_tp >= existing_entry)
+            )
+            if tp_wrong_side:
+                log.info(
+                    "trade.tp_sl_update_skipped_tp_wrong_side",
+                    trade_id=trade_id, symbol=symbol,
+                    direction=direction,
+                    new_best_tp=new_best_tp,
+                    existing_entry=existing_entry,
+                )
+                tp_improved = False
+        if sl_changed and existing_entry > 0 and new_sl:
+            sl_wrong_side = (
+                (direction == "LONG" and new_sl >= existing_entry)
+                or (direction == "SHORT" and new_sl <= existing_entry)
+            )
+            if sl_wrong_side:
+                log.info(
+                    "trade.tp_sl_update_skipped_sl_wrong_side",
+                    trade_id=trade_id, symbol=symbol,
+                    direction=direction,
+                    new_sl=new_sl,
+                    existing_entry=existing_entry,
+                )
+                sl_changed = False
+
         if not tp_improved and not sl_changed:
             log.info(
                 "trade.tp_sl_update_skipped_no_improvement",
