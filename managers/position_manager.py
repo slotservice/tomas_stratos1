@@ -83,6 +83,8 @@ def _format_close_source(reason: str, trade: Optional["Trade"] = None) -> str:
         return "likvidation"
     if reason == "external_close":
         return "extern stängning"
+    if reason == "force_close":
+        return "-2% nödstängning"
     if reason and reason.startswith("tp_"):
         try:
             return f"TP{int(reason.split('_', 1)[1])}"
@@ -1873,10 +1875,24 @@ class PositionManager:
             # that reason when Bybit reports size=0 and call close_trade.
             await self._classify_bybit_close_fill(order_id, data)
 
-    async def _maybe_record_force_close_fill(self, order_id: str) -> None:
-        """Mark a trade as ORIGINAL_FORCE_CLOSED when its -2% Bybit
-        conditional fires. Audit-trail only — close_trade is still
-        the path that finalises PnL + Telegram.
+    async def _maybe_record_force_close_fill(
+        self, order_id: str, data: dict,
+    ) -> None:
+        """Record ORIGINAL_FORCE_CLOSED and drive the close bookkeeping
+        when the -2% Bybit conditional fires.
+
+        Tomas 2026-05-09 incident (trade 1080 QUSDT): the state
+        transition alone was insufficient — _classify_bybit_close_fill
+        was expected to handle the close, but its branches only match
+        StopLoss / TrailingStop / partial-TP stopOrderTypes. The -2%
+        emergency-close fires with stopOrderType="Stop" and order_id
+        NOT in tp_order_ids, so the classifier fell through silently.
+        The trade then stayed in _active_trades, kept being treated as
+        "open" by the duplicate-detector and the trailing-tick handler,
+        and poisoned every subsequent TP/SL update on the symbol with
+        "can not set tp/sl/ts for zero position" Bybit rejections.
+        253 of 278 force-close fires (91%) leaked this way before the
+        fix.
         """
         if not order_id:
             return
@@ -1895,6 +1911,35 @@ class PositionManager:
                     symbol=tr.signal.symbol if tr.signal else "",
                     order_id=order_id,
                 )
+                # Resolve the Bybit-reported exit price. avgPrice on a
+                # Filled WS event is the actual fill price; triggerPrice
+                # is the fallback if avgPrice is missing or unparseable.
+                exit_price = 0.0
+                try:
+                    exit_price = float(data.get("avgPrice") or 0)
+                except (TypeError, ValueError):
+                    exit_price = 0.0
+                if exit_price <= 0:
+                    try:
+                        exit_price = float(data.get("triggerPrice") or 0)
+                    except (TypeError, ValueError):
+                        exit_price = 0.0
+                # Drive the actual close: PnL, Telegram, DB transition
+                # to CLOSED, _active_trades eviction. close_trade has
+                # its own is_terminal guard so this is safe even if
+                # another path closed the trade first.
+                try:
+                    await self.close_trade(
+                        tr.id,
+                        reason="force_close",
+                        exit_price=exit_price,
+                    )
+                except Exception:
+                    log.exception(
+                        "trade.original_force_close.close_trade_failed",
+                        trade_id=tr.id,
+                        order_id=order_id,
+                    )
                 # Clear the order id — once it has fired, it's no
                 # longer a valid Bybit reference.
                 tr.original_force_close_order_id = None
@@ -3274,7 +3319,7 @@ class PositionManager:
             # bails if order_id doesn't match). Safe to call from
             # both paths.
             try:
-                await self._maybe_record_force_close_fill(order_id)
+                await self._maybe_record_force_close_fill(order_id, fill_view)
             except Exception:
                 log.exception(
                     "on_execution.force_close_record_failed",

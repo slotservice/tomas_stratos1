@@ -44,10 +44,17 @@ class _FakeTrade:
     state: object = MagicMock(value="POSITION_OPEN")
     hedge_trade_id: Optional[int] = None
     hedge_conditional_order_id: Optional[str] = None
+    original_force_close_order_id: Optional[str] = None
 
     @property
     def is_terminal(self) -> bool:
         return False
+
+    def transition(self, _new_state) -> None:
+        # No-op in tests; real Trade has a state-machine guard. The
+        # _maybe_record_force_close_fill path calls this before
+        # close_trade so it must exist on the stub.
+        return None
 
 
 def _pm() -> PositionManager:
@@ -56,6 +63,8 @@ def _pm() -> PositionManager:
     pm._tp_notified = set()
     pm._notifier = MagicMock()
     pm._notifier.take_profit_hit = AsyncMock()
+    pm._db = MagicMock()
+    pm._db.update_trade = AsyncMock()
     # Mock close_trade so we can assert it without running the full close path.
     pm.close_trade = AsyncMock()
     return pm
@@ -80,6 +89,12 @@ def test_format_close_source_liquidation():
 
 def test_format_close_source_external():
     assert _format_close_source("external_close") == "extern stängning"
+
+
+def test_format_close_source_force_close():
+    """Tomas 2026-05-09 incident: -2% emergency close needs its own
+    Swedish label so the operator sees what Bybit actually did."""
+    assert _format_close_source("force_close") == "-2% nödstängning"
 
 
 def test_format_close_source_tp_levels():
@@ -282,4 +297,55 @@ async def test_classifier_skips_when_no_matching_active_trade():
         "reduceOnly": True,
     })
     pm._notifier.take_profit_hit.assert_not_called()
+    pm.close_trade.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# _maybe_record_force_close_fill — Tomas 2026-05-09 incident (trade 1080).
+# The -2% emergency-close fills with stopOrderType="Stop" and order_id NOT
+# in tp_order_ids, so _classify_bybit_close_fill falls through. Without
+# this handler driving close_trade, the trade stayed in _active_trades
+# and poisoned subsequent TP/SL updates with "zero position" Bybit
+# rejections. 91% of force-close fires leaked before the fix.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_force_close_fill_drives_close_trade_with_avg_price():
+    pm = _pm()
+    trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
+    trade.original_force_close_order_id = "oid-fc"
+    pm._active_trades[trade.id] = trade
+    await pm._maybe_record_force_close_fill("oid-fc", {
+        "avgPrice": "98.0",
+        "triggerPrice": "98.1",
+    })
+    pm.close_trade.assert_awaited_once_with(
+        trade.id, reason="force_close", exit_price=98.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_force_close_fill_falls_back_to_trigger_price_when_avg_missing():
+    pm = _pm()
+    trade = _FakeTrade(signal=_FakeSignal(direction="SHORT"))
+    trade.original_force_close_order_id = "oid-fc"
+    pm._active_trades[trade.id] = trade
+    # avgPrice missing — execution_update path on a conditional fire.
+    await pm._maybe_record_force_close_fill("oid-fc", {
+        "triggerPrice": "102.5",
+    })
+    pm.close_trade.assert_awaited_once_with(
+        trade.id, reason="force_close", exit_price=102.5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_force_close_fill_unrelated_order_id_is_noop():
+    pm = _pm()
+    trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
+    trade.original_force_close_order_id = "oid-fc"
+    pm._active_trades[trade.id] = trade
+    await pm._maybe_record_force_close_fill("some-other-order", {
+        "avgPrice": "99.0",
+    })
     pm.close_trade.assert_not_called()
