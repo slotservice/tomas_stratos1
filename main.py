@@ -1005,6 +1005,22 @@ async def main() -> None:
         demo=settings.bybit.demo,
     )
 
+    # Tomas 2026-05-12: every bot start must be visible in the operator
+    # channel as proof of life ("nothing silent" spec). Posted after
+    # all background tasks are wired and the bot is fully ready, so the
+    # operator's clock starts when the bot is truly accepting signals.
+    try:
+        from core.time_utils import format_time, now_utc
+        await tg_notifier._send_notify(
+            f"🤖 boten startad\n"
+            f"🕒 Tid: {format_time(now_utc())}\n"
+            f"📊 Övervakade grupper: {len(settings.telegram_groups)}\n"
+            f"📍 Bybit-läge: {'DEMO' if settings.bybit.demo else 'LIVE'}\n"
+            f"📍 Aktiva trades: {len(getattr(position_mgr, '_active_trades', {}))}"
+        )
+    except Exception:
+        log.exception("startup.bot_started_notify_failed")
+
     try:
         await shutdown.wait()
     except (KeyboardInterrupt, SystemExit):
