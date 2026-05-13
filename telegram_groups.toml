@@ -398,3 +398,12 @@ name = "Myc Signals"
 [[groups]]
 id = -1003497370509
 name = "Cornix Trading"
+
+# Tomas 2026-05-12: confirmed via screenshot (TOSHI / SLP / SUN / VET
+# entry signals at 21:26 his time). 804-subscriber channel, posts the
+# Crypto Master Vip-style "⚡️⚡️ #SYMBOL/USDT ⚡️⚡️ / Exchanges / Entry
+# Targets / TP1-7 / Stop Targets 5-10%" format which the existing
+# parser already handles. Previously dropped as message_unmonitored_chat.
+[[groups]]
+id = -1002444199983
+name = "CRYPTO FUTURES®"
