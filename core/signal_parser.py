@@ -530,7 +530,16 @@ _SYMBOL_PATTERNS = [
     # had no `/USDT` and no `#`-prefix → the line-start fallback fired
     # on "Use 5x..." and parsed the symbol as USEUSDT (later rejected
     # by Bybit). Live #OBriansCryptoFamily incident 2026-05-04.
-    re.compile(r"[#$]([A-Z][A-Z0-9]{0,9})(?=[^A-Za-z0-9]|$)", re.IGNORECASE),
+    # 2026-05-13: also accept the dollar-sign EMOJI 💲 (U+1F4B2) as
+    # a valid ticker prefix. Live Crypto bull society BTC signal
+    # ("📈Long 💲BTC ...") had no `#`/$ ASCII prefix and no `/USDT`
+    # suffix → fell through every pattern and was dropped as
+    # no_symbol. Adding 💲 to the prefix class catches it without
+    # changing any other behaviour.
+    re.compile(
+        r"[#$\U0001F4B2]([A-Z][A-Z0-9]{0,9})(?=[^A-Za-z0-9]|$)",
+        re.IGNORECASE,
+    ),
     # LAST-RESORT FALLBACK: bare ticker at line start, after optional
     # emojis. Subject to the short-name + blocklist filters at
     # _extract_symbol so "TP", "SL", "ENTRY", "LEVERAGE", etc. are
