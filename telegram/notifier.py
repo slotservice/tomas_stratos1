@@ -84,7 +84,16 @@ def _tp_lines(tp_list: list[float]) -> str:
 
 
 def _tp_lines_pct(tp_list: list[float], entry: float, direction: str) -> str:
-    """Build TP lines with percentages, only real TPs (no zeros)."""
+    """Build TP lines with percentages, only real TPs (no zeros).
+
+    Tomas 2026-05-12: TPs whose distance from entry is < 2% are flagged
+    with "— Blocked <2%". The 2% threshold mirrors the bot-side filter
+    in position_manager._place_partial_tp_orders that prevents these
+    TPs from being placed as Bybit conditional orders. Marking them
+    in the operator template lets Tomas see EVERY TP the source channel
+    sent (proof chain) while making clear which ones the bot will not
+    act on.
+    """
     lines: list[str] = []
     for i, tp in enumerate(tp_list, start=1):
         if tp and tp > 0 and entry > 0:
@@ -92,7 +101,8 @@ def _tp_lines_pct(tp_list: list[float], entry: float, direction: str) -> str:
                 pct = (tp - entry) / entry * 100
             else:
                 pct = (entry - tp) / entry * 100
-            lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%)")
+            marker = " — Blocked <2%" if pct < 2.0 else ""
+            lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%){marker}")
     return "\n".join(lines)
 
 
