@@ -408,6 +408,32 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def reentry_skipped_non_qualifying_sl(
+        self,
+        trade,
+        last_sl_reason: str,
+    ) -> str:
+        """Re-entry was eligible by count but the SL that fired was not
+        a qualifying source.
+
+        Tomas 2026-05-12 spec: re-entry fires only when the SL that hit
+        was the original signal SL or a break-even / BE+buffer SL.
+        Cascaded TP-level SLs and profit-lock SLs do NOT qualify -
+        those closes are profitable, not losses, and a re-entry there
+        would chase the trade.
+        """
+        signal = trade.signal
+        text = (
+            f"⏸ Re-entry hoppad (SL ej kvalificerande)\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 SL var flyttad till: {last_sl_reason or 'n/a'}\n"
+            f"📍 Re-entry tillåten endast vid: original SL eller BE/BE+buffer."
+        )
+        return await self._send_notify(text)
+
     async def signal_skipped_by_override(
         self,
         symbol: str,

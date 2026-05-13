@@ -40,6 +40,41 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
+# Tomas 2026-05-12: re-entry qualifies only when the SL that just fired
+# was the original signal SL (history empty) or one of these BE-class
+# moves. Cascaded TP-level SLs (tp3_hit_sl_to_tp1, tp4_hit_sl_to_tp2,
+# etc.) and profit-lock SLs (fallback_profit_lock_1/2) all represent
+# profitable closes, not losses, so chasing them with a new entry would
+# be wrong by the operator's spec.
+#
+# These prefixes mirror the exact reason strings produced by
+# _maybe_cascade_sl_on_tp_hit and _maybe_apply_profit_locks — keep
+# them in sync with those producers.
+_REENTRY_QUALIFYING_SL_REASON_PREFIXES = (
+    "tp2_hit_sl_to_breakeven",  # TP2 cascade -> SL exactly at entry
+    "fallback_be_buffer",        # +2% favorable -> SL = entry +/- 0.2%
+)
+
+
+def _reentry_qualifies_for_trade(trade: "Trade") -> bool:
+    """True if a stop_loss close on *trade* qualifies for a re-entry.
+
+    Empty sl_movement_history -> the SL that fired was the original
+    signal SL (never moved) -> qualifies.
+    Last move reason matches one of the qualifying BE prefixes ->
+    qualifies. Anything else does NOT.
+    """
+    history = getattr(trade, "sl_movement_history", None) or []
+    if not history:
+        return True
+    last = history[-1] or {}
+    last_reason = str(last.get("reason") or "").lower()
+    return any(
+        last_reason.startswith(prefix)
+        for prefix in _REENTRY_QUALIFYING_SL_REASON_PREFIXES
+    )
+
+
 def _format_close_source(reason: str, trade: Optional["Trade"] = None) -> str:
     """Map an internal close-reason string (set by Bybit's order-fill
     classifier) to the human-readable suffix shown in the
@@ -3844,16 +3879,48 @@ class PositionManager:
 
         # --- Re-entry: triggered ONLY by a Bybit-classified SL fill,
         # never by polling. close_trade fires re-entry directly so
-        # Bybit's order-fill event drives the new trade. ---
+        # Bybit's order-fill event drives the new trade.
+        #
+        # Tomas 2026-05-12 spec: re-entry must only fire when the SL
+        # that hit was the original signal SL OR a break-even /
+        # BE+buffer SL. Re-entries from cascaded TP-level SLs
+        # (SL moved to TP1/TP2/TP3/TP4 via the TP2-N cascade) and
+        # from profit-lock SLs are blocked — those are profitable
+        # closes, not real losses. ---
         if reason == "stop_loss":
             if trade.reentry_count < self._settings.reentry.max_reentries:
-                try:
-                    await self._reentry_mgr.activate_after_sl(trade)
-                except Exception:
-                    log.exception(
-                        "close_trade.reentry_activate_failed",
-                        trade_id=trade.id,
+                if _reentry_qualifies_for_trade(trade):
+                    try:
+                        await self._reentry_mgr.activate_after_sl(trade)
+                    except Exception:
+                        log.exception(
+                            "close_trade.reentry_activate_failed",
+                            trade_id=trade.id,
+                        )
+                else:
+                    history = (
+                        getattr(trade, "sl_movement_history", None) or []
                     )
+                    last_reason = (
+                        (history[-1] or {}).get("reason")
+                        if history else None
+                    )
+                    log.info(
+                        "reentry.skipped_non_qualifying_sl",
+                        trade_id=trade.id,
+                        symbol=symbol,
+                        last_sl_reason=last_reason,
+                    )
+                    try:
+                        await self._notifier.reentry_skipped_non_qualifying_sl(
+                            trade=trade,
+                            last_sl_reason=last_reason or "n/a",
+                        )
+                    except Exception:
+                        log.exception(
+                            "notify.reentry_skipped_failed",
+                            trade_id=trade.id,
+                        )
 
         # --- Phase 6 audit-snapshot trigger (client 2026-05-02
         # audit #11 + #26). Increment the post-close counter and, if
