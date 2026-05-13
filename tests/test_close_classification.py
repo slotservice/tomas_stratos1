@@ -349,3 +349,68 @@ async def test_force_close_fill_unrelated_order_id_is_noop():
         "avgPrice": "99.0",
     })
     pm.close_trade.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Regression guard: on_order_update must call
+# _maybe_record_force_close_fill with the correct argument count.
+# 2026-05-12: commit c5bc338 changed the function signature from
+# (order_id) to (order_id, data) but missed one of two call sites,
+# leaving on_order_update line 1900 with the old one-arg call. Result:
+# every Filled WS event raised TypeError, the rest of on_order_update
+# (including _classify_bybit_close_fill) never ran. The bug was
+# survivable only because on_execution_update is wired in parallel.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_on_order_update_filled_does_not_raise_argument_error():
+    """Construct a Filled order WS event with no matching active trade;
+    on_order_update must complete cleanly. Any TypeError /
+    missing-argument here flags a callsite-signature mismatch in the
+    fill-classification chain.
+    """
+    pm = _pm()
+    pm._fill_data = {}
+    pm._fill_events = {}
+    pm._db.update_order = AsyncMock()
+    # No active trade — every internal helper should look up, find
+    # nothing, and return cleanly.
+    payload = {
+        "orderId": "oid-unmatched",
+        "orderStatus": "Filled",
+        "symbol": "BTCUSDT",
+        "avgPrice": "65000.0",
+        "cumExecQty": "0.1",
+        "positionIdx": 1,
+        "stopOrderType": "Stop",
+        "reduceOnly": True,
+    }
+    await pm.on_order_update(payload)
+
+
+@pytest.mark.asyncio
+async def test_on_order_update_force_close_match_fires_close_trade():
+    """End-to-end: a Filled order whose ID matches an active trade's
+    original_force_close_order_id must drive close_trade. Verifies
+    on_order_update wires through _maybe_record_force_close_fill with
+    the data arg so the function receives the avgPrice it needs."""
+    pm = _pm()
+    pm._fill_data = {}
+    pm._fill_events = {}
+    pm._db.update_order = AsyncMock()
+    trade = _FakeTrade(signal=_FakeSignal(direction="LONG"))
+    trade.original_force_close_order_id = "oid-fc-match"
+    pm._active_trades[trade.id] = trade
+    await pm.on_order_update({
+        "orderId": "oid-fc-match",
+        "orderStatus": "Filled",
+        "symbol": "BTCUSDT",
+        "avgPrice": "98.0",
+        "cumExecQty": "1.0",
+        "positionIdx": 1,
+        "stopOrderType": "Stop",
+        "reduceOnly": True,
+    })
+    pm.close_trade.assert_awaited_once_with(
+        trade.id, reason="force_close", exit_price=98.0,
+    )

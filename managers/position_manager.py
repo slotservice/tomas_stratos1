@@ -1893,11 +1893,11 @@ class PositionManager:
             # send Telegram. No race, no orphan, single source of truth.
             await self._maybe_activate_hedge_from_fill(order_id, data)
             # Phase 4 (client 2026-05-01) — record ORIGINAL_FORCE_CLOSED
-            # state when the -2% conditional fires. The actual close
-            # bookkeeping (PnL + Telegram) still happens via
-            # _classify_bybit_close_fill -> close_trade below; this
-            # transition is purely for the audit trail.
-            await self._maybe_record_force_close_fill(order_id)
+            # state when the -2% conditional fires. Drives close_trade
+            # for the PnL/Telegram bookkeeping (signature updated
+            # 2026-05-12 to take the fill data so close_trade gets the
+            # actual exit price — c5bc338).
+            await self._maybe_record_force_close_fill(order_id, data)
             # Strict architecture (client 2026-04-28): every close
             # notification and every close decision is driven by Bybit's
             # order-fill event, never by bot inference. Classify this
