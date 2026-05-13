@@ -741,6 +741,19 @@ class TelegramNotifier:
         direction = signal.direction
         tp_block = _tp_lines_pct(signal.tps, entry, direction)
         sl_line = _sl_line_pct(trade.sl_price or signal.sl, entry, direction)
+        # Tomas 2026-05-12: SL is now Bybit-verified post-set. Surface
+        # the verification result so the operator can trust the value
+        # at a glance.
+        sl_verified = getattr(trade, "sl_bybit_verified", None)
+        sl_bybit_value = getattr(trade, "sl_bybit_value", None)
+        if sl_verified is True:
+            sl_line = sl_line + " (Bybit verifierad)"
+        elif sl_verified is False:
+            sl_line = sl_line + (
+                f" (Bybit visar {sl_bybit_value}, EJ MATCH)"
+                if sl_bybit_value is not None
+                else " (Bybit visar inget SL, EJ SATT)"
+            )
         lev_type = signal.signal_type
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
 

@@ -483,6 +483,21 @@ class Trade:
     sl_movement_history: List[dict] = field(default_factory=list)
     reentry_count: int = 0
 
+    # --- Bybit-verification (Tomas 2026-05-12 spec: "nothing the bot
+    # says is true unless Bybit confirms it"). Each *_bybit_verified
+    # field is set immediately after the corresponding set_* / place_*
+    # call by reading the position/order back from Bybit. True = match,
+    # False = mismatch, None = not yet checked or read errored. The
+    # operator-channel template surfaces these flags as
+    # "(Bybit verifierad)" / "(Bybit visar X, ej match)" annotations.
+    sl_bybit_verified: Optional[bool] = None
+    sl_bybit_value: Optional[float] = None
+    leverage_bybit_verified: Optional[bool] = None
+    leverage_bybit_value: Optional[float] = None
+    # Per-TP verification results, indexed by TP price (string-keyed to
+    # survive float precision). True/False/None semantics as above.
+    tp_bybit_verified: dict = field(default_factory=dict)
+
     # --- Scaling ---
     scaling_step: int = 0
 

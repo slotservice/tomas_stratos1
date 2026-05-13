@@ -1433,6 +1433,7 @@ class PositionManager:
             "MarkPrice",
         )
         if valid_sl:
+            sl_set_ok = False
             try:
                 await self._bybit.set_trading_stop(
                     symbol=symbol,
@@ -1442,11 +1443,55 @@ class PositionManager:
                 )
                 log.info("trade.sl_set",
                          trade_id=trade.id, symbol=symbol, sl=valid_sl)
+                sl_set_ok = True
             except Exception:
                 log.exception(
                     "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
                 protection_failures.append("SL")
+
+            # Tomas 2026-05-12 spec: "every value displayed in operator
+            # templates must be Bybit-verified, not bot-trusted". Read
+            # the position back and confirm Bybit's stopLoss field
+            # reflects what we just pushed. 0.1% tolerance to absorb
+            # tick-size rounding. Annotation surfaces in Position öppnad.
+            if sl_set_ok:
+                try:
+                    pos = await self._bybit.get_position(symbol, side)
+                    bybit_sl: Optional[float] = None
+                    if pos:
+                        raw_sl = pos.get("stopLoss")
+                        if raw_sl not in (None, "", "0"):
+                            try:
+                                bybit_sl = float(raw_sl)
+                            except (TypeError, ValueError):
+                                bybit_sl = None
+                    trade.sl_bybit_value = bybit_sl
+                    if bybit_sl is not None and bybit_sl > 0:
+                        tol = max(abs(valid_sl) * 0.001, 1e-9)
+                        trade.sl_bybit_verified = (
+                            abs(bybit_sl - valid_sl) <= tol
+                        )
+                        if not trade.sl_bybit_verified:
+                            log.warning(
+                                "trade.sl_verify_mismatch",
+                                trade_id=trade.id, symbol=symbol,
+                                expected=valid_sl, bybit=bybit_sl,
+                            )
+                    else:
+                        trade.sl_bybit_verified = False
+                        log.warning(
+                            "trade.sl_verify_no_value",
+                            trade_id=trade.id, symbol=symbol,
+                            expected=valid_sl,
+                        )
+                except Exception:
+                    log.exception(
+                        "trade.sl_verify_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
+                    trade.sl_bybit_verified = None
+                    trade.sl_bybit_value = None
 
         # ---------- Place PARTIAL TPs — one reduce-only conditional
         # order per TP level (from TP2 onwards). Client IZZU
