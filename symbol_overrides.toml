@@ -50,3 +50,39 @@ note = "Bybit perp is 1000TOSHIUSDT, not TOSHIUSDT"
 [GUA]
 skip = true
 note = "Not listed on Bybit perp (any prefix). Skip until/unless Bybit adds it."
+
+# 2026-05-13 follow-up sweep: same pattern as GUA — confirmed
+# unavailable on Bybit demo across the plain, 1000x and 10000x
+# prefix variants via get_instruments_info. Each was producing
+# tens of API-error events per day (PLAY 93, AIOT 85, BAS 70,
+# GWEI 41, TST 37 over the last week) and now-visible api_error
+# notifications in the operator channel. Skipping silently
+# eliminates the noise; if/when Bybit lists any of them, remove
+# the entry here and the bot will trade them on the next restart.
+[PLAY]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-13."
+
+[AIOT]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-13."
+
+[BAS]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-13."
+
+[GWEI]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-13."
+
+[TST]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-13."
+
+# 2026-05-13: TAG signals arrive as #TAG/USDT but Bybit lists the
+# 1000-prefixed pair only (verified via get_instruments_info: TAGUSDT
+# returns ErrCode 10001 "symbol invalid", 1000TAGUSDT returns OK).
+# Mirrors the TOSHI 2026-05-12 rename above.
+[TAG]
+rename_to = "1000TAGUSDT"
+note = "Bybit perp is 1000TAGUSDT, not TAGUSDT"
