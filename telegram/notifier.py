@@ -398,6 +398,26 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def signal_update_skipped(
+        self,
+        signal,
+        reason: str,
+    ) -> str:
+        """A late same-direction signal arrived (>5% entry diff) but the
+        update was skipped before reaching Bybit. Surfaced per
+        Tomas 2026-05-12: every skip / block must be visible in the
+        operator channel with the exact reason.
+        """
+        text = (
+            f"🔁 Uppdatering avvisad\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(signal.channel_name)}\n"
+            f"📊 Symbol: {_sym(signal.symbol)}\n"
+            f"📈 Riktning: {signal.direction}\n"
+            f"📍 Anledning: {reason}"
+        )
+        return await self._send_notify(text)
+
     async def signal_updated_tp_sl(
         self,
         signal,

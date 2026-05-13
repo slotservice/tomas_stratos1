@@ -4434,6 +4434,16 @@ class PositionManager:
                     new_best_tp=new_best_tp,
                     existing_entry=existing_entry,
                 )
+                try:
+                    await self._notifier.signal_update_skipped(
+                        signal=signal,
+                        reason=(
+                            f"TP {new_best_tp} på fel sida av aktiv "
+                            f"trade-entry {existing_entry}"
+                        ),
+                    )
+                except Exception:
+                    log.exception("notify.update_skipped_tp_wrong_side_failed")
                 tp_improved = False
         if sl_changed and existing_entry > 0 and new_sl:
             sl_wrong_side = (
@@ -4448,6 +4458,16 @@ class PositionManager:
                     new_sl=new_sl,
                     existing_entry=existing_entry,
                 )
+                try:
+                    await self._notifier.signal_update_skipped(
+                        signal=signal,
+                        reason=(
+                            f"SL {new_sl} på fel sida av aktiv "
+                            f"trade-entry {existing_entry}"
+                        ),
+                    )
+                except Exception:
+                    log.exception("notify.update_skipped_sl_wrong_side_failed")
                 sl_changed = False
 
         # Tomas 2026-05-08: also refuse to LOOSEN the SL via a
@@ -4471,6 +4491,16 @@ class PositionManager:
                     new_sl=new_sl,
                     existing_sl=existing_sl,
                 )
+                try:
+                    await self._notifier.signal_update_skipped(
+                        signal=signal,
+                        reason=(
+                            f"SL skulle lossas (ny {new_sl} vs aktiv "
+                            f"{existing_sl}) — mindre skydd, ej tillåtet"
+                        ),
+                    )
+                except Exception:
+                    log.exception("notify.update_skipped_sl_loosened_failed")
                 sl_changed = False
 
         if not tp_improved and not sl_changed:
@@ -4483,6 +4513,17 @@ class PositionManager:
                 new_sl=new_sl,
                 existing_sl=existing_sl,
             )
+            try:
+                await self._notifier.signal_update_skipped(
+                    signal=signal,
+                    reason=(
+                        f"Ingen förbättring (ny TP {new_best_tp} vs aktiv "
+                        f"{existing_tp}, ny SL {new_sl} vs aktiv "
+                        f"{existing_sl})"
+                    ),
+                )
+            except Exception:
+                log.exception("notify.update_skipped_no_improvement_failed")
             return
 
         # --- Update TP / SL on exchange ---
@@ -4516,6 +4557,13 @@ class PositionManager:
                     "trade.tp_sl_update_unchanged",
                     trade_id=trade_id, symbol=symbol,
                 )
+                try:
+                    await self._notifier.signal_update_skipped(
+                        signal=signal,
+                        reason="Bybit svarade 'not modified' — värden redan satta",
+                    )
+                except Exception:
+                    log.exception("notify.update_skipped_not_modified_failed")
                 return
             log.exception(
                 "trade.tp_sl_update_failed",

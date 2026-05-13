@@ -26,6 +26,7 @@ def _pm() -> PositionManager:
     pm._notifier = MagicMock()
     pm._notifier.tp_sl_update_failed = AsyncMock()
     pm._notifier.signal_updated_tp_sl = AsyncMock()
+    pm._notifier.signal_update_skipped = AsyncMock()
     pm._db = MagicMock()
     pm._db.update_trade = AsyncMock()
     pm._db.log_event = AsyncMock()
@@ -38,13 +39,15 @@ def _pm() -> PositionManager:
     return pm
 
 
-def _signal(direction="LONG", tps=None, sl=None, symbol="NILUSDT"):
+def _signal(direction="LONG", tps=None, sl=None, symbol="NILUSDT",
+            channel_name="TestChannel"):
     s = MagicMock()
     s.symbol = symbol
     s.direction = direction
     s.tps = tps or []
     s.sl = sl
     s.tp_list = s.tps
+    s.channel_name = channel_name
     return s
 
 
@@ -238,3 +241,95 @@ async def test_no_existing_entry_does_not_block_update():
     }
     await pm._update_existing_trade(signal, existing)
     pm._bybit.set_trading_stop.assert_awaited_once()
+
+
+# --------------------------------------------------------------------------
+# signal_update_skipped notifications — Tomas 2026-05-12.
+# Every silent skip-branch inside _update_existing_trade must produce a
+# visible Telegram notification with the exact reason. Previously the
+# bot processed late same-direction signals silently and Tomas saw
+# nothing in the operator channel ("bot is guessing, not proving").
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_notifies_when_tp_skipped_wrong_side_for_long():
+    pm = _pm()
+    signal = _signal(direction="LONG", tps=[0.0775, 0.0815, 0.086], sl=0.097)
+    existing = {
+        "id": 805,
+        "entry_price": 0.09741,
+        "highest_tp_price": None,
+        "tp_list": None,
+        "sl_price": 0.094,
+    }
+    await pm._update_existing_trade(signal, existing)
+    # SL still goes through; TP skip should have fired a notification.
+    pm._notifier.signal_update_skipped.assert_any_await(
+        signal=signal,
+        reason=pytest.approx(
+            "TP 0.086 på fel sida av aktiv trade-entry 0.09741",
+        ) if False else "TP 0.086 på fel sida av aktiv trade-entry 0.09741",
+    )
+
+
+@pytest.mark.asyncio
+async def test_notifies_when_sl_skipped_loosened_for_long():
+    pm = _pm()
+    signal = _signal(direction="LONG", tps=[0.110], sl=0.070)
+    existing = {
+        "id": 956,
+        "entry_price": 0.100,
+        "highest_tp_price": None,
+        "tp_list": None,
+        "sl_price": 0.097,
+    }
+    await pm._update_existing_trade(signal, existing)
+    # Look for the SL-loosen reason among the notifier calls.
+    skipped_calls = pm._notifier.signal_update_skipped.await_args_list
+    reasons = [c.kwargs.get("reason", "") for c in skipped_calls]
+    assert any("SL skulle lossas" in r for r in reasons), reasons
+
+
+@pytest.mark.asyncio
+async def test_notifies_when_update_fully_skipped_no_improvement():
+    pm = _pm()
+    # Existing trade already has better TP and identical SL; new signal
+    # offers no improvement (TP worse, SL unchanged).
+    signal = _signal(direction="LONG", tps=[0.110], sl=0.097)
+    existing = {
+        "id": 870,
+        "entry_price": 0.100,
+        "highest_tp_price": 0.115,  # already higher than new 0.110
+        "tp_list": None,
+        "sl_price": 0.097,  # identical to new SL -> sl_changed=False
+    }
+    await pm._update_existing_trade(signal, existing)
+    pm._bybit.set_trading_stop.assert_not_awaited()
+    pm._notifier.signal_update_skipped.assert_awaited_once()
+    reason = pm._notifier.signal_update_skipped.await_args.kwargs["reason"]
+    assert "Ingen förbättring" in reason
+
+
+@pytest.mark.asyncio
+async def test_notifies_when_bybit_returns_not_modified():
+    """Bybit code 34040 = values already match. Previously silent;
+    Tomas wants the skip visible with the exact reason."""
+    pm = _pm()
+
+    class _NotModified(Exception):
+        ret_code = 34040
+
+    pm._bybit.set_trading_stop = AsyncMock(side_effect=_NotModified())
+
+    signal = _signal(direction="LONG", tps=[0.115], sl=0.097)
+    existing = {
+        "id": 880,
+        "entry_price": 0.100,
+        "highest_tp_price": 0.105,
+        "tp_list": None,
+        "sl_price": 0.094,
+    }
+    await pm._update_existing_trade(signal, existing)
+    pm._notifier.signal_update_skipped.assert_awaited_once()
+    reason = pm._notifier.signal_update_skipped.await_args.kwargs["reason"]
+    assert "not modified" in reason
