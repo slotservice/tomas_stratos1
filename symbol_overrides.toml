@@ -32,3 +32,21 @@
 [1000SHIB]
 rename_to = "SHIB1000USDT"
 note = "Bybit perp is SHIB1000USDT (suffix), not 1000SHIBUSDT (prefix)"
+
+# Tomas 2026-05-12: Crypto Master Vip Signals + American Crypto Traders
+# both forward TOSHI signals as #TOSHI/USDT. Bybit demo only lists the
+# 1000-prefixed pair (verified via get_instruments_info: TOSHIUSDT
+# returns ErrCode 10001 "symbol invalid", 1000TOSHIUSDT returns OK).
+# Without this rename every TOSHI signal fails leverage_set and the
+# trade never opens.
+[TOSHI]
+rename_to = "1000TOSHIUSDT"
+note = "Bybit perp is 1000TOSHIUSDT, not TOSHIUSDT"
+
+# Tomas 2026-05-12: Panda Traders, Coin Rise, and others post #GUA/USDT
+# signals. Bybit demo does not list GUA in any form (neither GUAUSDT
+# nor 1000GUAUSDT). Skip silently so the bot stops spamming
+# instrument_info_fetch_failed and set_leverage_failed errors for it.
+[GUA]
+skip = true
+note = "Not listed on Bybit perp (any prefix). Skip until/unless Bybit adds it."
