@@ -1609,6 +1609,36 @@ class PositionManager:
                     )
             except Exception:
                 pass
+            # Tomas 2026-05-12 spec: every placed partial-TP order must
+            # be Bybit-verified. One open-orders fetch covers all TPs;
+            # populate trade.tp_bybit_verified as {str(tp_price): bool}.
+            # Operator template surfaces the result per TP line.
+            try:
+                live_orders = await self._bybit.get_open_orders(symbol)
+                live_oids = {
+                    (od.get("orderId") or "") for od in (live_orders or [])
+                }
+                # Pair each TP price with the order_id we got from its
+                # placement. The loop above placed in below_trailing_tps
+                # order; tp_order_ids preserves that order.
+                for tp_price, oid in zip(below_trailing_tps, tp_order_ids):
+                    if not oid:
+                        trade.tp_bybit_verified[str(tp_price)] = False
+                    else:
+                        trade.tp_bybit_verified[str(tp_price)] = (
+                            oid in live_oids
+                        )
+                        if oid not in live_oids:
+                            log.warning(
+                                "trade.tp_verify_missing",
+                                trade_id=trade.id, symbol=symbol,
+                                tp_price=tp_price, order_id=oid,
+                            )
+            except Exception:
+                log.exception(
+                    "trade.tp_verify_failed",
+                    trade_id=trade.id, symbol=symbol,
+                )
             log.info(
                 "trade.partial_tps_summary",
                 trade_id=trade.id, symbol=symbol,

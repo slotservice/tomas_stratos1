@@ -83,17 +83,24 @@ def _tp_lines(tp_list: list[float]) -> str:
     return "\n".join(lines)
 
 
-def _tp_lines_pct(tp_list: list[float], entry: float, direction: str) -> str:
+def _tp_lines_pct(
+    tp_list: list[float],
+    entry: float,
+    direction: str,
+    verified: Optional[dict] = None,
+) -> str:
     """Build TP lines with percentages, only real TPs (no zeros).
 
-    Tomas 2026-05-12: TPs whose distance from entry is < 2% are flagged
-    with "— Blocked <2%". The 2% threshold mirrors the bot-side filter
-    in position_manager._place_partial_tp_orders that prevents these
-    TPs from being placed as Bybit conditional orders. Marking them
-    in the operator template lets Tomas see EVERY TP the source channel
-    sent (proof chain) while making clear which ones the bot will not
-    act on.
+    Markers applied per TP:
+      - " — Blocked <2%" if pct < 2.0 (mirrors the position_manager
+        partial-TP-placement filter; Tomas 2026-05-12).
+      - " (Bybit verifierad)" if verified[str(tp)] is True.
+      - " (EJ på Bybit)" if verified[str(tp)] is False.
+      - no extra marker otherwise (TPs above trailing-activation get
+        merged into the trailing stop and never appear in verified,
+        so they render as plain lines).
     """
+    verified = verified or {}
     lines: list[str] = []
     for i, tp in enumerate(tp_list, start=1):
         if tp and tp > 0 and entry > 0:
@@ -101,7 +108,16 @@ def _tp_lines_pct(tp_list: list[float], entry: float, direction: str) -> str:
                 pct = (tp - entry) / entry * 100
             else:
                 pct = (entry - tp) / entry * 100
-            marker = " — Blocked <2%" if pct < 2.0 else ""
+            if pct < 2.0:
+                marker = " — Blocked <2%"
+            else:
+                v = verified.get(str(tp))
+                if v is True:
+                    marker = " (Bybit verifierad)"
+                elif v is False:
+                    marker = " (EJ på Bybit)"
+                else:
+                    marker = ""
             lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%){marker}")
     return "\n".join(lines)
 
@@ -739,7 +755,10 @@ class TelegramNotifier:
         """Position confirmed open on Bybit."""
         entry = signal.entry
         direction = signal.direction
-        tp_block = _tp_lines_pct(signal.tps, entry, direction)
+        tp_block = _tp_lines_pct(
+            signal.tps, entry, direction,
+            verified=getattr(trade, "tp_bybit_verified", None),
+        )
         sl_line = _sl_line_pct(trade.sl_price or signal.sl, entry, direction)
         # Tomas 2026-05-12: SL is now Bybit-verified post-set. Surface
         # the verification result so the operator can trust the value
