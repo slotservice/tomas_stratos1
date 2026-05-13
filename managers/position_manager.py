@@ -158,7 +158,12 @@ class PositionManager:
         # timestamp of the last fire. Same key within ``_dedup_window_s``
         # is silenced.
         self._reject_notify_last: Dict[str, float] = {}
-        self._dedup_window_s: float = 300.0  # 5 minutes
+        # Tomas 2026-05-12 spec: "Nothing should happen silently inside
+        # the bot. If many groups send the same signal, all blocks must
+        # be visible." Reverses the 2026-04-30 ask. Set to 0 so every
+        # rejection / informational event notifies; the dedup map still
+        # records timestamps for future diagnostics but never suppresses.
+        self._dedup_window_s: float = 0.0
 
         # Separate dedup map for INFORMATIONAL notifications (e.g.
         # "SL JUSTERAD" — the trade continues, this isn't a rejection).
