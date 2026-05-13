@@ -388,9 +388,22 @@ _TP_PATTERNS = [
     # Live BOB incident 2026-05-04 (#1000000BOBUSDT, "Take Profit
     # Target\n0.0180\n0.0172\n...").
     re.compile(
-        r"(?:take[\s_-]*profits?(?:\s+targets?)?|(?:^|\n)\s*(?:tps?|targets?))"
+        # Header alternatives:
+        #   "Take Profit Targets" / "Take Profits" / "Take Profit"
+        # OR (start-of-line) optional NON-DIGIT prefix (emoji / symbol)
+        #   then "tp(s) targets?" / "targets?" / "tps?".
+        # The non-digit prefix on the second branch lets emoji-decorated
+        # headers like "🎯 TP Targets:" match — required for the
+        # CryptoApple format (Tomas 2026-05-13 MBOXUSDT incident).
+        # Still anchored to ^|\n to avoid mid-line false matches.
+        r"(?:take[\s_-]*profits?(?:\s+targets?)?|(?:^|\n)[^\d\n]*?(?:tps?\s+targets?|tps?|targets?))"
         r"\s*[:=]?\s*-?"
-        r"\s*\n\s*((?:\d{1,2}\s*[)\:\-]\s*[^\d\n]{0,5}[\d.]+\s*\n?\s*){1,8})",
+        # Inner repeat: list-marker is either a keycap-enclosed-digit
+        # sequence (\d + optional VS-16 + U+20E3, used by CryptoApple
+        # and similar bot channels) OR a traditional ")", ":", "-"
+        # separator. Bare prices without any marker still don't match
+        # (the BOB 2026-05-04 regression guard).
+        r"\s*\n\s*((?:[^\d\n]*\d{1,2}\s*(?:️?⃣|[)\:\-])\s*[^\d\n]{0,5}[\d.]+\s*\n?\s*){1,8})",
         re.IGNORECASE | re.MULTILINE,
     ),
     # "Targets: 3300/3400/3500" / "Targets: 3300, 3400, 3500" / "Targets:
@@ -697,11 +710,14 @@ def extract_prices(text: str) -> dict:
             # through to Pattern 5 below, which is the right home
             # for them.
             # Inner mirrors the outer's strict form: index 1-2 digits,
-            # explicit list-marker [)\:\-], optional emoji/symbol gap
-            # before price ("1)🟥 1.3731", "1)> 0.096" CRYPTO WORLD
-            # UPTADES). Outer already filtered to this shape.
+            # explicit list-marker (keycap-enclosed-digit OR
+            # ")"/":"/"-"), optional emoji/symbol gap before price
+            # ("1)🟥 1.3731", "1)> 0.096" CRYPTO WORLD UPTADES, or
+            # "1⃣ 0.01539" CryptoApple 2026-05-13). Outer already
+            # filtered to this shape.
             for item in re.finditer(
-                r"(\d{1,2})\s*[)\:\-]\s*[^\d\n]{0,5}([\d.]+)", block
+                r"(\d{1,2})\s*(?:️?⃣|[)\:\-])\s*[^\d\n]{0,5}([\d.]+)",
+                block,
             ):
                 idx = int(item.group(1))
                 price = _parse_price(item.group(2))
