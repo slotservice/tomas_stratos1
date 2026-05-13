@@ -1314,6 +1314,16 @@ class TelegramNotifier:
         lev_type = signal.signal_type if signal else "dynamic"
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
         header_suffix = f" av {close_source}" if close_source else ""
+        # Tomas 2026-05-12: when the -2% emergency conditional fires,
+        # label the close as "Huvudposition" so the operator can tell
+        # this apart from a hedge close at a glance. Hedge closes flow
+        # through _close_hedge_child with their own template and do not
+        # land here.
+        position_word = (
+            "Huvudposition"
+            if close_source == "-2% nödstängning"
+            else "Position"
+        )
         # Client 2026-04-30: ``result_pct_total`` is the RAW price
         # movement (signed for direction). The previous label said
         # "med hävstång" / "with leverage" which was wrong — value
@@ -1322,7 +1332,7 @@ class TelegramNotifier:
         leverage = trade.leverage or 1.0
         result_pct_leveraged = result_pct_total * leverage
         text = (
-            f"✅ Position stängd{header_suffix}\n"
+            f"✅ {position_word} stängd{header_suffix}\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
