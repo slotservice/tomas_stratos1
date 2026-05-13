@@ -149,11 +149,23 @@ _STATUS_UPDATE_PATTERNS = [
     ),
     # "Position closed", "Trade closed"
     re.compile(r"\b(?:position|trade)\s+closed\b", re.IGNORECASE),
-    # "+646% GAIN", "+50% Profit" — completion brag with explicit %
+    # "+646% GAIN", "+50% Profit", "✅ 730.82% Profit" — completion
+    # brag with explicit %. Tomas 2026-05-13: leading `+` made
+    # optional so the CoinMaster Trading variant "✅ 730.82% Profit"
+    # (no `+`) is caught as a status update instead of being parsed
+    # as a new signal and emitting "Blokerad, Entre saknas". The
+    # `(?:gain|profit|in\s+profit)` anchor at the end still prevents
+    # false matches on innocent percentages like "Risk: 1.5%".
     re.compile(
-        r"[+]\d+(?:\.\d+)?\s*%\s*(?:gain|profit|in\s+profit)\b",
+        r"\b\+?\d+(?:\.\d+)?\s*%\s*(?:gain|profit|in\s+profit)\b",
         re.IGNORECASE,
     ),
+    # "#TRUTH/USDT Reached 0.0193410" — CoinMaster Trading completion
+    # ping ("Reached <price>" after a /USDT ticker means the signal
+    # has hit its targets). The "/USDT?" anchor before "reached"
+    # keeps this from over-matching innocent commentary like
+    # "I reached my goal".
+    re.compile(r"/USDT?\s+reached\b", re.IGNORECASE),
     # "So far profit (X%)" — running-PnL update style
     re.compile(r"\bso\s+far\s+profit\b", re.IGNORECASE),
     # "Entry 1 ✅" / "Entry 2 ✅" / "Entry 3 ✅" — entry-fill confirmation.
@@ -1079,40 +1091,16 @@ def parse_signal_detailed(
                            channel_id=channel_id,
                            channel_name=channel_name)
 
-    # --- Operator overrides (Tomas 2026-05-03) ---
-    # symbol_overrides.toml lets the operator skip non-tradable
-    # symbols, rename them to Bybit's canonical form, or attach a
-    # note that the notifier will surface on warnings. Lookup is
-    # case-insensitive and module-cached.
-    from core.symbol_overrides import get_override
-    override = get_override(symbol)
-    override_note = (override or {}).get("note")
-    if override and override.get("skip"):
-        log.info(
-            "signal_parse.skipped_by_operator_override",
-            symbol=symbol,
-            note=override_note,
-            channel_name=channel_name,
-        )
-        return ParseResult(
-            reason="skipped_by_override",
-            symbol=symbol,
-            channel_id=channel_id,
-            channel_name=channel_name,
-            override_note=override_note,
-        )
-    if override and override.get("rename_to"):
-        renamed = override["rename_to"]
-        log.info(
-            "signal_parse.symbol_renamed_by_operator",
-            original=symbol,
-            renamed=renamed,
-            note=override_note,
-            channel_name=channel_name,
-        )
-        symbol = renamed
-
     # --- Direction ---
+    # Tomas 2026-05-13: pulled BEFORE the override-skip check so the
+    # skipped_by_override ParseResult carries a real direction value
+    # (was producing the confusing "Riktning: ?" line in the operator
+    # notification for messages like "#GUA LONG ..."). Also tightens
+    # the override-skip surface to signal-shaped messages only:
+    # chatter that contains the hashtag but no LONG/SHORT keyword now
+    # exits at no_direction (silent — that path is intentional, per
+    # the chatter-stays-silent rule) instead of producing a confusing
+    # skipped_by_override notification.
     direction = extract_direction(clean)
     if not direction:
         # INFO (was DEBUG) — same rationale as no_symbol above. The
@@ -1131,6 +1119,41 @@ def parse_signal_detailed(
                            symbol=symbol,
                            channel_id=channel_id,
                            channel_name=channel_name)
+
+    # --- Operator overrides (Tomas 2026-05-03) ---
+    # symbol_overrides.toml lets the operator skip non-tradable
+    # symbols, rename them to Bybit's canonical form, or attach a
+    # note that the notifier will surface on warnings. Lookup is
+    # case-insensitive and module-cached.
+    from core.symbol_overrides import get_override
+    override = get_override(symbol)
+    override_note = (override or {}).get("note")
+    if override and override.get("skip"):
+        log.info(
+            "signal_parse.skipped_by_operator_override",
+            symbol=symbol,
+            direction=direction,
+            note=override_note,
+            channel_name=channel_name,
+        )
+        return ParseResult(
+            reason="skipped_by_override",
+            symbol=symbol,
+            direction=direction,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            override_note=override_note,
+        )
+    if override and override.get("rename_to"):
+        renamed = override["rename_to"]
+        log.info(
+            "signal_parse.symbol_renamed_by_operator",
+            original=symbol,
+            renamed=renamed,
+            note=override_note,
+            channel_name=channel_name,
+        )
+        symbol = renamed
 
     # --- Prices ---
     prices = extract_prices(clean)
