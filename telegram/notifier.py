@@ -776,6 +776,22 @@ class TelegramNotifier:
         lev_type = signal.signal_type
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
 
+        # Tomas 2026-05-12 spec (9c): leverage shown must be Bybit-
+        # verified, not bot-computed. Annotation mirrors the SL
+        # treatment in 9a.
+        lev_verified = getattr(trade, "leverage_bybit_verified", None)
+        lev_bybit_value = getattr(trade, "leverage_bybit_value", None)
+        if lev_verified is True:
+            lev_annot = " (Bybit verifierad)"
+        elif lev_verified is False:
+            lev_annot = (
+                f" (Bybit visar x{lev_bybit_value}, EJ MATCH)"
+                if lev_bybit_value is not None
+                else " (Bybit visar ingen hävstång, EJ MATCH)"
+            )
+        else:
+            lev_annot = ""
+
         # Collapse to single Entry line when the two fills are
         # identical (1-order mode always, and 2-order mode when both
         # legs happened to fill at the same price).
@@ -799,7 +815,7 @@ class TelegramNotifier:
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{trade.leverage}\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{trade.leverage}{lev_annot}\n"
             f"💰 IM: {trade.margin:.2f} USDT (Bybit confirmed)\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"

@@ -1161,6 +1161,30 @@ class PositionManager:
                 pos = await self._bybit.get_position(symbol, pos_side)
                 if pos:
                     fill1_im = float(pos.get("positionIM", 0) or 0)
+                    # Tomas 2026-05-12 spec (9c): also Bybit-verify the
+                    # leverage on the freshly-opened position. Single-
+                    # order mode reaches this branch — match the
+                    # verification done in the 2-order path below.
+                    bybit_lev: Optional[float] = None
+                    try:
+                        raw_lev = pos.get("leverage")
+                        if raw_lev not in (None, "", "0"):
+                            bybit_lev = float(raw_lev)
+                    except (TypeError, ValueError):
+                        bybit_lev = None
+                    trade.leverage_bybit_value = bybit_lev
+                    if bybit_lev is not None and bybit_lev > 0:
+                        trade.leverage_bybit_verified = (
+                            abs(bybit_lev - float(leverage or 0)) <= 0.5
+                        )
+                        if not trade.leverage_bybit_verified:
+                            log.warning(
+                                "trade.leverage_verify_mismatch",
+                                trade_id=trade.id, symbol=symbol,
+                                expected=leverage, bybit=bybit_lev,
+                            )
+                    else:
+                        trade.leverage_bybit_verified = False
             except Exception:
                 pass
             if not fill1_im or fill1_im <= 0:
@@ -1248,6 +1272,32 @@ class PositionManager:
             pos = await self._bybit.get_position(symbol, pos_side)
             if pos:
                 total_im_actual = float(pos.get("positionIM", 0) or 0)
+                # Tomas 2026-05-12 spec (9c): leverage shown in operator
+                # templates must be Bybit-verified, not bot-trusted.
+                # Compare what we asked set_leverage to apply against
+                # what Bybit reports on the position. Tolerance 0.5
+                # absorbs Bybit's leverage step rounding (typically 1.0
+                # or 0.1 step).
+                bybit_lev: Optional[float] = None
+                try:
+                    raw_lev = pos.get("leverage")
+                    if raw_lev not in (None, "", "0"):
+                        bybit_lev = float(raw_lev)
+                except (TypeError, ValueError):
+                    bybit_lev = None
+                trade.leverage_bybit_value = bybit_lev
+                if bybit_lev is not None and bybit_lev > 0:
+                    trade.leverage_bybit_verified = (
+                        abs(bybit_lev - float(leverage or 0)) <= 0.5
+                    )
+                    if not trade.leverage_bybit_verified:
+                        log.warning(
+                            "trade.leverage_verify_mismatch",
+                            trade_id=trade.id, symbol=symbol,
+                            expected=leverage, bybit=bybit_lev,
+                        )
+                else:
+                    trade.leverage_bybit_verified = False
         except Exception:
             pass
 
