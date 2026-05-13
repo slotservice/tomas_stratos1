@@ -174,6 +174,17 @@ class PositionManager:
         # saved its trade to the DB. Key: symbol, Value: asyncio.Lock
         self._symbol_locks: Dict[str, asyncio.Lock] = {}
 
+        # Recently-closed (symbol, side) keys with monotonic close timestamp.
+        # Tomas 2026-05-13 CHIPUSDT incident: close_trade pops the trade
+        # from _active_trades the instant it transitions to CLOSED, but
+        # Bybit may take 1-3 seconds to actually reduce the position
+        # size to 0. During that window reverse_reconcile sees an
+        # untracked Bybit position and fires a spurious "Obevakad
+        # position på Bybit" notification. main.py consults this map
+        # before firing the orphan warning and skips entries closed
+        # within the cooldown window.
+        self._recently_closed: Dict[tuple, float] = {}
+
         # TP-fill notification dedup: Bybit may re-send a Filled event,
         # we only fire the per-TP Telegram notification once per order.
         self._tp_notified: set[str] = set()
@@ -3974,6 +3985,31 @@ class PositionManager:
 
         # Remove from active map.
         self._active_trades.pop(trade_id, None)
+        # Tomas 2026-05-13 CHIPUSDT race fix: stamp the (symbol, side)
+        # key as recently-closed so reverse_reconcile suppresses the
+        # spurious "Obevakad" warning during the 1-3 second window
+        # between the bot popping the trade and Bybit reducing the
+        # position size to 0. main.py checks _recently_closed before
+        # firing the orphan notification.
+        try:
+            if trade.signal and trade.signal.symbol:
+                close_side = (
+                    "Buy" if trade.signal.direction == "LONG" else "Sell"
+                )
+                self._recently_closed[(trade.signal.symbol, close_side)] = (
+                    time.monotonic()
+                )
+                # Best-effort GC: prune entries older than 5 min.
+                if len(self._recently_closed) > 500:
+                    cutoff = time.monotonic() - 300
+                    stale = [
+                        k for k, t in self._recently_closed.items()
+                        if t < cutoff
+                    ]
+                    for k in stale:
+                        self._recently_closed.pop(k, None)
+        except Exception:
+            pass
 
         # Notify — single template, with the close source appended to the
         # header so the operator sees exactly what Bybit did:

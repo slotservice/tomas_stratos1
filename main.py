@@ -19,6 +19,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -838,6 +839,18 @@ async def main() -> None:
                         if tr.hedge_trade_id or tr.hedge_conditional_order_id:
                             tracked.add((tr.signal.symbol, hedge_side))
 
+                # Tomas 2026-05-13 CHIPUSDT race fix: when close_trade
+                # fires, the trade leaves _active_trades INSTANTLY but
+                # Bybit needs 1-3 seconds to actually reduce the
+                # position size to zero. This reconcile worker runs
+                # during that window and sees an "untracked" position
+                # that is actually mid-close. Skip the orphan warning
+                # for (symbol, side) pairs closed within 60s.
+                recently_closed = getattr(
+                    position_mgr, "_recently_closed", {},
+                )
+                _now_mono = time.monotonic()
+                _RECENT_CLOSE_COOLDOWN = 60.0
                 for p in all_positions:
                     try:
                         size = float(p.get("size") or 0)
@@ -849,6 +862,17 @@ async def main() -> None:
                         if not sym or not side:
                             continue
                         if (sym, side) in tracked:
+                            continue
+                        closed_at = recently_closed.get((sym, side))
+                        if (
+                            closed_at is not None
+                            and (_now_mono - closed_at) < _RECENT_CLOSE_COOLDOWN
+                        ):
+                            log.debug(
+                                "reverse_reconcile.recently_closed_skip",
+                                symbol=sym, side=side,
+                                age_s=round(_now_mono - closed_at, 2),
+                            )
                             continue
                         unreal = float(p.get("unrealisedPnl") or 0)
                         # Untracked Bybit position — log a deduped
