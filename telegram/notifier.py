@@ -567,7 +567,18 @@ class TelegramNotifier:
         bot_id: str,
         bybit_id: str,
     ) -> str:
-        """Order placed on Bybit (before fill confirmation)."""
+        """Order placed on Bybit (before fill confirmation).
+
+        Tomas 2026-05-12 spec (9d): this notification fires immediately
+        after Bybit accepts the order (orderId returned), but BEFORE
+        the market-order fill arrives. At this point only the Bybit
+        order ID is Bybit-verified — entry/TP/SL/leverage/IM are still
+        the bot's REQUEST values. They are tagged "(begäran)" here so
+        the operator knows the verified versions appear in the
+        Position öppnad notification that follows the fill (where SL,
+        TPs, and leverage all carry their own Bybit-verified markers
+        per the 9a/9b/9c work).
+        """
         entry = signal.entry
         direction = signal.direction
         tp_block = _tp_lines_pct(signal.tps, entry, direction)
@@ -578,9 +589,12 @@ class TelegramNotifier:
         # Entry2 when the two values actually differ (future-proof for
         # signals that ever provide a two-leg entry).
         if entry1 == entry2:
-            entry_lines = f"💥 Entry: {entry1}"
+            entry_lines = f"💥 Entry: {entry1} (begäran)"
         else:
-            entry_lines = f"💥 Entry1: {entry1}\n💥 Entry2: {entry2}"
+            entry_lines = (
+                f"💥 Entry1: {entry1} (begäran)\n"
+                f"💥 Entry2: {entry2} (begäran)"
+            )
 
         text = (
             f"✅ Order placerad ({lev_type})\n"
@@ -589,14 +603,15 @@ class TelegramNotifier:
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
+            f"📍 Status: Bybit-bekräftad, väntar fill (verifierad data i Position öppnad)\n"
             f"\n"
             f"{entry_lines}\n"
             f"\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
             f"\n"
-            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
-            f"💰 IM: {im:.2f} USDT\n"
+            f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage} (begäran)\n"
+            f"💰 IM: {im:.2f} USDT (begäran)\n"
             f"🔑 Order-ID BOT: {bot_id}\n"
             f"🔑 Order-ID Bybit: {bybit_id}"
         )
