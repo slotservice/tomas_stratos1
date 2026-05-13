@@ -188,6 +188,18 @@ _STATUS_UPDATE_PATTERNS = [
         r"(?!\s*[:=]|\s*\d)",
         re.IGNORECASE,
     ),
+    # Smart Crypto Signals BOT (chat -1002339729195) and similar
+    # bot-channel sources use "Closing LONG" / "Closing SHORT" /
+    # "Partial Close LONG" / "Partial Close SHORT" as the status-
+    # update header. Body still contains "Symbol: X" + "Price: Y"
+    # so without this pattern the parser would happily re-interpret
+    # a CLOSE as a new entry signal at the close price and open an
+    # unwanted position. Live incident 2026-05-12 LINKUSDT (after
+    # the listener bot-skip fix exposed Smart Crypto to the parser).
+    re.compile(
+        r"\b(?:partial\s+)?clos(?:ing|e[ds]?)\s+(?:long|short)\b",
+        re.IGNORECASE,
+    ),
     # Turkish position-update header: "X işlemine dair güncelleme" /
     # "X işlemine yönelik güncelleme" — literally "update regarding
     # the X trade". Used by Whales of Investment (and likely other

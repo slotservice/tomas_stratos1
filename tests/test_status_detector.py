@@ -57,6 +57,15 @@ STATUS_MESSAGES = [
     # Form variant: "yönelik" instead of "dair".
     "$BTC işlemine yönelik güncelleme: TP1 alındı, kalan pozisyon "
     "korunuyor.",
+    # Smart Crypto Signals BOT close + partial-close formats
+    # (Tomas 2026-05-12, after the listener bot-skip fix exposed
+    # this source to the parser for the first time).
+    "🎯 **Closing LONG 📈**\n\n🟢 Symbol: LINKUSDT\n💰 Price: 9.8630\n"
+    "🎯 Full Take Profit - Manual close",
+    "🎯 **Partial Close LONG 📈**\n\n🟢 Symbol: LINKUSDT\n"
+    "💰 Price: 9.6610\n🎯 First target reached",
+    "🎯 **Partial Close SHORT 📈**\n\n🟢 Symbol: BTCUSDT\n"
+    "💰 Price: 60000\n🎯 Second target reached",
 ]
 
 

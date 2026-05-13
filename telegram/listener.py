@@ -369,21 +369,6 @@ class TelegramListener:
                 text_preview=message.text[:80] if message.text else "",
             )
 
-            # Skip messages from bots (but NOT from channels - channels
-            # have no "sender" or sender is the channel itself)
-            try:
-                sender = await event.get_sender()
-                if sender and isinstance(sender, User) and sender.bot:
-                    log.debug(
-                        "message_from_bot_skipped",
-                        chat_id=event.chat_id,
-                        bot_id=sender.id,
-                    )
-                    return
-            except Exception:
-                # Channel posts may not have a sender - that's fine
-                pass
-
             # Resolve channel name from our group map.
             # Telethon may report chat_id in various forms:
             #   - positive (e.g. 2290339976)
@@ -409,7 +394,27 @@ class TelegramListener:
                     if not channel_name:
                         channel_name = self._resolve_channel_name(-bare)
 
+            # Skip messages from bots ONLY if the chat is not monitored.
+            # Monitored signal channels are trusted regardless of who
+            # posts in them — several real signal sources (e.g. Smart
+            # Crypto Signals BOT, -1002339729195) post via a User+bot
+            # account, and the previous bot-skip filter was silently
+            # dropping every one of their messages (99 in the last 7
+            # days). For unmonitored chats keep the bot-skip so random
+            # user-bots in discussion rooms don't pollute the listener.
             if channel_name is None:
+                try:
+                    sender = await event.get_sender()
+                    if sender and isinstance(sender, User) and sender.bot:
+                        log.info(
+                            "message_from_bot_skipped",
+                            chat_id=event.chat_id,
+                            bot_id=sender.id,
+                        )
+                        return
+                except Exception:
+                    # Channel posts may not have a sender - that's fine
+                    pass
                 # Message from a chat we don't monitor -- skip
                 log.info(
                     "message_unmonitored_chat",
