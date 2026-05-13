@@ -363,7 +363,22 @@ _TP_PATTERNS = [
     # extractor sees ".0180" -> "180.0". Live BOB signal incident
     # 2026-05-04 (#1000000BOBUSDT, all 4 TPs collapsed to [180.0]).
     re.compile(
-        r"(?:tp|t|target|take[\s_-]*profit)[^\S\n]*(\d+)[^\d\n]{0,6}" + _PRICE_RE,
+        # 2026-05-13 Mudrex Insights fix: real signals format each TP
+        # line as "🎯 Take Profit (TP) 1: $302" — a "(TP)" / "(TPs)"
+        # parenthetical sits between the "Take Profit" keyword and the
+        # index. Without the optional `\(...\)` absorber the regex
+        # matched "Take Profit" then `[^\S\n]*` (whitespace only) and
+        # bailed at "(", letting pattern 3 (same-line fallback) capture
+        # the "1" of "TP 1:" as a fake TP price of 1.0. Live incident:
+        # TAOUSDT trade 1705 opened with TP1=$1 — a 99% drop away,
+        # effectively a missing TP. The added `\([^()\n]{0,8}\)` allows
+        # zero or one short parenthetical tag (no nested parens, no
+        # newlines, max 8 inner chars) between the keyword and the
+        # index. Bare patterns like "TP1: 66000" / "T1: 66000" /
+        # "Target 1: 66000" still match because the group is optional.
+        r"(?:tp|t|target|take[\s_-]*profit)[^\S\n]*"
+        r"(?:\([^()\n]{0,8}\)[^\S\n]*)?"
+        r"(\d+)[^\d\n]{0,6}" + _PRICE_RE,
         re.IGNORECASE,
     ),
     # Numbered list under a "Targets :" / "Take Profits :" / "Take
