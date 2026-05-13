@@ -398,6 +398,57 @@ class TelegramNotifier:
         )
         return await self._send_notify(text)
 
+    async def signal_skipped_by_override(
+        self,
+        symbol: str,
+        direction: str,
+        channel_name: str,
+        note: str = "",
+    ) -> str:
+        """Operator's symbol_overrides.toml said skip = true.
+
+        Tomas 2026-05-12 spec: even intentional skips must be visible
+        in the operator channel so the proof chain stays complete.
+        Low volume — typically only a few signals per day for symbols
+        on the skip list (e.g. GUA not listed on Bybit perp).
+        """
+        text = (
+            f"🔒 Skippad av operator-override\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(channel_name)}\n"
+            f"📊 Symbol: {_sym(symbol)}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Notering: {note or 'symbol_overrides.toml: skip = true'}"
+        )
+        return await self._send_notify(text)
+
+    async def api_error(
+        self,
+        symbol: str,
+        direction: str,
+        channel_name: str,
+        kind: str,
+        reason: str = "",
+    ) -> str:
+        """Bybit API call failed in a way that prevents the trade from
+        progressing.
+
+        Tomas 2026-05-12 spec: "API error" is listed explicitly as an
+        event that must always be visible. Covers instrument-info fetch
+        failures, leverage-set failures, slippage-check failures, and
+        similar non-retryable Bybit responses that previously dropped
+        silently into the file log.
+        """
+        text = (
+            f"⚠️ API-fel ({kind})\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(channel_name)}\n"
+            f"📊 Symbol: {_sym(symbol)}\n"
+            f"📈 Riktning: {direction}\n"
+            f"📍 Fel: {reason or 'Kontrollera manuellt'}"
+        )
+        return await self._send_notify(text)
+
     async def signal_update_skipped(
         self,
         signal,

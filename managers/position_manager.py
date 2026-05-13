@@ -647,6 +647,19 @@ class PositionManager:
                         log.exception("notify.not_on_bybit_failed")
                 return None
             log.exception("signal.slippage_check_error", symbol=symbol)
+            # Tomas 2026-05-12: API errors must be visible. The trade
+            # still continues (slippage check is non-critical) but the
+            # operator needs the proof that the check errored.
+            try:
+                await self._notifier.api_error(
+                    symbol=symbol,
+                    direction=direction,
+                    channel_name=getattr(signal, "channel_name", ""),
+                    kind="slippage_check",
+                    reason=str(exc)[:120],
+                )
+            except Exception:
+                log.exception("notify.api_error_slippage_check_failed")
 
         # Round leverage to symbol's leverage step (keeps e.g. 12.34 precision).
         try:
@@ -749,9 +762,23 @@ class PositionManager:
         try:
             side_tmp = "Buy" if direction == "LONG" else "Sell"
             await self._bybit.set_leverage(symbol, leverage, side_tmp)
-        except Exception:
+        except Exception as exc:
             log.exception("trade.set_leverage_failed",
                           symbol=symbol, leverage=leverage)
+            # Tomas 2026-05-12: API errors must be visible. The trade
+            # continues with the previously-set leverage (Bybit-side
+            # default if never set), but the operator must see the
+            # failure rather than silently inheriting a wrong leverage.
+            try:
+                await self._notifier.api_error(
+                    symbol=symbol,
+                    direction=direction,
+                    channel_name=getattr(signal, "channel_name", ""),
+                    kind="set_leverage",
+                    reason=f"x{leverage} — {str(exc)[:100]}",
+                )
+            except Exception:
+                log.exception("notify.api_error_set_leverage_failed")
 
         # ----------------------------------------------------------
         # 6. Calculate order quantity (rounded to exchange precision).

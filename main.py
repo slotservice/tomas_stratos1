@@ -534,79 +534,57 @@ async def main() -> None:
             )
 
             # On rejection AFTER symbol+direction were detected, notify
-            # the operator so they can see what was filtered and why
-            # (client 2026-04-28). "no_symbol" / "no_direction" / "empty"
-            # stay silent — those fire for non-signal chatter and would
-            # spam the channel.
+            # the operator. Tomas 2026-05-12 spec: "Nothing should happen
+            # silently inside the bot. If the bot blocks or skips
+            # something, the exact reason must be visible in Telegram."
+            # Pure-chatter rejections ("no_symbol" / "no_direction" /
+            # "empty") still stay silent — those are not signal-shaped
+            # and notifying them would mirror every chat message into
+            # the operator channel.
             if result.signal is None:
-                # Per-symbol-direction dedup so the same signal echoed
-                # by 3 Telegram channels doesn't fire 3 identical
-                # rejection messages (client 2026-04-30).
-                if result.reason == "no_entry" and result.symbol and result.direction:
-                    # Only notify when the message has STRONG signal-
-                    # shaped evidence:
-                    #   1. SL or TP was extracted, AND
-                    #   2. raw text contains an explicit entry-keyword
-                    # 2026-05-04 REVERTED: widening this to OR caused
-                    # a regression — chatter from #OBriansCryptoFamily
-                    # (USEUSDT) and noisy CoinAura messages (LABUSDT)
-                    # started firing "Blokerad, Entre saknas" again,
-                    # which is exactly the spam class Tomas had earlier
-                    # asked us to suppress. Trace IDs (signal_id) are
-                    # the right answer for visibility — operator can
-                    # grep one id to see why a signal didn't continue
-                    # without flooding the channel with rejection notes.
-                    # Without #2, news + market-analysis posts that
-                    # happen to list price levels (e.g. "Bull case:
-                    # target 271.62, Bear case: 250.05 support")
-                    # would still parse as having pseudo-TPs/SLs
-                    # because the regex matches "target N" / "support".
-                    # Tomas 2026-05-02: TAOUSDT market-analysis from
-                    # CryptoPasta + SUSHIUSDT TP-status from
-                    # CryptoMasterVip + GOODUSDT scam-forward from
-                    # WessloSignalsfwdJacksonmura all triggered
-                    # "Entre saknas" via the SL/TP-only gate.
-                    import re as _re
-                    has_signal_evidence = bool(result.sl) or bool(result.tps)
-                    has_entry_keyword = bool(_re.search(
-                        r"\b(entry|entries|buy\s+(?:zone|range|area|at|@)|"
-                        r"sell\s+(?:zone|range|area|at|@)|long\s+(?:here|@|at)|"
-                        r"short\s+(?:here|@|at)|market\s+(?:buy|sell|entry)|"
-                        r"open\s+(?:long|short))\b",
-                        raw_text or "",
-                        _re.IGNORECASE,
-                    ))
-                    if (
-                        has_signal_evidence
-                        and has_entry_keyword
-                        and position_mgr._should_send_reject_notify(
-                            "no_entry", result.symbol, result.direction,
+                if (result.reason == "skipped_by_override"
+                        and result.symbol):
+                    # Operator's own symbol_overrides.toml said skip.
+                    # Surfaces GUA / similar non-tradable symbols so
+                    # the operator sees the proof of receipt + skip
+                    # decision rather than silent drop.
+                    try:
+                        await tg_notifier.signal_skipped_by_override(
+                            symbol=result.symbol,
+                            direction=result.direction or "?",
+                            channel_name=channel_name,
+                            note=result.override_note or "",
                         )
-                    ):
-                        try:
-                            await tg_notifier.signal_blocked_no_entry(
-                                symbol=result.symbol,
-                                direction=result.direction,
-                                channel_name=channel_name,
-                            )
-                        except Exception:
-                            log.exception("notify.signal_blocked_no_entry_failed")
+                    except Exception:
+                        log.exception("notify.signal_skipped_by_override_failed")
+                elif result.reason == "no_entry" and result.symbol and result.direction:
+                    # Tomas 2026-05-12 reversed the earlier suppression
+                    # (d2f5369 revert 2026-05-04 — "don't widen for
+                    # visibility"). New rule: every signal-shaped
+                    # rejection notifies. Chatter without symbol or
+                    # direction is filtered upstream by the outer
+                    # `result.symbol and result.direction` guard.
+                    try:
+                        await tg_notifier.signal_blocked_no_entry(
+                            symbol=result.symbol,
+                            direction=result.direction,
+                            channel_name=channel_name,
+                        )
+                    except Exception:
+                        log.exception("notify.signal_blocked_no_entry_failed")
                 elif (result.reason in ("no_tps", "invalid")
                       and result.symbol and result.direction):
                     # ``invalid`` covers TP-direction mismatch (LONG with
                     # TP below entry, SHORT with TP above) AND the SL
                     # sanity-check failures from validate_signal.
-                    if position_mgr._should_send_reject_notify(
-                        "invalid_tps", result.symbol, result.direction,
-                    ):
-                        try:
-                            await tg_notifier.signal_blocked_invalid_tps(
-                                symbol=result.symbol,
-                                direction=result.direction,
-                                channel_name=channel_name,
-                            )
-                        except Exception:
-                            log.exception("notify.signal_blocked_invalid_tps_failed")
+                    try:
+                        await tg_notifier.signal_blocked_invalid_tps(
+                            symbol=result.symbol,
+                            direction=result.direction,
+                            channel_name=channel_name,
+                        )
+                    except Exception:
+                        log.exception("notify.signal_blocked_invalid_tps_failed")
                 return
 
             signal = result.signal
