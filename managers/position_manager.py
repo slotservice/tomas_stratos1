@@ -1907,6 +1907,9 @@ class PositionManager:
             await self._notifier.position_opened(
                 trade=trade,
                 signal=signal,
+                trailing_activation_pct=(
+                    self._settings.trailing_stop.activation_pct
+                ),
             )
         except Exception:
             log.exception("notify.position_opened_failed")

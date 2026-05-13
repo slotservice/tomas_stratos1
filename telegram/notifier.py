@@ -88,17 +88,20 @@ def _tp_lines_pct(
     entry: float,
     direction: str,
     verified: Optional[dict] = None,
+    trailing_activation_pct: Optional[float] = None,
 ) -> str:
     """Build TP lines with percentages, only real TPs (no zeros).
 
-    Markers applied per TP:
+    Markers applied per TP (priority order, first match wins):
       - " — Blocked <2%" if pct < 2.0 (mirrors the position_manager
         partial-TP-placement filter; Tomas 2026-05-12).
+      - " — Trailing" if pct >= trailing_activation_pct (Tomas 2026-05-13:
+        explain why these TPs have no Bybit-verifierad marker — they
+        merged into the trailing stop and have no individual order to
+        verify).
       - " (Bybit verifierad)" if verified[str(tp)] is True.
       - " (EJ på Bybit)" if verified[str(tp)] is False.
-      - no extra marker otherwise (TPs above trailing-activation get
-        merged into the trailing stop and never appear in verified,
-        so they render as plain lines).
+      - no extra marker otherwise.
     """
     verified = verified or {}
     lines: list[str] = []
@@ -110,6 +113,11 @@ def _tp_lines_pct(
                 pct = (entry - tp) / entry * 100
             if pct < 2.0:
                 marker = " — Blocked <2%"
+            elif (
+                trailing_activation_pct is not None
+                and pct >= trailing_activation_pct
+            ):
+                marker = " — Trailing"
             else:
                 v = verified.get(str(tp))
                 if v is True:
@@ -766,13 +774,26 @@ class TelegramNotifier:
         self,
         trade,
         signal,
+        trailing_activation_pct: Optional[float] = None,
     ) -> str:
         """Position confirmed open on Bybit."""
-        entry = signal.entry
         direction = signal.direction
+        # Tomas 2026-05-13: pct calculations must use the SAME entry the
+        # placement logic used (trade.avg_entry from the Bybit fill),
+        # otherwise the displayed % drifts from the bot's decision
+        # boundaries (e.g. a TP showing "+5.97%" gets trailing-merged
+        # because the avg_entry-based pct was actually 6.14%, above
+        # the 6.1% trailing activation). Fall back through fill_price
+        # then signal.entry for stubs / pre-fill states.
+        entry = (
+            getattr(trade, "avg_entry", None)
+            or getattr(trade, "entry1_fill_price", None)
+            or signal.entry
+        )
         tp_block = _tp_lines_pct(
             signal.tps, entry, direction,
             verified=getattr(trade, "tp_bybit_verified", None),
+            trailing_activation_pct=trailing_activation_pct,
         )
         sl_line = _sl_line_pct(trade.sl_price or signal.sl, entry, direction)
         # Tomas 2026-05-12: SL is now Bybit-verified post-set. Surface
