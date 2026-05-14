@@ -5049,7 +5049,7 @@ class PositionManager:
                 "tp_list": list(running.signal.tps),
                 "sl_price": running.signal.sl,
                 "leverage": getattr(running, "leverage", None),
-                "margin": getattr(running, "initial_margin", None),
+                "margin": getattr(running, "margin", None),
             }
             await self._update_existing_trade(synthetic, existing_row)
             return
