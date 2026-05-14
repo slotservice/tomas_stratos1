@@ -988,6 +988,36 @@ def validate_signal(signal: ParsedSignal) -> tuple[bool, str]:
     return True, ""
 
 
+# Tokens that look like signal metadata, not tickers — rejected as
+# symbol matches. A handful (see _BLOCKLIST_REAL_TICKERS) ARE real Bybit
+# tickers that collide with common English signal words.
+_SYMBOL_BLOCKLIST = frozenset({
+    "TP", "SL", "BE", "PNL", "ROI", "USD", "BUY", "SELL",
+    "LONG", "SHORT", "ENTRY", "STOP", "TARGET", "TAKE",
+    "PROFIT", "LOSS", "ZONE", "AREA", "PRICE", "COIN",
+    "PAIR", "SIGNAL", "ALERT", "UPDATE", "NEW", "FREE",
+    "VIP", "CALL", "CALLS",
+    # Signal-metadata words that often appear at line start and would
+    # otherwise false-match the generic fallback.
+    "LEVERAGE", "ORDERS", "ORDER", "TYPE", "SETUP",
+    "STRATEGY", "ACCURACY", "CROSS", "ISOLATED", "TREND",
+    "TRENDLINE", "SCALPING", "SWING", "DYNAMIC", "FIXED",
+    "HIGH", "LOW", "MID", "TERM", "OPPORTUNITY", "STRONG",
+    "RISK", "MANAGE", "MANUAL", "MANUALLY",
+    # Common English signal-prefix words that can appear at line start
+    # in body text and false-match the bare line-start fallback.
+    "USE", "USING", "MAX", "MAXIMUM", "MIN", "MINIMUM",
+    "FOR", "WITH", "FROM", "WHEN", "AFTER", "BEFORE",
+    "TIME", "DATE", "PCT", "PERCENT", "MARGIN",
+})
+# Real Bybit linear-perp tickers that also live in _SYMBOL_BLOCKLIST
+# because they collide with English signal words ("Leverage: Cross 20x",
+# "HIGH risk"). They are blocked only for the low-confidence fallback
+# patterns and allowed through when the match came from a high-confidence
+# pattern (hash/$ prefix or /USDT anchor).
+_BLOCKLIST_REAL_TICKERS = frozenset({"CROSS", "HIGH", "MAX"})
+
+
 def _extract_symbol(text: str) -> Optional[str]:
     """
     Try every symbol pattern in priority order and return the first
@@ -1009,26 +1039,14 @@ def _extract_symbol(text: str) -> Optional[str]:
                 # (e.g. "TP", "SL", "T1") unless they are known bases.
                 if len(upper) <= 2 and upper not in _KNOWN_BASES:
                     continue
-            # Skip tokens that are obviously not symbols
-            if upper in (
-                "TP", "SL", "BE", "PNL", "ROI", "USD", "BUY", "SELL",
-                "LONG", "SHORT", "ENTRY", "STOP", "TARGET", "TAKE",
-                "PROFIT", "LOSS", "ZONE", "AREA", "PRICE", "COIN",
-                "PAIR", "SIGNAL", "ALERT", "UPDATE", "NEW", "FREE",
-                "VIP", "CALL", "CALLS",
-                # Signal-metadata words that often appear at line start
-                # and would otherwise false-match the generic fallback.
-                "LEVERAGE", "ORDERS", "ORDER", "TYPE", "SETUP",
-                "STRATEGY", "ACCURACY", "CROSS", "ISOLATED", "TREND",
-                "TRENDLINE", "SCALPING", "SWING", "DYNAMIC", "FIXED",
-                "HIGH", "LOW", "MID", "TERM", "OPPORTUNITY", "STRONG",
-                "RISK", "MANAGE", "MANUAL", "MANUALLY",
-                # Common English signal-prefix words that can appear
-                # at line start in body text and false-match the bare
-                # line-start fallback.
-                "USE", "USING", "MAX", "MAXIMUM", "MIN", "MINIMUM",
-                "FOR", "WITH", "FROM", "WHEN", "AFTER", "BEFORE",
-                "TIME", "DATE", "MIN", "PCT", "PERCENT", "MARGIN",
+            # Skip tokens that are obviously not symbols. A few entries
+            # (CROSS, HIGH, MAX) are real Bybit tickers that collide with
+            # common English signal words — they are rejected only for the
+            # low-confidence fallback patterns and allowed through when the
+            # match came from a high-confidence (hash/$ or /USDT) pattern.
+            if upper in _SYMBOL_BLOCKLIST and not (
+                upper in _BLOCKLIST_REAL_TICKERS
+                and pat_idx in high_confidence_indices
             ):
                 continue
             return normalize_symbol(raw)

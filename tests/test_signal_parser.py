@@ -456,3 +456,49 @@ class TestDirectionExtraction:
 
     def test_no_direction(self):
         assert extract_direction("BTCUSDT entry 65000") is None
+
+
+# ===================================================================
+# Blocklisted-word tickers (CROSS / HIGH / MAX)
+# ===================================================================
+
+class TestBlocklistRealTickers:
+    """CROSS, HIGH, MAX are real Bybit tickers that collide with English
+    signal words. They must parse when hash/$ or /USDT anchored, but the
+    bare English word must still be rejected for the fallback patterns."""
+
+    def test_cross_hash_pair_parses(self):
+        text = (
+            "\U0001f518 Coin : #CROSS/USDT \U0001f518\n\nSHORT\n\n"
+            "Entry: 0.11911\n\nTarget: 0.11811 - 0.11778\n\n"
+            "StopLoss : 0.12313\n\nLeverage: 25x"
+        )
+        signal = parse_signal(text)
+        assert signal is not None
+        assert signal.symbol == "CROSSUSDT"
+        assert signal.direction == "SHORT"
+
+    def test_cross_coin_hash_parses(self):
+        text = (
+            "New signal\n\nCoin:#CROSS\n\nSignal type:Long\n\n"
+            "Entry: 0.10137\n\nTake profits Targets\n1) 0.10400\n"
+            "2) 0.10800\n\nLeverage:50x\n\nStop loss: 0.09800"
+        )
+        signal = parse_signal(text)
+        assert signal is not None
+        assert signal.symbol == "CROSSUSDT"
+
+    def test_high_pair_parses(self):
+        signal = parse_signal("#HIGH/USDT LONG\nEntry: 1.5\nTP: 1.6\nSL: 1.4")
+        assert signal is not None
+        assert signal.symbol == "HIGHUSDT"
+
+    def test_cross_leverage_word_not_a_symbol(self):
+        """'Cross' in 'Leverage: Cross 20x' must NOT become CROSSUSDT."""
+        from core.signal_parser import _extract_symbol
+        assert _extract_symbol("Leverage: Cross 20x\nUse 2% margin") is None
+
+    def test_short_hashtag_still_rejected(self):
+        """#SHORT is a direction word, never a ticker — stays blocked."""
+        from core.signal_parser import _extract_symbol
+        assert _extract_symbol("#SHORT term view on the market") is None
