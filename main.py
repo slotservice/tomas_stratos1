@@ -504,7 +504,11 @@ async def main() -> None:
     # ---------------------------------------------------------------
     # a) TG listener -> signal parser -> position manager
     parse_signal_detailed_fn = C["parse_signal_detailed"]
-    from core.signal_parser import is_status_update
+    from core.signal_parser import (
+        is_status_update,
+        is_trade_update_message,
+        parse_trade_update,
+    )
 
     async def _on_signal_message(
         raw_text: str,
@@ -527,6 +531,30 @@ async def main() -> None:
                     text_preview=raw_text[:80],
                 )
                 return
+
+            # Trade-update guard (Tomas 2026-05-15). "OPEN ENTRY / NEW
+            # TP" follow-up messages carry no direction word, so the
+            # parser would drop them at no_direction. Route them to the
+            # position manager's trade-update handler instead — it
+            # updates a running trade, or (if none) opens a fresh
+            # fixed-mode trade with the direction inferred from
+            # TP-vs-entry. Wrapped so a handler error can't kill the
+            # listener.
+            if is_trade_update_message(raw_text):
+                update = parse_trade_update(raw_text)
+                if update is not None:
+                    try:
+                        await position_mgr.handle_trade_update(
+                            update, channel_name
+                        )
+                    except Exception:
+                        log.exception(
+                            "trade_update.handler_failed",
+                            channel_name=channel_name,
+                        )
+                    return
+                # is_trade_update_message True but no symbol — fall
+                # through; parse_signal_detailed will exit silently.
 
             result = parse_signal_detailed_fn(
                 text=raw_text,

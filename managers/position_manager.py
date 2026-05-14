@@ -4987,6 +4987,114 @@ class PositionManager:
         except Exception:
             log.exception("notify.signal_updated_tp_sl_failed")
 
+    async def handle_trade_update(self, update: Any, channel_name: str) -> None:
+        """Route an "OPEN ENTRY / NEW TP" trade-update message.
+
+        Tomas 2026-05-15: these follow-up messages carry a symbol +
+        new TPs (and an entry) but NO direction word and usually no SL,
+        so the parser drops them at no_direction. There are two cases:
+
+        Case A — a trade for the symbol is already running: apply the
+          update to it via _update_existing_trade (TP-improvement check,
+          liquidation check, "signal updated" notification), keeping the
+          ORIGINAL group name from the running trade.
+        Case B — no running trade (the bot restarted since the original
+          signal): treat it as a fresh signal. Direction is inferred
+          from TPs-vs-entry (all above -> LONG, all below -> SHORT);
+          an ambiguous straddle is skipped, never guessed. sl is left
+          None so process_signal applies the fixed-mode fallback
+          (x10 leverage, -3% SL) — exactly Tomas's spec.
+        """
+        from core.signal_parser import ParsedSignal
+
+        symbol = update.symbol
+
+        # Find a running trade for this symbol (any direction — the bot
+        # only ever holds one direction per symbol).
+        running = None
+        for tr in list(self._active_trades.values()):
+            if tr.is_terminal or tr.signal is None:
+                continue
+            if tr.signal.symbol == symbol:
+                running = tr
+                break
+
+        # ---- Case A: a trade is running -> update it ----
+        if running is not None:
+            direction = running.signal.direction
+            orig_channel = running.signal.channel_name or channel_name
+            log.info(
+                "trade_update.case_a_update_running",
+                symbol=symbol,
+                direction=direction,
+                trade_id=running.id,
+                new_tps=update.tps,
+                new_sl=update.sl,
+            )
+            synthetic = ParsedSignal(
+                symbol=symbol,
+                direction=direction,
+                entry=running.signal.entry,
+                tps=list(update.tps),
+                sl=update.sl,
+                channel_name=orig_channel,  # keep the ORIGINAL group name
+                raw_text="(trade update)",
+                parsed_at=time.time(),
+            )
+            existing_row = {
+                "id": running.id,
+                "state": running.state.value,
+                "entry_price": running.signal.entry,
+                "direction": direction,
+                "tp_list": list(running.signal.tps),
+                "sl_price": running.signal.sl,
+                "leverage": getattr(running, "leverage", None),
+                "margin": getattr(running, "initial_margin", None),
+            }
+            await self._update_existing_trade(synthetic, existing_row)
+            return
+
+        # ---- Case B: no running trade -> treat as a fresh signal ----
+        entry = update.entry
+        tps = [t for t in update.tps if t and t > 0]
+        if entry <= 0 or not tps:
+            log.info(
+                "trade_update.case_b_skipped_no_entry_or_tps",
+                symbol=symbol, entry=entry, tps=tps,
+            )
+            return
+
+        above = sum(1 for t in tps if t > entry)
+        below = sum(1 for t in tps if t < entry)
+        if above and not below:
+            direction = "LONG"
+        elif below and not above:
+            direction = "SHORT"
+        else:
+            # TPs straddle the entry (or all equal it) — direction is
+            # ambiguous. Do NOT guess; skip with a visible warning.
+            log.warning(
+                "trade_update.case_b_skipped_ambiguous_direction",
+                symbol=symbol, entry=entry, tps=tps,
+            )
+            return
+
+        log.info(
+            "trade_update.case_b_fresh_signal",
+            symbol=symbol, direction=direction, entry=entry, tps=tps,
+        )
+        synthetic = ParsedSignal(
+            symbol=symbol,
+            direction=direction,
+            entry=entry,
+            tps=tps,
+            sl=None,  # no SL -> process_signal applies fixed mode (x10, -3%)
+            channel_name=channel_name,
+            raw_text="(trade update -> fresh signal)",
+            parsed_at=time.time(),
+        )
+        await self.process_signal(synthetic)
+
     async def _safe_notify(self, message: str) -> None:
         """Send a Telegram notification, swallowing errors."""
         try:
