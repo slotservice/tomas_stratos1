@@ -1185,28 +1185,31 @@ def parse_signal_detailed(
     sl = prices["sl"]
 
     if entry <= 0:
-        # INFO (not DEBUG) — symbol+direction were extracted, so the
-        # message DID look like a signal. The operator needs visibility
-        # into these "looked like a signal but parser missed entry"
-        # cases (Tomas 2026-05-04: "valid signals not appearing in
-        # channel"). The downstream rejection-notify gate decides
-        # whether to surface this to the Telegram channel.
+        # symbol+direction were extracted, so the message LOOKED like a
+        # signal — but a real signal always carries at least one of
+        # entry/SL/TP. When SL and every TP are ALSO missing, this is
+        # not a signal: it is news / chatter / a target-update post
+        # ("Looking for #QNT long above this high", "COMPLETE 50
+        # REACTION TAP TAP"). That case is logged under a distinct
+        # event — signal_parse_no_entry_chatter — so the missed-signal
+        # audit bins it as intentional and the main.py rejection-notify
+        # gate stays silent for it. Tomas 2026-05-14: "bot classifies
+        # news/updates as signals and sends error messages for them."
+        #
+        # A real signal missing ONLY its entry price still has SL
+        # and/or TP lines — it keeps the original signal_parse_no_entry
+        # event and still fires "Blokerad, Entre saknas" (Tomas
+        # 2026-05-12 spec: every signal-shaped rejection notifies).
+        has_price_structure = bool(tps) or bool(sl)
         log.info(
-            "signal_parse_no_entry",
+            "signal_parse_no_entry" if has_price_structure
+            else "signal_parse_no_entry_chatter",
             symbol=symbol,
             direction=direction,
             channel_id=channel_id,
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
-        # Populate sl/tps so the caller can distinguish "real signal
-        # missing entry" from "news/article that happens to contain a
-        # ticker + direction word". A real signal always has at least
-        # one of entry/SL/TP — when none of them are present, the
-        # message is non-signal chatter and the rejection should stay
-        # silent (avoids spamming "Entre saknas" for news headlines
-        # like "The Market Is Correcting" or "Wasabi Protocol Hacked",
-        # 2026-04-30 Tomas report).
         return ParseResult(reason="no_entry",
                            symbol=symbol,
                            direction=direction,

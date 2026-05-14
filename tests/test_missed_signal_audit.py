@@ -120,6 +120,23 @@ def test_no_entry_with_notification_counts_as_visible(tmp_path: Path):
     assert audit["silent_drops"] == 0
 
 
+def test_no_entry_chatter_counts_as_intentional(tmp_path: Path):
+    """signal_parse_no_entry_chatter is the parser's distinct event for
+    a ticker + LONG/SHORT word with NO entry/SL/TP — news / chatter /
+    a target-update post. The main.py gate intentionally stays silent
+    for it, so the audit must bin it as intentional, NOT a silent drop
+    (otherwise the noise just moves into the audit report). Tomas
+    2026-05-14."""
+    log = _write_log(tmp_path, [
+        _line(-60, "chat2222", "message_received", channel_name="Crypto Corn"),
+        _line(-59, "chat2222", "signal_parse_no_entry_chatter",
+              symbol="QNTUSDT", direction="LONG"),
+    ])
+    audit = audit_log_window(log, window_minutes=10)
+    assert audit["intentional"] == 1
+    assert audit["silent_drops"] == 0
+
+
 def test_in_flight_signal_excluded(tmp_path: Path):
     """A signal whose newest event is within the 5-second grace
     window is likely still mid-pipeline. Don't flag it yet."""

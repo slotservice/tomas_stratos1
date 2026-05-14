@@ -49,10 +49,16 @@ _VISIBLE_EVENTS = frozenset({
 })
 
 # Events that mean "intentionally silent" — operator-approved drops.
+# signal_parse_no_entry_chatter: a message with a ticker + LONG/SHORT
+# word but NO entry, NO SL and NO TP. The parser logs it under this
+# distinct event (vs signal_parse_no_entry) precisely so the audit
+# bins it here as intentional — it is news / chatter / a target-update
+# post, not a real signal that was silently dropped. Tomas 2026-05-14.
 _INTENTIONAL_DROP_EVENTS = frozenset({
     "status_update_skipped",
     "signal_parse_no_symbol",
     "signal_parse_no_direction",
+    "signal_parse_no_entry_chatter",
     "signal_parse.skipped_by_operator_override",
     "message_unmonitored_chat",
 })

@@ -127,6 +127,50 @@ class TestParserNoFalseSignal:
         )
         assert result.signal is None
 
+    def test_chatter_no_price_structure_logs_as_chatter(self):
+        """A message with a ticker + LONG/SHORT word but NO entry, NO
+        SL and NO TP is news / chatter — not a signal. The parser must
+        return no_entry with empty tps + no sl AND log it under the
+        distinct ``signal_parse_no_entry_chatter`` event so the main.py
+        gate stays silent and the missed-signal audit bins it as
+        intentional. Tomas 2026-05-14: "bot classifies news/updates as
+        signals and sends error messages for them."
+        """
+        from structlog.testing import capture_logs
+
+        text = "Looking for a #QNT long above this high"
+        with capture_logs() as logs:
+            result = parse_signal_detailed(
+                text=text, channel_id=0, channel_name="Crypto Corn",
+            )
+        assert result.signal is None
+        assert result.reason == "no_entry"
+        assert result.symbol == "QNTUSDT"
+        assert result.direction == "LONG"
+        assert result.tps == []
+        assert result.sl is None
+        events = [e.get("event") for e in logs]
+        assert "signal_parse_no_entry_chatter" in events
+        assert "signal_parse_no_entry" not in events
+
+    def test_real_signal_missing_entry_logs_as_no_entry(self):
+        """A real signal that has SL/TP lines but no parseable entry
+        still logs the original ``signal_parse_no_entry`` event so the
+        main.py gate notifies "Blokerad, Entre saknas" as before."""
+        from structlog.testing import capture_logs
+
+        text = "#BTCUSDT LONG\nTP1: 70000\nTP2: 71000\nSL: 64000"
+        with capture_logs() as logs:
+            result = parse_signal_detailed(
+                text=text, channel_id=0, channel_name="SomeChannel",
+            )
+        assert result.signal is None
+        assert result.reason == "no_entry"
+        assert result.tps or result.sl
+        events = [e.get("event") for e in logs]
+        assert "signal_parse_no_entry" in events
+        assert "signal_parse_no_entry_chatter" not in events
+
 
 class TestStateMachineFailureRecovery:
     """The state machine must always allow a clean exit to a terminal

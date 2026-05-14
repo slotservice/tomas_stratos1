@@ -558,13 +558,23 @@ async def main() -> None:
                         )
                     except Exception:
                         log.exception("notify.signal_skipped_by_override_failed")
-                elif result.reason == "no_entry" and result.symbol and result.direction:
-                    # Tomas 2026-05-12 reversed the earlier suppression
-                    # (d2f5369 revert 2026-05-04 — "don't widen for
-                    # visibility"). New rule: every signal-shaped
-                    # rejection notifies. Chatter without symbol or
-                    # direction is filtered upstream by the outer
-                    # `result.symbol and result.direction` guard.
+                elif (result.reason == "no_entry" and result.symbol
+                        and result.direction and (result.tps or result.sl)):
+                    # Notify only for SIGNAL-SHAPED rejections: symbol +
+                    # direction + at least one of SL/TP. A real signal
+                    # missing only its entry price still has SL and/or
+                    # TP lines and still fires "Blokerad, Entre saknas"
+                    # (Tomas 2026-05-12 spec: every signal-shaped
+                    # rejection notifies).
+                    #
+                    # 2026-05-14: the `(result.tps or result.sl)` guard
+                    # was added. A message with a ticker + LONG/SHORT
+                    # word but NO entry, NO SL and NO TP is news /
+                    # chatter / a target-update post — the parser logs
+                    # it as signal_parse_no_entry_chatter and it exits
+                    # silently here. Tomas 2026-05-14: "bot classifies
+                    # news/updates as signals and sends error messages
+                    # for them."
                     try:
                         await tg_notifier.signal_blocked_no_entry(
                             symbol=result.symbol,
