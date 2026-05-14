@@ -137,6 +137,16 @@ _STATUS_UPDATE_PATTERNS = [
         r"\btake[\s_-]*profit\s+target\s+\d+\b[^\n]{0,5}[✅✓☑]",
         re.IGNORECASE,
     ),
+    # Short form "TP4 ✅" / "Target 1 ✅" — checkmark, no "hit/reached"
+    # word and not the full "take profit target" phrase. Benjamin Cowen
+    # posts target hits as just "$NAORIS\nTP4 ✅" (Tomas 2026-05-15).
+    # The gap before the checkmark is [^\n\d] so it can never skip over
+    # a price — "TP1: 0.045" does NOT match (the "0" blocks it), only
+    # "TP1 ✅"-style hit pings do.
+    re.compile(
+        r"\b(?:tp|target)\s*\d+\b[^\n\d]{0,4}[✅✓☑]",
+        re.IGNORECASE,
+    ),
     # "Stop Target Hit", "Stop Loss Hit", "SL Hit", "Stop Hit"
     re.compile(
         r"\b(?:stop(?:[\s_-]*loss|[\s_-]*target)?|sl)\s+(?:hit|triggered|reached)\b",

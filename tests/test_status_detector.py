@@ -66,6 +66,12 @@ STATUS_MESSAGES = [
     "💰 Price: 9.6610\n🎯 First target reached",
     "🎯 **Partial Close SHORT 📈**\n\n🟢 Symbol: BTCUSDT\n"
     "💰 Price: 60000\n🎯 Second target reached",
+    # Short-form "TPN ✅" hit pings — checkmark, no "hit/reached" word
+    # and not the full "take profit target" phrase. Benjamin Cowen
+    # posts target hits as just "$NAORIS\nTP4 ✅" (Tomas 2026-05-15).
+    "$NAORIS\nTP4 ✅",
+    "$AIN\nTP1 ✅",
+    "#BTC/USDT Target 2 ✅",
 ]
 
 
@@ -127,6 +133,14 @@ Stop loss: 60000""",
     """#FOO - Target 1: 0.5
 - Target 2: 0.6
 - Stop loss: 0.4""",
+    # 2026-05-15 negative case for the short-form "TPN ✅" pattern: a
+    # real signal whose TP lines carry a decorative checkmark BEFORE
+    # the keyword ("✅TP: 6.4 - 7.4") must NOT be flagged — the pattern
+    # only fires on "TP<number> ✅" (checkmark AFTER the index, no
+    # price between).
+    """🟢 LONG #LAB NOW
+❌SL: 3.6
+✅TP: 6.4 - 7.4 - 8.4""",
 ]
 
 
