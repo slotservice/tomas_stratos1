@@ -543,22 +543,15 @@ async def main() -> None:
             # and notifying them would mirror every chat message into
             # the operator channel.
             if result.signal is None:
-                if (result.reason == "skipped_by_override"
-                        and result.symbol):
-                    # Operator's own symbol_overrides.toml said skip.
-                    # Surfaces GUA / similar non-tradable symbols so
-                    # the operator sees the proof of receipt + skip
-                    # decision rather than silent drop.
-                    try:
-                        await tg_notifier.signal_skipped_by_override(
-                            symbol=result.symbol,
-                            direction=result.direction or "?",
-                            channel_name=channel_name,
-                            note=result.override_note or "",
-                        )
-                    except Exception:
-                        log.exception("notify.signal_skipped_by_override_failed")
-                elif (result.reason == "no_entry" and result.symbol
+                # skipped_by_override (symbol_overrides.toml said
+                # skip = true) is intentionally NOT notified. Tomas
+                # 2026-05-15: a per-skip message just duplicates the
+                # "not on Bybit" concept and clutters the channel —
+                # the skip list only holds symbols already known to be
+                # untradeable. The skip is still recorded in the file
+                # log (signal_parse.skipped_by_override) for the audit
+                # trail; only the operator-channel message is dropped.
+                if (result.reason == "no_entry" and result.symbol
                         and result.direction and (result.tps or result.sl)):
                     # Notify only for SIGNAL-SHAPED rejections: symbol +
                     # direction + at least one of SL/TP. A real signal
