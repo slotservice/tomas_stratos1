@@ -266,6 +266,35 @@ class TestEntryRange:
         assert signal.sl == 0.0298
         assert signal.tps == [0.0315, 0.0318, 0.0328]
 
+    def test_parse_coinaura_pair_label_space_separator_entrys(self):
+        """CoinAura "PAIR:- UB USDT" format. Before 2026-05-14:
+          - symbol: the ticker-to-USDT separator was a literal "/"/"-",
+            but here it is just a space, so "UB" was missed and the
+            line-start fallback grabbed "PROJECT" from "Project Type";
+          - entry: the keyword is "Entrys" (plural-with-s), matched by
+            neither "entry" nor "entries";
+          - TPs: the positional fallback could not find the entry line
+            because it, too, did not recognise "Entrys".
+        The whole signal must now resolve to UBUSDT end-to-end.
+        """
+        text = (
+            "Project Type :- SCALP\n\n"
+            "PAIR:- UB USDT\n\n"
+            "Direction : LONG\n\n"
+            "Leverage: Cross 50\n\n"
+            "Entrys : 0.2145 - 0.2045\n\n"
+            "Targets:\n 0.2250\n 0.2400\n 0.2700\n\n"
+            "Stop-Loss: 0.1980"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "UBUSDT"
+        assert signal.direction == "LONG"
+        assert signal.entry == 0.2095
+        assert signal.tps == [0.225, 0.24, 0.27]
+        assert signal.sl == 0.198
+
 
 # ===================================================================
 # Missing fields

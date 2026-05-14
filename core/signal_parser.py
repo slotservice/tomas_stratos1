@@ -353,7 +353,10 @@ _ENTRY_PATTERNS = [
         # (CoinAura / American Crypto) and "ENTRY MARKET - 0.6100"
         # (Sweden Crypto). Additive — the group stays optional, so
         # plain "Entry: x" still matches through the same pattern.
-        r"(?:(?:entry|entries|enter)\s*(?:zone|price|area|orders?|targets?|between|range|now|market)?|"
+        # 2026-05-14: also accept "entrys" (CoinAura "Entrys : 0.2145
+        # - 0.2045"). Longer alternatives first so "entries"/"entrys"
+        # win over the "entry" prefix.
+        r"(?:(?:entries|entrys|entry|enter)\s*(?:zone|price|area|orders?|targets?|between|range|now|market)?|"
         r"buy(?:\s*(?:zone|price|area|range|at|around|@|now))?|"
         r"(?:long|short)[^\S\n]*(?:zone|below|above)|"
         r"open|limit|market\s*(?:buy|entry))"
@@ -555,7 +558,13 @@ _SYMBOL_PATTERNS = [
     re.compile(r"(?:^|[\n\r])\s*[#$🔥🟢🔴📈📉⚡️💰💵💴💶💷💹💲✅❌]*\s*([A-Z0-9]{2,15}USDT)\b", re.IGNORECASE),
     # "PAIR ✈️MOVR/USDT" — "PAIR" / "pair" label followed by an emoji
     # or whitespace then the ticker (CoinAura header format).
-    re.compile(r"\bpair\b[^A-Za-z0-9\n]*([A-Z0-9]{1,15})\s*[/\-]\s*USDT\b", re.IGNORECASE),
+    # 2026-05-14: the ticker-to-USDT separator was "\s*[/\-]\s*", which
+    # required a literal "/" or "-". CoinAura also posts "PAIR:- UB
+    # USDT" where the separator is just a space, so "UB" was missed and
+    # the bare line-start fallback grabbed "PROJECT" from "Project Type"
+    # instead. Separator is now [ /\-]+ — space/slash/dash, one or more,
+    # but NOT newline, so it still cannot bleed across lines.
+    re.compile(r"\bpair\b[^A-Za-z0-9\n]*([A-Z0-9]{1,15})[ /\-]+USDT\b", re.IGNORECASE),
     # FALLBACK: "#MIVR" / "$SKYAI" / "#DAM" / "#Q" — explicitly-
     # prefixed ticker with no USDT suffix. The `#` or `$` prefix is
     # the operator's deliberate ticker tag and is high-confidence.
@@ -843,12 +852,13 @@ def extract_prices(text: str) -> dict:
     # UPTADES format).
     if not collected_tps:
         # Anchor on the first line that contains "entry", "entries",
-        # "enter", "buy range/zone/area", or "long/short zone" — so
-        # signals using "Buy Range:" (BANANAS31), "ENTER" (CoinAura)
-        # or "LONG ZONE:" (Spot Future Signals) as their entry-zone
-        # header also benefit from the positional TP fallback.
+        # "entrys", "enter", "buy range/zone/area", or "long/short
+        # zone" — so signals using "Buy Range:" (BANANAS31), "ENTER"
+        # (CoinAura), "Entrys :" (CoinAura) or "LONG ZONE:" (Spot
+        # Future Signals) as their entry-zone header also benefit from
+        # the positional TP fallback.
         entry_line_re = re.compile(
-            r"(?im)^.*\b(?:entry|entries|enter|buy[\s-]+(?:range|zone|area)"
+            r"(?im)^.*\b(?:entry|entries|entrys|enter|buy[\s-]+(?:range|zone|area)"
             r"|(?:long|short)[\s-]+zone)\b.*$"
         )
         sl_line_re = re.compile(
