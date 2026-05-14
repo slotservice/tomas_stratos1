@@ -195,3 +195,45 @@ async def test_blocked_has_existing_trade_reference():
 
     assert result.is_blocked
     assert result.existing_trade["id"] == 42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    [
+        "PROFIT_LOCK_1_ACTIVE", "PROFIT_LOCK_2_ACTIVE",
+        "SL_MOVED_TO_TP1", "SL_MOVED_TO_TP2",
+        "TRAILING_ARMED", "TRAILING_UPDATED",
+        "HEDGE_ARMED", "PROTECTION_FAILED",
+    ],
+)
+async def test_mid_lifecycle_states_still_seen_as_active(state):
+    """Regression (AIGENSYN, live 2026-05-14): _fetch_active_trades used a
+    hardcoded whitelist of active states that drifted out of sync with
+    the TradeState enum. A trade that moved its SL into profit-lock
+    became invisible to the detector, so the same signal forwarded
+    minutes later opened a duplicate position. Every non-terminal state
+    must still be treated as an active trade."""
+    existing = [{"id": 1, "state": state, "avg_entry": 65000.0}]
+    db = _make_db(active_trades=existing)
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    signal = _make_signal(symbol="BTCUSDT", entry=65500.0)  # 0.77% diff
+    result = await detector.check(signal)
+
+    assert result.is_blocked, f"trade in {state} must still count as active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["CLOSED", "CANCELLED", "ERROR"])
+async def test_terminal_states_not_treated_as_active(state):
+    """Terminal trades must NOT block a new signal — a closed trade is
+    not a duplicate."""
+    existing = [{"id": 1, "state": state, "avg_entry": 65000.0}]
+    db = _make_db(active_trades=existing)
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    signal = _make_signal(symbol="BTCUSDT", entry=65500.0)
+    result = await detector.check(signal)
+
+    assert result.is_new, f"trade in terminal state {state} must not block"

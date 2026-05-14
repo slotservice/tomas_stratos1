@@ -27,10 +27,27 @@ from typing import TYPE_CHECKING, Optional
 
 import structlog
 
+from core.models import TradeState
+
 if TYPE_CHECKING:
     from core.signal_parser import ParsedSignal
 
 log = structlog.get_logger(__name__)
+
+# A trade counts as "active" for duplicate-detection purposes unless it
+# is in a terminal state. Mirrors Trade.is_terminal (CLOSED / CANCELLED
+# / ERROR). 2026-05-15: _fetch_active_trades used to filter on a
+# hardcoded WHITELIST of active states — but that list drifted out of
+# sync with the TradeState enum (PROFIT_LOCK_1/2_ACTIVE, SL_MOVED_TO_TP*,
+# TRAILING_ARMED/UPDATED, HEDGE_ARMED, PROTECTION_FAILED were all
+# missing). A trade that moved its SL into profit-lock then went
+# invisible to the detector, so the same signal forwarded minutes later
+# opened a duplicate position (AIGENSYN, live 2026-05-14). Inverting to
+# a terminal blocklist is drift-proof — new active/intermediate states
+# can never silently break dedup again.
+_TERMINAL_TRADE_STATES = frozenset(
+    s.value for s in (TradeState.CLOSED, TradeState.CANCELLED, TradeState.ERROR)
+)
 
 
 class DuplicateCheckResult:
@@ -236,15 +253,9 @@ class DuplicateDetector:
             log.exception("duplicate_check.db_error", symbol=symbol)
             return []
 
-        # Filter to active trades only.
-        active_states = {
-            "PENDING", "ENTRY1_PLACED", "ENTRY1_FILLED",
-            "ENTRY2_PLACED", "ENTRY2_FILLED", "POSITION_OPEN",
-            "BREAKEVEN_ACTIVE", "SCALING_STEP_1", "SCALING_STEP_2",
-            "SCALING_STEP_3", "SCALING_STEP_4", "TRAILING_ACTIVE",
-            "HEDGE_ACTIVE", "REENTRY_WAITING",
-        }
-
+        # Keep every trade that is NOT in a terminal state — see
+        # _TERMINAL_TRADE_STATES above for why this is a blocklist, not
+        # a whitelist.
         result = []
         for row in trades:
             if hasattr(row, "_asdict"):
@@ -260,7 +271,7 @@ class DuplicateDetector:
                 }
 
             state = d.get("state", "")
-            if state in active_states:
+            if state not in _TERMINAL_TRADE_STATES:
                 # Use avg_entry if available, otherwise fall back to
                 # the signal's entry price via join.
                 entry_price = d.get("avg_entry") or d.get("entry_price", 0.0)
