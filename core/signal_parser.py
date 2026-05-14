@@ -344,8 +344,10 @@ _ENTRY_PATTERNS = [
         # as "Entre saknas". All additive — existing formats unaffected.
         #   - "enter" keyword alternate: CoinAura / American Crypto post
         #     "ENTER ➡️1.046 - 1.043" (the verb is ENTER, not ENTRY).
-        #   - "long zone" / "short zone" keyword: Spot Future Signals
-        #     posts "LONG ZONE: 0.1145 - 0.1120" as the entry line.
+        #   - "long zone" / "short zone" / "long below" / "short above"
+        #     keyword: Spot Future Signals posts "LONG ZONE: 0.1145 -
+        #     0.1120" and CoinAura posts "LONG BELOW (0.03100)(0.03080)"
+        #     as the entry line.
         # 2026-05-14 batch fix: "now" / "market" can sit between the
         # entry keyword and the price — "TAKE ENTRY NOW 0.04270"
         # (CoinAura / American Crypto) and "ENTRY MARKET - 0.6100"
@@ -353,7 +355,7 @@ _ENTRY_PATTERNS = [
         # plain "Entry: x" still matches through the same pattern.
         r"(?:(?:entry|entries|enter)\s*(?:zone|price|area|orders?|targets?|between|range|now|market)?|"
         r"buy(?:\s*(?:zone|price|area|range|at|around|@|now))?|"
-        r"(?:long|short)[^\S\n]*zone|"
+        r"(?:long|short)[^\S\n]*(?:zone|below|above)|"
         r"open|limit|market\s*(?:buy|entry))"
         # 2026-05-14 Maheek Kripto fix: the value can be wrapped in
         # square brackets — "Entry = [ 1.040 TO 1.037 ]". The optional

@@ -244,6 +244,28 @@ class TestEntryRange:
         assert signal.symbol == "SIRENUSDT"
         assert signal.entry == 0.61
 
+    def test_parse_long_below_parenthesised_zone(self):
+        """CoinAura format: the entry line is "LONG BELOW
+        (0.03100)(0.03080)" — the verb+"below" replaces "entry", and
+        the price is parenthesised. Before 2026-05-14 only "long zone"
+        was accepted, so this fell through to no_entry."""
+        text = (
+            "➡️#IDOL /USDT (LONG)\U0001f53c\n\n"
+            "LEVERAGE : 20X TO 75X\n\n"
+            "\U0001f4ca LONG BELOW (0.03100)(0.03080)\n\n"
+            "\U0001fa99 TARGETS\n\n"
+            "\U0001f947 0.03150\n\U0001f948 0.03180\n\U0001f949 0.03280\n\n"
+            "⚠️ STOPLOSS : 0.02980"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "IDOLUSDT"
+        assert signal.direction == "LONG"
+        assert signal.entry == 0.031
+        assert signal.sl == 0.0298
+        assert signal.tps == [0.0315, 0.0318, 0.0328]
+
 
 # ===================================================================
 # Missing fields
