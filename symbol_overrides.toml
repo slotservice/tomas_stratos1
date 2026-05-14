@@ -86,3 +86,24 @@ note = "Not listed on Bybit perp (any prefix) as of 2026-05-13."
 [TAG]
 rename_to = "1000TAGUSDT"
 note = "Bybit perp is 1000TAGUSDT, not TAGUSDT"
+
+# 2026-05-14: from Tomas's morning batch — three more "symbol invalid"
+# offenders, each verified via instruments-info across the plain,
+# 1000x and 10000x prefixes on api-demo.bybit.com.
+#   - TURBO: only 1000TURBOUSDT exists — rename, same as TOSHI/TAG.
+#   - DODOX, COLLECT: not listed in any prefix form — skip.
+# (ATA and SKYAI from the same batch were checked too and DO exist on
+# Bybit demo as ATAUSDT / SKYAIUSDT — their "Finns inte på bybit"
+# notification was the misleading-wording / empty-ticker issue, not a
+# missing symbol, so they intentionally get no override here.)
+[TURBO]
+rename_to = "1000TURBOUSDT"
+note = "Bybit perp is 1000TURBOUSDT, not TURBOUSDT"
+
+[DODOX]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-14."
+
+[COLLECT]
+skip = true
+note = "Not listed on Bybit perp (any prefix) as of 2026-05-14."
