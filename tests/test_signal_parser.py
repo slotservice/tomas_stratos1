@@ -117,6 +117,32 @@ class TestEntryRange:
         assert signal.entry_low == 64000.0
         assert signal.entry_high == 66000.0
 
+    def test_parse_maheek_kripto_bracket_entry(self):
+        """Maheek Kripto format wraps the entry value in square
+        brackets — "Entry = [ 1.040 TO 1.037 ]". Before 2026-05-14 the
+        entry pattern only consumed "(" / ")", so this fell through to
+        no_entry and fired a false "Blokerad, Entre saknas" while the
+        SL and TPs parsed fine. The whole signal must now resolve.
+        """
+        text = (
+            "Pairs:  FIL/USDT\n\n"
+            " Trade Type = SHORT\n\n"
+            " Leverage :- 20x\n\n"
+            "Entry = [ 1.040 TO 1.037 ]\n\n"
+            "StopLoss :- 1.078\n\n"
+            "Take profit = [ 1.025, 1.011, 0.998, 0.980, 0.969, 0.947 ]"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "FILUSDT"
+        assert signal.direction == "SHORT"
+        assert signal.entry == 1.0385
+        assert signal.entry_low == 1.037
+        assert signal.entry_high == 1.040
+        assert signal.sl == 1.078
+        assert signal.tps
+
 
 # ===================================================================
 # Missing fields

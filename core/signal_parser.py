@@ -340,11 +340,27 @@ _ENTRY_PATTERNS = [
     # Real price ranges like "0.0668 - 0.0689" still match because
     # the next char after the second price is whitespace/end (\D).
     re.compile(
-        r"(?:(?:entry|entries)\s*(?:zone|price|area|orders?|targets?|between|range)?|"
+        # 2026-05-14 batch fix: three more real signals the bot blocked
+        # as "Entre saknas". All additive — existing formats unaffected.
+        #   - "enter" keyword alternate: CoinAura / American Crypto post
+        #     "ENTER ➡️1.046 - 1.043" (the verb is ENTER, not ENTRY).
+        #   - "long zone" / "short zone" keyword: Spot Future Signals
+        #     posts "LONG ZONE: 0.1145 - 0.1120" as the entry line.
+        r"(?:(?:entry|entries|enter)\s*(?:zone|price|area|orders?|targets?|between|range)?|"
         r"buy(?:\s*(?:zone|price|area|range|at|around|@))?|"
+        r"(?:long|short)[^\S\n]*zone|"
         r"open|limit|market\s*(?:buy|entry))"
-        r"[^\S\n]*[:=@]?[^\S\n]*-?[^\S\n]*\(?[^\S\n]*"
-        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r"(?=\D|$)(?!\s*%))?[^\S\n]*\)?",
+        # 2026-05-14 Maheek Kripto fix: the value can be wrapped in
+        # square brackets — "Entry = [ 1.040 TO 1.037 ]". The optional
+        # open/close-bracket groups accept "[" / "]" alongside the
+        # original "(" / ")". Additive — bare and paren-wrapped entries
+        # still match because both groups stay optional.
+        # 2026-05-14: "[^\w\s\n]{0,4}" absorbs an arrow emoji glued to
+        # the price ("ENTER ➡️1.046"). Bounded + non-word/non-space so
+        # it can never eat a digit or cross a newline; the price regex
+        # still requires a digit immediately after.
+        r"[^\S\n]*[:=@]?[^\S\n]*-?[^\S\n]*[(\[]?[^\S\n]*[^\w\s\n]{0,4}[^\S\n]*"
+        + _PRICE_RE + r"(?:" + _RANGE_SEP + _PRICE_RE + r"(?=\D|$)(?!\s*%))?[^\S\n]*[)\]]?",
         re.IGNORECASE,
     ),
     # Standalone "Entry 65000" without colon
