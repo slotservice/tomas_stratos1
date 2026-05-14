@@ -346,8 +346,13 @@ _ENTRY_PATTERNS = [
         #     "ENTER ➡️1.046 - 1.043" (the verb is ENTER, not ENTRY).
         #   - "long zone" / "short zone" keyword: Spot Future Signals
         #     posts "LONG ZONE: 0.1145 - 0.1120" as the entry line.
-        r"(?:(?:entry|entries|enter)\s*(?:zone|price|area|orders?|targets?|between|range)?|"
-        r"buy(?:\s*(?:zone|price|area|range|at|around|@))?|"
+        # 2026-05-14 batch fix: "now" / "market" can sit between the
+        # entry keyword and the price — "TAKE ENTRY NOW 0.04270"
+        # (CoinAura / American Crypto) and "ENTRY MARKET - 0.6100"
+        # (Sweden Crypto). Additive — the group stays optional, so
+        # plain "Entry: x" still matches through the same pattern.
+        r"(?:(?:entry|entries|enter)\s*(?:zone|price|area|orders?|targets?|between|range|now|market)?|"
+        r"buy(?:\s*(?:zone|price|area|range|at|around|@|now))?|"
         r"(?:long|short)[^\S\n]*zone|"
         r"open|limit|market\s*(?:buy|entry))"
         # 2026-05-14 Maheek Kripto fix: the value can be wrapped in
@@ -446,7 +451,14 @@ _TP_PATTERNS = [
         # and similar bot channels) OR a traditional ")", ":", "-"
         # separator. Bare prices without any marker still don't match
         # (the BOB 2026-05-04 regression guard).
-        r"\s*\n\s*((?:[^\d\n]*\d{1,2}\s*(?:️?⃣|[)\:\-])\s*[^\d\n]{0,5}[\d.]+\s*\n?\s*){1,8})",
+        # 2026-05-14: post-marker gap widened 5 -> 8 chars. CoinAura /
+        # American Crypto write each TP as "1) TP ➡️ 0.04120" — the
+        # "TP " word plus the arrow emoji (2 codepoints) is 6 chars
+        # between the ")" marker and the price, so {0,5} bailed and the
+        # whole TP list was lost. Still [^\d\n] so it cannot cross a
+        # newline or swallow a digit; the marker requirement (the BOB
+        # 2026-05-04 bare-price-list guard) is unchanged.
+        r"\s*\n\s*((?:[^\d\n]*\d{1,2}\s*(?:️?⃣|[)\:\-])\s*[^\d\n]{0,8}[\d.]+\s*\n?\s*){1,8})",
         re.IGNORECASE | re.MULTILINE,
     ),
     # "Targets: 3300/3400/3500" / "Targets: 3300, 3400, 3500" / "Targets:
@@ -484,6 +496,14 @@ _SL_PATTERNS = [
     # the bot can verify, so the signal is rejected upstream.
     re.compile(
         r"(?:sl|stop[-\s]*loss|stoploss|invalidation)\s*[:=]?\s*"
+        # 2026-05-14: optional "N)" list marker before the price.
+        # CoinAura / American Crypto write the SL as a one-item
+        # numbered list — "STOPLOSS\n1) ➡️ 0.04520" — and without
+        # this the price regex grabbed the "1" of "1)" as the SL
+        # (SL=1.0, signal then rejected as implausible). Marker is
+        # digit(s) + ")" only — never "." — so "SL: 1.5" is unaffected;
+        # the group is optional so plain "SL: 64000" still matches.
+        r"(?:\d{1,2}\)\s*)?"
         r"[^\d\n]{0,10}" + _PRICE_RE
         + r"(?!\s*[-\d]*\s*%)",
         re.IGNORECASE,
@@ -768,7 +788,10 @@ def extract_prices(text: str) -> dict:
             # "1⃣ 0.01539" CryptoApple 2026-05-13). Outer already
             # filtered to this shape.
             for item in re.finditer(
-                r"(\d{1,2})\s*(?:️?⃣|[)\:\-])\s*[^\d\n]{0,5}([\d.]+)",
+                # Gap kept in sync with _TP_PATTERNS[1]'s inner repeat
+                # ({0,8}) — "1) TP ➡️ 0.04120" needs 6 chars between
+                # the marker and the price (CoinAura / American Crypto).
+                r"(\d{1,2})\s*(?:️?⃣|[)\:\-])\s*[^\d\n]{0,8}([\d.]+)",
                 block,
             ):
                 idx = int(item.group(1))

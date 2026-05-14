@@ -199,6 +199,51 @@ class TestEntryRange:
         assert signal.sl == 0.11
         assert signal.tps == [0.116, 0.1175, 0.119, 0.1205, 0.122, 0.124]
 
+    def test_parse_coinaura_take_entry_now_numbered_arrow_lists(self):
+        """CoinAura / American Crypto "TAKE ENTRY NOW" format. Before
+        2026-05-14 every field of this signal failed in turn:
+          - entry: the word "NOW" sat between "ENTRY" and the price;
+          - TPs: each line is "1) TP ➡️ 0.04120" — the "TP " word plus
+            the 2-codepoint arrow is 6 chars, over the {0,5} marker gap;
+          - SL: "STOPLOSS\n1) ➡️ 0.04520" — the price regex grabbed the
+            "1" of the "1)" marker as SL=1.0.
+        The whole signal must now resolve.
+        """
+        text = (
+            "\U0001f4c8 SHORT #AIGENSYN/USDT\n\n"
+            "LEVERAGE : 50x\n\n"
+            "✔️ TAKE ENTRY NOW 0.04270\n\n"
+            "\U0001fa99 TAKE PROFIT TARGETS\n\n"
+            "1) TP ➡️ 0.04120\n"
+            "2) TP ➡️ 0.04000\n"
+            "3) TP ➡️ 0.03880\n\n"
+            "⚠️ STOPLOSS\n\n"
+            "1) ➡️ 0.04520"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "AIGENSYNUSDT"
+        assert signal.direction == "SHORT"
+        assert signal.entry == 0.0427
+        assert signal.tps == [0.0412, 0.04, 0.0388]
+        assert signal.sl == 0.0452
+
+    def test_parse_entry_market_dash_price(self):
+        """Sweden Crypto format: the entry line is "ENTRY MARKET -
+        0.6100" — "MARKET" sits between the entry keyword and the
+        price. Same root cause as the "NOW" gap above."""
+        text = (
+            "LONG\n\n#SIREN/USDT\n\nLEVERAGE 50x\n\n"
+            "ENTRY MARKET -  0.6100\n\n"
+            "SET TP1 0.65217\nSET TP2 0.70000\n\nSL 0.55"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "SIRENUSDT"
+        assert signal.entry == 0.61
+
 
 # ===================================================================
 # Missing fields
