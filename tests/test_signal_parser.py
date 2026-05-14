@@ -143,6 +143,62 @@ class TestEntryRange:
         assert signal.sl == 1.078
         assert signal.tps
 
+    def test_parse_coinaura_enter_keyword_emoji_tps(self):
+        """CoinAura / American Crypto format: the entry verb is "ENTER"
+        (not "ENTRY") with an arrow emoji glued to the price, and the
+        TPs are bare emoji-prefixed prices under a "TARGETS" header.
+        Before 2026-05-14 this fell through to no_entry / no_tps and
+        fired a false "Blokerad, Entre saknas".
+        """
+        text = (
+            "$FIL/USDT { 25X }\n\n"
+            "DIRECTION : { LONG }\n\n"
+            "ENTER ➡️1.046 - 1.043\n\n"
+            "TARGETS\n\n"
+            "➡️1.056\n"
+            "➡️1.066\n"
+            "➡️1.078\n"
+            "➡️1.086\n"
+            "➡️1.098\n"
+            "➡️1.118\n\n"
+            "STOPLOSS : 1.005"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "FILUSDT"
+        assert signal.direction == "LONG"
+        assert signal.entry == 1.0445
+        assert signal.sl == 1.005
+        assert signal.tps == [1.056, 1.066, 1.078, 1.086, 1.098, 1.118]
+
+    def test_parse_spot_future_long_zone_numbered_emoji_tps(self):
+        """Spot Future Signals format: the entry line is "LONG ZONE:
+        <range>" and the TPs are a numbered list with an emoji glued
+        between the index separator and the price ("1.\U0001f3af 0.1160").
+        Before 2026-05-14 this fell through to no_entry / no_tps.
+        """
+        text = (
+            "Trade: #DOGE/USDT\n\n"
+            "LONG ZONE: 0.1145 - 0.1120\n\n"
+            "LEVERAGE: 20x\n\n"
+            "1.\U0001f3af 0.1160\n"
+            "2.\U0001f3af 0.1175\n"
+            "3.\U0001f3af 0.1190\n"
+            "4.\U0001f3af 0.1205\n"
+            "5.\U0001f3af 0.1220\n"
+            "6.\U0001f3af 0.1240\n\n"
+            "STOP-LOSS: 0.1100"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "DOGEUSDT"
+        assert signal.direction == "LONG"
+        assert signal.entry == 0.11325
+        assert signal.sl == 0.11
+        assert signal.tps == [0.116, 0.1175, 0.119, 0.1205, 0.122, 0.124]
+
 
 # ===================================================================
 # Missing fields

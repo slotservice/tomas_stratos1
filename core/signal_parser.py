@@ -818,11 +818,13 @@ def extract_prices(text: str) -> dict:
     # UPTADES format).
     if not collected_tps:
         # Anchor on the first line that contains "entry", "entries",
-        # "buy range", or "buy zone" — so signals using "Buy Range:"
-        # as their entry-zone header (BANANAS31 format) also benefit
-        # from the positional fallback.
+        # "enter", "buy range/zone/area", or "long/short zone" — so
+        # signals using "Buy Range:" (BANANAS31), "ENTER" (CoinAura)
+        # or "LONG ZONE:" (Spot Future Signals) as their entry-zone
+        # header also benefit from the positional TP fallback.
         entry_line_re = re.compile(
-            r"(?im)^.*\b(?:entry|entries|buy[\s-]+(?:range|zone|area))\b.*$"
+            r"(?im)^.*\b(?:entry|entries|enter|buy[\s-]+(?:range|zone|area)"
+            r"|(?:long|short)[\s-]+zone)\b.*$"
         )
         sl_line_re = re.compile(
             r"(?im)^.*\b(?:sl|stop[-\s]*loss|stoploss|invalidation)\b.*$"
@@ -865,9 +867,14 @@ def extract_prices(text: str) -> dict:
             # prefix before the price lets "TP🟢0.001970" parse — TP
             # immediately followed by an emoji + price with NO numeric
             # index (CoinAura TAG signal format).
+            # 2026-05-14 Spot Future Signals fix: the gap after the
+            # ordinal separator is [^\d\n]{1,4} (was \s+) so an emoji
+            # glued to the index — "1.🎯 0.1160" — is consumed. Still
+            # requires >=1 non-digit char, so a bare decimal like
+            # "0.02580" is never mistaken for an "0." ordinal.
             tp_line_re = re.compile(
                 r"^\s*\W*(?:tp\d?|t\d?|target)?\s*\W*"
-                r"(?:\d{1,2}\s*[)\.\:\-]\s+)?"
+                r"(?:\d{1,2}\s*[)\.\:\-][^\d\n]{1,4})?"
                 + _PRICE_RE
                 + r"(?:\s*\([^)]*\))?"
                 + r"(?:\s*[-–][^\d\n]*\d+(?:\.\d+)?\s*%?)?"
