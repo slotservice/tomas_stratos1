@@ -31,6 +31,9 @@ class ParsedSignal:
     entry: float                         # Single entry price (midpoint if range)
     entry_low: Optional[float] = None    # Lower bound of entry zone (if range)
     entry_high: Optional[float] = None   # Upper bound of entry zone (if range)
+    entry_is_market: bool = False        # "Entry: now" — entry resolved to the
+                                         # live Bybit price at order time
+                                         # (entry stays 0.0 from the parser)
     tps: list[float] = field(default_factory=list)   # TP1, TP2, ... in order
     sl: Optional[float] = None           # Stop-loss price (None = auto-SL)
     signal_type: str = "dynamic"         # "fixed", "dynamic", or "swing"
@@ -394,6 +397,24 @@ _ENTRY_PATTERNS = [
         re.IGNORECASE,
     ),
 ]
+
+# Market-entry instruction (Tomas 2026-05-15): some channels write the
+# entry as a phrase, not a price — "Entry: now" / "Entrance: by market"
+# / "Entry - current market price" (TRUTH, JASMY, SUI), or a bare
+# "<direction> <symbol> NOW" line (Crypto bull society "LONG #LAB NOW").
+# When the entry is one of these AND the message still carries a TP or
+# SL, the parser keeps it as a valid signal with entry_is_market=True;
+# the position manager resolves entry to the live Bybit price at order
+# time. Only consulted on the entry<=0 path, so it never overrides a
+# real numeric entry.
+_MARKET_ENTRY_RE = re.compile(
+    r"(?:take[^\S\n]+)?(?:entry|entries|entrance|enter)"
+    r"[^\S\n]*[:=\-]?[^\S\n]*"
+    r"(?:now|by[^\S\n]+market|current[^\S\n]+market[^\S\n]+price"
+    r"|market[^\S\n]+price|market)\b"
+    r"|\b(?:long|short|buy|sell)[^\S\n]+[#$]?[A-Za-z0-9]{2,15}[^\S\n]+now\b",
+    re.IGNORECASE,
+)
 
 # TP patterns - match TP1/T1/Target 1/Take Profit 1 etc.
 _TP_PATTERNS = [
@@ -989,36 +1010,42 @@ def validate_signal(signal: ParsedSignal) -> tuple[bool, str]:
     if signal.direction not in ("LONG", "SHORT"):
         return False, f"Invalid direction: {signal.direction!r}"
 
-    if signal.entry <= 0:
+    # entry_is_market signals carry no entry price — it is resolved to
+    # the live Bybit price at order time. Skip the entry>0 requirement
+    # and the entry-relative direction checks below for them; the
+    # position manager re-checks once the real entry is known.
+    if signal.entry <= 0 and not signal.entry_is_market:
         return False, f"Entry price must be > 0, got {signal.entry}"
 
     if not signal.tps:
         return False, "No take-profit targets found"
 
-    # Direction consistency checks
-    if signal.direction == "LONG":
-        # At least one TP must be above entry
-        if not any(tp > signal.entry for tp in signal.tps):
-            return False, (
-                f"LONG signal but no TP above entry ({signal.entry}). "
-                f"TPs: {signal.tps}"
-            )
-        if signal.sl is not None and signal.sl >= signal.entry:
-            return False, (
-                f"LONG signal but SL ({signal.sl}) >= entry ({signal.entry})"
-            )
+    # Direction consistency checks — need a concrete entry price, so
+    # they are skipped for entry_is_market signals.
+    if not signal.entry_is_market:
+        if signal.direction == "LONG":
+            # At least one TP must be above entry
+            if not any(tp > signal.entry for tp in signal.tps):
+                return False, (
+                    f"LONG signal but no TP above entry ({signal.entry}). "
+                    f"TPs: {signal.tps}"
+                )
+            if signal.sl is not None and signal.sl >= signal.entry:
+                return False, (
+                    f"LONG signal but SL ({signal.sl}) >= entry ({signal.entry})"
+                )
 
-    elif signal.direction == "SHORT":
-        # At least one TP must be below entry
-        if not any(tp < signal.entry for tp in signal.tps):
-            return False, (
-                f"SHORT signal but no TP below entry ({signal.entry}). "
-                f"TPs: {signal.tps}"
-            )
-        if signal.sl is not None and signal.sl <= signal.entry:
-            return False, (
-                f"SHORT signal but SL ({signal.sl}) <= entry ({signal.entry})"
-            )
+        elif signal.direction == "SHORT":
+            # At least one TP must be below entry
+            if not any(tp < signal.entry for tp in signal.tps):
+                return False, (
+                    f"SHORT signal but no TP below entry ({signal.entry}). "
+                    f"TPs: {signal.tps}"
+                )
+            if signal.sl is not None and signal.sl <= signal.entry:
+                return False, (
+                    f"SHORT signal but SL ({signal.sl}) <= entry ({signal.entry})"
+                )
 
     # Sanity check: SL implausibly far from entry (>50%) — defence-in-depth
     # against parser errors that capture an unrelated number as the SL price.
@@ -1251,7 +1278,24 @@ def parse_signal_detailed(
     tps = prices["tps"]
     sl = prices["sl"]
 
-    if entry <= 0:
+    # Market-entry signals carry the entry as a phrase ("Entry: now")
+    # instead of a price. Tomas 2026-05-15: trade them — keep the
+    # signal valid with entry_is_market=True and let the position
+    # manager resolve entry to the live Bybit price at order time.
+    # Gated on (tps or sl) so a bare "long ... now" chatter line with
+    # no price structure still falls through to the chatter path.
+    entry_is_market = False
+    if entry <= 0 and (tps or sl) and _MARKET_ENTRY_RE.search(clean):
+        entry_is_market = True
+        log.info(
+            "signal_parse.market_entry",
+            symbol=symbol,
+            direction=direction,
+            channel_id=channel_id,
+            channel_name=channel_name,
+        )
+
+    if entry <= 0 and not entry_is_market:
         # symbol+direction were extracted, so the message LOOKED like a
         # signal — but a real signal always carries at least one of
         # entry/SL/TP. When SL and every TP are ALSO missing, this is
@@ -1315,6 +1359,7 @@ def parse_signal_detailed(
         entry=entry,
         entry_low=prices.get("entry_low"),
         entry_high=prices.get("entry_high"),
+        entry_is_market=entry_is_market,
         tps=tps,
         sl=sl,
         signal_type=_classify_signal_type(entry, sl),

@@ -317,6 +317,46 @@ class TestEntryRange:
         assert signal.sl == 7.16044e-05
         assert signal.tps == [6.658e-05, 6.456e-05, 6.255e-05]
 
+    def test_parse_market_entry_now(self):
+        """Tomas 2026-05-15: some channels write the entry as a phrase,
+        not a price — "Entry: now" (TRUTH), a bare "<dir> <sym> NOW"
+        line (Crypto bull society "LONG #LAB NOW"), or "current market
+        price" (JASMY). With a TP or SL present these are real signals;
+        they parse with entry_is_market=True and entry left at 0.0 —
+        the position manager resolves entry to the live Bybit price at
+        order time. Pure chatter ("going long now", no TP/SL) still
+        falls through to the silent chatter path."""
+        truth = parse_signal(
+            "📈LONG #TRUTH\n\n⚡️Entry: now\n"
+            "❌SL: 0.021299\n✅TP: 0.022980 - 0.023541"
+        )
+        assert truth is not None
+        assert truth.symbol == "TRUTHUSDT"
+        assert truth.entry_is_market is True
+        assert truth.entry == 0.0
+        assert truth.sl == 0.021299
+
+        lab = parse_signal("🟢 LONG #LAB NOW\n❌SL: 3.6\n✅TP: 6.4 - 7.4 - 8.4")
+        assert lab is not None
+        assert lab.symbol == "LABUSDT"
+        assert lab.entry_is_market is True
+
+        jasmy = parse_signal(
+            "#JASMY/USDT SHORT x20\n\nEntry - current market price\n"
+            "Stop Loss - 0.007069\nTake-Profit - 0.00497"
+        )
+        assert jasmy is not None
+        assert jasmy.entry_is_market is True
+
+        # A normal numeric-entry signal is unaffected.
+        normal = parse_signal("BTC/USDT LONG\nEntry: 65000\nTP1: 66000\nSL: 64000")
+        assert normal is not None
+        assert normal.entry == 65000.0
+        assert normal.entry_is_market is False
+
+        # Pure chatter with "now" but no TP/SL is NOT a signal.
+        assert parse_signal("going long #BTC now, looking good") is None
+
 
 # ===================================================================
 # Missing fields

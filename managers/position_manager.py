@@ -506,6 +506,63 @@ class PositionManager:
                 return None
 
         # ----------------------------------------------------------
+        # 3b. Market-entry resolution. Tomas 2026-05-15: signals that
+        #     write the entry as "Entry: now" / "by market" carry no
+        #     entry price (entry_is_market=True). Resolve it to the
+        #     live Bybit price here so all downstream math (leverage,
+        #     SL distance, slippage) works exactly as for a normal
+        #     numeric-entry signal. If no price can be fetched the
+        #     symbol is not tradable — reject with the same
+        #     "Finns inte på bybit" message as the slippage guard.
+        # ----------------------------------------------------------
+        if getattr(signal, "entry_is_market", False):
+            market_px = 0.0
+            try:
+                ticker = await self._bybit.get_ticker(symbol)
+                if ticker:
+                    market_px = float(
+                        ticker.get("markPrice", 0)
+                        or ticker.get("lastPrice", 0)
+                        or 0
+                    )
+            except Exception as exc:
+                log.warning(
+                    "market_entry.ticker_failed",
+                    symbol=symbol,
+                    error=str(exc)[:120],
+                )
+            if market_px <= 0:
+                log.warning(
+                    "market_entry.no_price",
+                    symbol=symbol,
+                    direction=direction,
+                )
+                if self._should_send_reject_notify(
+                    "market_entry_no_price", symbol, direction,
+                ):
+                    from telegram.notifier import _chan
+                    await self._safe_notify(
+                        f"⚠️ Finns inte på bybit ⚠️\n"
+                        f"📢 Från kanal: "
+                        f"{_chan(getattr(signal, 'channel_name', ''))}\n"
+                        f"📊 Symbol: #{symbol}\n"
+                        f"📈 Riktning: {direction}\n"
+                        f"📍 'Entry: now'-signal — inget marknadspris "
+                        f"kunde hämtas från Bybit."
+                    )
+                return None
+            try:
+                signal.entry = market_px  # notifier templates show the real entry
+            except Exception:
+                pass
+            log.info(
+                "market_entry.resolved",
+                symbol=symbol,
+                direction=direction,
+                entry=market_px,
+            )
+
+        # ----------------------------------------------------------
         # 4. SL handling. Client 2026-05-02 spec (revised):
         #    - Signal HAS SL  -> use it as-is, dynamic leverage from
         #      its distance.
