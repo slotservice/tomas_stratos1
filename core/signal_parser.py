@@ -422,7 +422,14 @@ _MARKET_ENTRY_RE = re.compile(
     r"[^\S\n]*[:=\-]?[^\S\n]*"
     r"(?:now|by[^\S\n]+market|current[^\S\n]+market[^\S\n]+price"
     r"|market[^\S\n]+price|market)\b"
-    r"|\b(?:long|short|buy|sell)[^\S\n]+[#$]?[A-Za-z0-9]{2,15}[^\S\n]+now\b",
+    r"|\b(?:long|short|buy|sell)[^\S\n]+[#$]?[A-Za-z0-9]{2,15}[^\S\n]+now\b"
+    # 2026-05-15: a standalone "MARKET PRICE" / "AT MARKET" / "MARKET"
+    # line with no "entry" keyword — SolidTradesz writes the entry that
+    # way ("LONG\nASTER/USDT\nMARKET PRICE\n..."). Anchored to a
+    # near-empty line so it cannot match the word "market" buried in
+    # prose.
+    r"|(?:^|\n)[^\S\n]*(?:at[^\S\n]+|by[^\S\n]+)?market"
+    r"(?:[^\S\n]+(?:price|entry))?[^\S\n]*(?=\n|$)",
     re.IGNORECASE,
 )
 

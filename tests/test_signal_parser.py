@@ -357,6 +357,34 @@ class TestEntryRange:
         # Pure chatter with "now" but no TP/SL is NOT a signal.
         assert parse_signal("going long #BTC now, looking good") is None
 
+    def test_parse_standalone_market_price_line(self):
+        """SolidTradesz writes the entry as a bare "MARKET PRICE" line
+        with no "Entry" keyword. It must still resolve as a
+        market-entry signal (entry_is_market). The word "market" buried
+        in prose must NOT trigger it — only a near-empty line."""
+        aster = parse_signal(
+            "LONG \n\nASTER/USDT\n\nMARKET PRICE\n\nLeverage: 10X\n\n"
+            "TP: 0.7800\n\nSL: 0.6500\n\nUse 5% of capital"
+        )
+        assert aster is not None
+        assert aster.symbol == "ASTERUSDT"
+        assert aster.entry_is_market is True
+        assert aster.sl == 0.6500
+
+        at_market = parse_signal("#XRP/USDT SHORT\nAT MARKET\nTP: 2.10\nSL: 2.30")
+        assert at_market is not None
+        assert at_market.entry_is_market is True
+
+        # "market" inside prose must NOT make a numeric-entry signal a
+        # market-entry one.
+        prose = parse_signal(
+            "BTC/USDT LONG\nthe market looks bullish today\n"
+            "Entry: 65000\nTP: 66000\nSL: 64000"
+        )
+        assert prose is not None
+        assert prose.entry == 65000.0
+        assert prose.entry_is_market is False
+
 
 # ===================================================================
 # Missing fields
