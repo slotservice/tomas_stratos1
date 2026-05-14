@@ -455,6 +455,34 @@ class TestTakeProfitTargets:
         assert 0.0 not in signal.tps
         assert len(signal.tps) == 2
 
+    def test_bare_t_keyword_does_not_make_fake_tp_from_prose(self):
+        """The bare "t" TP-keyword alternative must only match at a
+        word boundary. Before 2026-05-15 it matched the letter "t"
+        inside ordinary words — "a[t] 10.30 AM" produced TP 30,
+        "PROFI[T] 20.14%" produced TP 14 — so news / status posts
+        looked signal-shaped and fired a false "Blokerad, Entre
+        saknas". With no entry and no real TP/SL these must parse as
+        chatter (no_entry, empty tps/sl) so the notify gate stays
+        silent. A genuine "T1:" signal still parses."""
+        from core.signal_parser import extract_prices
+
+        massive = extract_prices(
+            "MASSIVE: US Senate will vote on the bill today at 10.30 AM ET."
+        )
+        assert massive["tps"] == []
+        assert massive["sl"] is None
+
+        status = extract_prices("#XVSUSDT CLOSE FINAL PROFIT 20.14% ROI")
+        assert status["tps"] == []
+        assert status["sl"] is None
+
+        # Regression: a real "T1:" / "T2:" signal still resolves.
+        sig = parse_signal(
+            "ETH/USDT LONG\nEntry: 3000\nT1: 3100\nT2: 3200\nSL: 2900"
+        )
+        assert sig is not None
+        assert sig.tps == [3100.0, 3200.0]
+
 
 # ===================================================================
 # Symbol normalization

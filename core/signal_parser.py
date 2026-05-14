@@ -422,7 +422,13 @@ _TP_PATTERNS = [
         # newlines, max 8 inner chars) between the keyword and the
         # index. Bare patterns like "TP1: 66000" / "T1: 66000" /
         # "Target 1: 66000" still match because the group is optional.
-        r"(?:tp|t|target|take[\s_-]*profit)[^\S\n]*"
+        # 2026-05-15: leading \b anchors the keyword. The bare "t"
+        # alternative was matching the letter "t" *inside* ordinary
+        # words — "a[t] 10.30 AM" -> TP 30, "PROFI[T] 20.14%" -> TP 14
+        # — so news/chatter picked up a fake TP, looked signal-shaped,
+        # and fired a false "Blokerad, Entre saknas". \b makes "t"
+        # match only at a word boundary ("T1:"), never mid-word.
+        r"\b(?:tp|t|target|take[\s_-]*profit)[^\S\n]*"
         r"(?:\([^()\n]{0,8}\)[^\S\n]*)?"
         r"(\d+)[^\d\n]{0,6}" + _PRICE_RE,
         re.IGNORECASE,
