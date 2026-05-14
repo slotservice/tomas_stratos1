@@ -716,3 +716,47 @@ class TestBlocklistRealTickers:
         """#SHORT is a direction word, never a ticker — stays blocked."""
         from core.signal_parser import _extract_symbol
         assert _extract_symbol("#SHORT term view on the market") is None
+
+
+class TestTradeUpdateMessages:
+    """Cryptonus-style "OPEN ENTRY / NEW TP" follow-up messages — a
+    trade update with no direction word and no SL (Tomas 2026-05-15)."""
+
+    def test_open_entry_new_tp_detected_and_parsed(self):
+        from core.signal_parser import (
+            is_trade_update_message, parse_trade_update,
+        )
+        text = (
+            "#DOGEUSDT OPEN ENTRY2 0.11797\nNEW TP\n"
+            "🎯 TP1 : 0.11234 (💰 2.00%)\n"
+            "🎯 TP2 : 0.11004 (💰 4.00%)\n"
+            "🎯 TP3 : 0.10775 (💰 6.00%)"
+        )
+        assert is_trade_update_message(text) is True
+        tu = parse_trade_update(text)
+        assert tu is not None
+        assert tu.symbol == "DOGEUSDT"
+        assert tu.entry == 0.11797
+        assert tu.tps == [0.11234, 0.11004, 0.10775]
+        assert tu.sl is None
+
+    def test_fresh_signal_not_a_trade_update(self):
+        """A normal fresh signal (Entry: line, no "OPEN ENTRY"+"NEW TP"
+        pair) must never be flagged as a trade update."""
+        from core.signal_parser import (
+            is_trade_update_message, parse_trade_update,
+        )
+        text = "BTC/USDT LONG\nEntry: 65000\nTP1: 66000\nSL: 64000"
+        assert is_trade_update_message(text) is False
+        assert parse_trade_update(text) is None
+
+    def test_entry1_entry2_full_signal_not_a_trade_update(self):
+        """A Cryptonus FULL signal carries "ENTRY1/ENTRY2" but not the
+        "OPEN ENTRY" + "NEW TP" marker pair — it must still parse as a
+        normal signal, not a trade update."""
+        from core.signal_parser import is_trade_update_message
+        text = (
+            "#DODOXUSDT 15m STATUS : SHORT 👉 ENTRY1 : 0.018567 "
+            "👉 ENTRY2 : 0.019681\n🎯 TP1 : 0.018196\n⛔️ SL: 0.02023"
+        )
+        assert is_trade_update_message(text) is False

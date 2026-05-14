@@ -1449,3 +1449,75 @@ def parse_signal(
     rejection-reason information.
     """
     return parse_signal_detailed(text, channel_id, channel_name).signal
+
+
+# ---------------------------------------------------------------------------
+# Trade-update messages
+# ---------------------------------------------------------------------------
+# Some channels (Cryptonus Trade) send a follow-up to an already-running
+# trade, e.g.:
+#   #DOGEUSDT OPEN ENTRY2 0.11797
+#   NEW TP
+#   🎯 TP1 : 0.11234 (💰 2.00%)
+#   🎯 TP2 : 0.11004 (💰 4.00%)
+# These carry a symbol, a new entry and new TPs but NO LONG/SHORT word
+# and NO SL — so parse_signal_detailed drops them at no_direction and
+# the operator never sees them. Tomas 2026-05-15: they must be handled
+# as trade updates. Detection requires BOTH the "OPEN ENTRY" and the
+# "NEW TP" markers so a normal fresh signal can never match.
+
+_TRADE_UPDATE_OPEN_ENTRY_RE = re.compile(r"\bopen\s+entry\s*\d*\b", re.IGNORECASE)
+_TRADE_UPDATE_NEW_TP_RE = re.compile(r"\bnew\s+tp\b", re.IGNORECASE)
+# Entry price right after the "OPEN ENTRY2" marker.
+_TRADE_UPDATE_ENTRY_PRICE_RE = re.compile(
+    r"\bopen\s+entry\s*\d*\s*[:=]?\s*" + _PRICE_RE, re.IGNORECASE
+)
+
+
+@dataclass
+class TradeUpdate:
+    """A follow-up update for an already-running trade. Carries no
+    direction — the caller resolves it from the matching open trade
+    (or, when no trade is found, infers it from TP-vs-entry)."""
+    symbol: str
+    entry: float                       # 0.0 if not present in the message
+    tps: list[float] = field(default_factory=list)
+    sl: Optional[float] = None
+
+
+def is_trade_update_message(text: str) -> bool:
+    """True if *text* is an "OPEN ENTRY / NEW TP" trade-update message.
+
+    Both markers are required, so a normal fresh signal (which has an
+    "Entry:"/"ENTER" line but never the literal "OPEN ENTRY" + "NEW TP"
+    pair) cannot match.
+    """
+    if not text:
+        return False
+    return bool(
+        _TRADE_UPDATE_OPEN_ENTRY_RE.search(text)
+        and _TRADE_UPDATE_NEW_TP_RE.search(text)
+    )
+
+
+def parse_trade_update(text: str) -> Optional[TradeUpdate]:
+    """Parse an "OPEN ENTRY / NEW TP" trade-update message.
+
+    Returns a :class:`TradeUpdate`, or None when the text is not a
+    trade-update message or has no recognisable symbol.
+    """
+    if not is_trade_update_message(text):
+        return None
+    clean = text.replace("**", "").replace("`", "").strip()
+    symbol = _extract_symbol(clean)
+    if not symbol:
+        return None
+    em = _TRADE_UPDATE_ENTRY_PRICE_RE.search(clean)
+    entry = _parse_price(em.group(1)) if em else 0.0
+    prices = extract_prices(clean)
+    return TradeUpdate(
+        symbol=symbol,
+        entry=entry,
+        tps=prices["tps"],
+        sl=prices["sl"],
+    )
