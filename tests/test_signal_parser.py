@@ -295,6 +295,28 @@ class TestEntryRange:
         assert signal.tps == [0.225, 0.24, 0.27]
         assert signal.sl == 0.198
 
+    def test_parse_scientific_notation_stop_loss(self):
+        """Coin Master Trading writes tiny-value stop losses in
+        scientific notation — "Stop loss :7.16044E-5". Before
+        2026-05-14 the price regex stopped at the "E" and parsed the
+        SL as 7.16, so the whole signal was rejected as "SL
+        implausibly far from entry". The exponent is now captured."""
+        text = (
+            "🔥 MTC Indicator 🔥\n 15 Minutes Timeframe\n🔴 SHORT\n"
+            "#DOGS/USDT\n"
+            "Entry zone : 0.00006893 - 0.00006692\n"
+            "Take Profits : \n0.00006658\n0.00006456\n0.00006255\n"
+            "Stop loss :7.16044E-5\n"
+            "Leverage: 10x"
+        )
+        signal = parse_signal(text)
+
+        assert signal is not None
+        assert signal.symbol == "DOGSUSDT"
+        assert signal.direction == "SHORT"
+        assert signal.sl == 7.16044e-05
+        assert signal.tps == [6.658e-05, 6.456e-05, 6.255e-05]
+
 
 # ===================================================================
 # Missing fields

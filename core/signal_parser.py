@@ -249,8 +249,16 @@ def is_status_update(text: str) -> bool:
 # Regex building blocks
 # ---------------------------------------------------------------------------
 
-# Matches a decimal or integer price, possibly with comma thousands separators.
-_PRICE_RE = r"[\$]?\s*(\d[\d,]*\.?\d*)"
+# Matches a decimal or integer price, possibly with comma thousands
+# separators. The optional `(?:[eE][-+]?\d+)?` tail accepts scientific
+# notation — Coin Master Trading writes tiny-value stop losses as
+# "Stop loss :7.16044E-5"; without it the regex stopped at the "E" and
+# parsed the SL as 7.16, getting the whole signal rejected as
+# "SL implausibly far from entry" (DOGS, 2026-05-14). float() in
+# _parse_price already handles the "E-5" form. The exponent only
+# matches when e/E sits immediately after the digits, so normal prices
+# are untouched.
+_PRICE_RE = r"[\$]?\s*(\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?)"
 
 # Range separator: dash/tilde/to but NOT across newlines.
 # Uses [^\S\n] (whitespace except newline) instead of \s.
