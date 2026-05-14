@@ -113,8 +113,15 @@ class DuplicateDetector:
         """
         symbol = signal.symbol
         new_entry = signal.entry
+        is_market_entry = bool(getattr(signal, "entry_is_market", False))
 
-        if new_entry <= 0:
+        # entry <= 0 with no market-entry flag should not happen (the
+        # parser rejects entry-less non-market signals), but guard
+        # defensively. A market-entry ("Entry: now") signal DOES reach
+        # here with entry == 0 — it must NOT bail early, or it bypasses
+        # dedup entirely and opens a duplicate of an already-running
+        # trade (2026-05-15).
+        if new_entry <= 0 and not is_market_entry:
             return DuplicateCheckResult("new")
 
         # Fetch active trades for this symbol.
@@ -159,6 +166,29 @@ class DuplicateDetector:
                     new_direction=new_direction,
                     existing_direction=existing_direction,
                     new_entry=new_entry,
+                    existing_entry=existing_entry,
+                    trade_id=trade.get("id"),
+                )
+                return DuplicateCheckResult(
+                    action="blocked",
+                    reason=reason,
+                    existing_trade=trade,
+                )
+
+            # Market-entry ("Entry: now") signals carry no entry price,
+            # so the entry-% comparison below is meaningless. Same
+            # symbol + same direction with an active trade IS the
+            # duplicate — block it. Tomas 2026-05-15.
+            if is_market_entry:
+                reason = (
+                    f"Duplicate: market-entry ('now') {symbol} "
+                    f"{new_direction or '?'} signal while an active "
+                    f"trade exists (entry {existing_entry})"
+                )
+                log.info(
+                    "duplicate_check.market_entry_duplicate",
+                    symbol=symbol,
+                    new_direction=new_direction,
                     existing_entry=existing_entry,
                     trade_id=trade.get("id"),
                 )

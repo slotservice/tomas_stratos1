@@ -26,12 +26,15 @@ def _make_signal(
     symbol: str = "BTCUSDT",
     entry: float = 65000.0,
     channel_name: str = "TestGroup",
+    direction: str = "LONG",
+    entry_is_market: bool = False,
 ) -> ParsedSignal:
     """Create a minimal ParsedSignal for testing."""
     return ParsedSignal(
         symbol=symbol,
-        direction="LONG",
+        direction=direction,
         entry=entry,
+        entry_is_market=entry_is_market,
         tps=[66000.0],
         sl=64000.0,
         channel_name=channel_name,
@@ -237,3 +240,56 @@ async def test_terminal_states_not_treated_as_active(state):
     result = await detector.check(signal)
 
     assert result.is_new, f"trade in terminal state {state} must not block"
+
+
+@pytest.mark.asyncio
+async def test_market_entry_signal_blocked_when_active_trade_exists():
+    """Regression (2026-05-15): a market-entry ("Entry: now") signal
+    carries entry == 0. The detector used to bail at `if entry <= 0:
+    return "new"`, so these bypassed dedup entirely and could open a
+    duplicate of an already-running trade. A market-entry signal with
+    an active same-direction trade must be blocked."""
+    existing = [
+        {"id": 7, "state": "PROFIT_LOCK_1_ACTIVE",
+         "avg_entry": 65000.0, "direction": "LONG"},
+    ]
+    db = _make_db(active_trades=existing)
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    signal = _make_signal(symbol="BTCUSDT", entry=0.0, entry_is_market=True)
+    result = await detector.check(signal)
+
+    assert result.is_blocked
+    assert result.existing_trade["id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_market_entry_signal_new_when_no_active_trade():
+    """A market-entry signal with no active trade for the symbol is a
+    genuine new trade — not bypassed, just no conflict."""
+    db = _make_db(active_trades=[])
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    signal = _make_signal(symbol="BTCUSDT", entry=0.0, entry_is_market=True)
+    result = await detector.check(signal)
+
+    assert result.is_new
+
+
+@pytest.mark.asyncio
+async def test_market_entry_signal_opposite_direction_blocked():
+    """A market-entry signal opposite an active trade is still caught
+    by the direction guard."""
+    existing = [
+        {"id": 9, "state": "POSITION_OPEN",
+         "avg_entry": 65000.0, "direction": "SHORT"},
+    ]
+    db = _make_db(active_trades=existing)
+    detector = DuplicateDetector(db, threshold_pct=5.0, lookback_hours=24)
+
+    signal = _make_signal(
+        symbol="BTCUSDT", entry=0.0, entry_is_market=True, direction="LONG"
+    )
+    result = await detector.check(signal)
+
+    assert result.is_blocked
