@@ -75,6 +75,21 @@ def _reentry_qualifies_for_trade(trade: "Trade") -> bool:
     )
 
 
+def _ticker_failure_title(err_str: str) -> str:
+    """Operator-channel title for a get_ticker failure.
+
+    The Bybit adapter raises "No ticker data for X" when ``get_ticker``
+    returns empty for a symbol that IS listed on Bybit but currently has
+    no quote (AIN/COS/ATA/SKYAI behaved this way 2026-05-14/15). Tomas
+    2026-05-15: those should NOT read "Finns inte på bybit" — the coin
+    is on Bybit, only the price is missing. Genuine "not on Bybit" cases
+    ("not live"/"not exists"/"110074") keep the original title.
+    """
+    if "no ticker data" in err_str:
+        return "Finns på bybit, pris saknas"
+    return "Finns inte på bybit"
+
+
 def _format_close_source(reason: str, trade: Optional["Trade"] = None) -> str:
     """Map an internal close-reason string (set by Bybit's order-fill
     classifier) to the human-readable suffix shown in the
@@ -738,8 +753,9 @@ class PositionManager:
                         # 'FETUSDT checked 2026-05-01' instead of the
                         # generic instruction.
                         note = get_note(symbol, default="Kontrolera manuellt")
+                        title = _ticker_failure_title(err_str)
                         await self._safe_notify(
-                            f"⚠️ Finns inte på bybit ⚠️\n"
+                            f"⚠️ {title} ⚠️\n"
                             f"🕒 Tid: {_ts()}\n"
                             f"📢 Från kanal: {_chan(_chan_name)}\n"
                             f"📊 Symbol: #{symbol}\n"
