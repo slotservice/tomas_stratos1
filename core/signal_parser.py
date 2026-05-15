@@ -525,12 +525,23 @@ _TP_PATTERNS = [
     ),
     # "Targets: 3300/3400/3500" / "Targets: 3300, 3400, 3500" / "Targets:
     # 🎯 1.20, 1.27, 1.36" — same-line list with optional emojis between
-    # the header and the first price (ENSO format). The "[^\d\n]*" gap
-    # absorbs emoji + spaces + bullet markers between the header and
-    # the digits. The captured class still excludes \n so the match
-    # can't bleed into a separate "Targets:\n1 : 0.074" numbered list.
+    # the header and the first price (ENSO format).
+    #
+    # 2026-05-15: hardened against false-positives from URLs and prose
+    # (Tomas msg 54711+54721 — DOGS/ZEN news/analysis posts):
+    #   - \b boundaries around the keyword alternation block the match
+    #     of "tps" inside "https://..." (DOGS URL was capturing "7021"
+    #     out of `https://t.me/cyberdavid/7021` as a fake TP).
+    #   - The gap between header and prices was [^\d\n]* (any non-digit
+    #     including letters), which let prose like "toward targets at
+    #     $8.40, $10.70..." (ZEN) match because the regex happily ate
+    #     "at $". Tightened to [^\d\n\w]* — whitespace, punctuation, and
+    #     emoji are still allowed (so "Targets: 🎯 1.20" and bare
+    #     "Targets 1.20" still match), but alphabetic chars between
+    #     the header and the prices block the match.
     re.compile(
-        r"(?:targets?|tps?|take[\s_-]*profits?(?:\s+targets?)?)[^\S\n]*[:=]?[^\d\n]*"
+        r"\b(?:targets?|tps?|take[\s_-]*profits?(?:\s+targets?)?)\b"
+        r"[^\S\n]*[:=]?[^\d\n\w]*"
         r"([\d.,/|\-•• ]+)",
         re.IGNORECASE,
     ),
@@ -922,8 +933,11 @@ def extract_prices(text: str) -> dict:
     # BOB 2026-05-04 case (bare prices on separate lines under "Take
     # Profit Target") — that one still falls through to Pattern 5.
     if not collected_tps:
+        # \b boundaries — same hardening as Pattern 4 (the same-line
+        # list). Without them "tps" inside "https://..." or "intake"
+        # could match the keyword alternation. 2026-05-15.
         pat = re.compile(
-            r"(?:take[\s_-]*profits?(?:\s+targets?)?|targets?|tps?)"
+            r"\b(?:take[\s_-]*profits?(?:\s+targets?)?|targets?|tps?)\b"
             r"[^\d\n]*"
             r"(?:\n[^\d\n]*){1,2}"
             r"(\d+(?:\.\d+)?(?:\s*[-/,]\s*\d+(?:\.\d+)?){1,})",

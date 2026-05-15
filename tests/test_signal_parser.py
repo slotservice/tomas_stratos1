@@ -529,6 +529,67 @@ class TestTakeProfitTargets:
         assert prices["tps"] == [0.2860, 0.30, 0.33]
         assert prices["sl"] == 0.25
 
+    def test_parse_dogs_news_url_does_not_become_fake_tp(self):
+        """The Crypto Pasta DOGS post (Tomas 2026-05-15 msg 54711+54712)
+        carries no signal data — only a chart commentary and a Telegram
+        link `https://t.me/cyberdavid/7021`. Pattern 4 used to match
+        "tps" inside "https" as the TP keyword and capture "7021" as a
+        TP price, so the message tripped the no_entry signal-shape gate
+        and fired "Blokerad, Entre saknas". The \\b boundary around
+        the keyword alternation prevents the in-word match."""
+        text = (
+            "#DOGS is breaking out of the descending channel formation "
+            "on the 3D timeframe\n"
+            "The technical setup appears bullish, with volume supporting "
+            "the breakout\n"
+            "If momentum continues, we could see a climb toward $0.0013\n"
+            "[ߋ](https://t.me/cyberdavid/7021) cyberdavid"
+            "[​](https://t.me/CryptoPasta)"
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [], (
+            f"URL must not become a TP, got: {prices['tps']!r}"
+        )
+
+    def test_parse_zen_news_targets_in_prose_does_not_match(self):
+        """Crypto Pasta ZEN bullish-flag post (Tomas 2026-05-15 msg
+        54721+54722). The prose "...might push the price toward targets
+        at $8.40, $10.70, $14.00, and $19.00" carries the word
+        "targets" but mid-prose, with "at" between keyword and prices.
+        Pattern 4 used to match "targets" + " at $" (the `[^\\d\\n]*`
+        gap allowed alphabetic chars) and capture the dollar amounts as
+        TPs. Tightening the gap to `[^\\d\\n\\w]*` blocks the prose
+        case while still allowing emoji / whitespace / punctuation."""
+        text = (
+            "#ZEN Bullish Flag Formation Taking Shape\n"
+            "Horizen is developing a continuation pattern following a "
+            "strong upward impulse move on the daily chart\n"
+            "A new uptrend phase may begin if the price breaks above "
+            "the flag's upper resistance\n"
+            "The pattern completion might push the price toward "
+            "targets at $8.40, $10.70, $14.00, and $19.00\n"
+            "[ߋ](https://t.me/jonathancarter/3614) jonathancarter"
+            "[​](https://t.me/CryptoPasta)"
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [], (
+            f"Prose 'targets at $X' must not become TPs, got: {prices['tps']!r}"
+        )
+
+    def test_parse_enso_emoji_same_line_list_still_works(self):
+        """Regression guard for the ENSO-style format: "Targets: 🎯 1.20,
+        1.27, 1.36" — emoji and whitespace between the header and the
+        first price. The new [^\\d\\n\\w]* gap still allows emoji and
+        whitespace, so this real signal must continue to parse."""
+        text = (
+            "#FOOUSDT LONG\n"
+            "Entry: 1.10\n"
+            "Targets: 🎯 1.20, 1.27, 1.36\n"
+            "SL: 1.05"
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [1.20, 1.27, 1.36]
+
     def test_parse_bob_bare_per_line_still_falls_through(self):
         """Regression guard for the BOB 2026-05-04 case: bare prices on
         separate lines under a "Take Profit Target" header must NOT be
