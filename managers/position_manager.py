@@ -718,17 +718,27 @@ class PositionManager:
                         return None
         except Exception as exc:
             err_str = str(exc).lower()
-            # Detect "symbol not on Bybit" specifically. Two signal
-            # patterns from Bybit / our adapter:
+            # Detect "symbol not on Bybit" specifically. Signal patterns
+            # from Bybit / our adapter:
             #   - "No ticker data for X"  (adapter raises this when
             #     get_ticker returns empty/None)
             #   - "contract is not live"   (Bybit ErrCode 110074)
             #   - "symbol is not exists"   (some Bybit error variants)
+            #   - "symbol invalid" / ErrCode 10001  (Bybit returns this
+            #     when the symbol simply doesn't exist on the venue,
+            #     e.g. demo trying to trade DUSDT which is mainnet-
+            #     only). Without this branch the slippage_check error
+            #     falls through to the generic API-fel notification,
+            #     then set_leverage retries the same symbol and fires
+            #     another API-fel — 3 notifications for one signal
+            #     (Tomas 2026-05-15 msg 54840+54843+54844).
             if (
                 "no ticker data" in err_str
                 or "not live" in err_str
                 or "not exists" in err_str
+                or "symbol invalid" in err_str
                 or "110074" in err_str
+                or "10001" in err_str
             ):
                 _chan_name = getattr(signal, "channel_name", "")
                 log.info(

@@ -30,6 +30,19 @@ def test_not_exists_uses_not_on_bybit_title():
     assert _ticker_failure_title("symbol is not exists") == "Finns inte på bybit"
 
 
+def test_symbol_invalid_10001_uses_not_on_bybit_title():
+    """Bybit returns ErrCode 10001 ("params error: symbol invalid") when
+    the requested symbol simply doesn't exist on the venue (DUSDT on
+    demo, Tomas 2026-05-15 msg 54840). Distinct from "no ticker data"
+    — the symbol is genuinely unknown, not just quiet."""
+    assert _ticker_failure_title(
+        "params error: symbol invalid (errcode: 10001)"
+    ) == "Finns inte på bybit"
+    assert _ticker_failure_title(
+        "params error: symbol invalid dusdt (errcode: 10001)"
+    ) == "Finns inte på bybit"
+
+
 def test_unknown_error_defaults_to_not_on_bybit_title():
     assert _ticker_failure_title("some unrelated error") == "Finns inte på bybit"
 
