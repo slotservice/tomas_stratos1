@@ -622,6 +622,50 @@ class TestValidation:
         assert not valid
         assert "SL" in reason
 
+    def test_validate_sl_failure_detail_has_sl_only(self):
+        """SL-side validation failures must include "SL" (and NOT "TP")
+        in the detail string. main.py reads result.detail to route the
+        operator-channel message between the SL- and TP-specific
+        wordings (Tomas 2026-05-15 msg 54706 — CryptoPasta BTC
+        Stop:8230 typo got "TP är fel angiva" instead of an SL-specific
+        message)."""
+        sl_cases = [
+            # SHORT, SL <= entry (the live CryptoPasta BTC case)
+            ParsedSignal(symbol="BTCUSDT", direction="SHORT", entry=81200.0,
+                         tps=[80600.0], sl=8230.0),
+            # LONG, SL >= entry
+            ParsedSignal(symbol="ETHUSDT", direction="LONG", entry=3200.0,
+                         tps=[3300.0], sl=3300.0),
+            # SL implausibly far from entry (>50%)
+            ParsedSignal(symbol="ETHUSDT", direction="LONG", entry=3200.0,
+                         tps=[3300.0], sl=5.0),
+        ]
+        for sig in sl_cases:
+            valid, reason = validate_signal(sig)
+            assert not valid, f"Expected invalid: {sig}"
+            upper = reason.upper()
+            assert "SL" in upper, f"'SL' missing from reason: {reason!r}"
+            assert "TP" not in upper, f"'TP' should not be in SL reason: {reason!r}"
+
+    def test_validate_tp_failure_detail_has_tp_not_sl(self):
+        """TP-side validation failures must include "TP" and NOT "SL"
+        in the detail string — the inverse of the SL routing assertion
+        above."""
+        tp_cases = [
+            # LONG, all TPs below entry
+            ParsedSignal(symbol="BTCUSDT", direction="LONG", entry=65000.0,
+                         tps=[64000.0, 63000.0], sl=64500.0),
+            # SHORT, all TPs above entry
+            ParsedSignal(symbol="BTCUSDT", direction="SHORT", entry=65000.0,
+                         tps=[66000.0, 67000.0], sl=66500.0),
+        ]
+        for sig in tp_cases:
+            valid, reason = validate_signal(sig)
+            assert not valid, f"Expected invalid: {sig}"
+            upper = reason.upper()
+            assert "TP" in upper, f"'TP' missing from reason: {reason!r}"
+            assert "SL" not in upper, f"'SL' should not be in TP reason: {reason!r}"
+
     def test_validate_valid_long(self):
         """A well-formed LONG signal should pass."""
         signal = ParsedSignal(

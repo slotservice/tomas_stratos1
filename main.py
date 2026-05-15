@@ -608,15 +608,35 @@ async def main() -> None:
                       and result.symbol and result.direction):
                     # ``invalid`` covers TP-direction mismatch (LONG with
                     # TP below entry, SHORT with TP above) AND the SL
-                    # sanity-check failures from validate_signal.
+                    # sanity-check failures from validate_signal. The
+                    # parser's specific reason string (result.detail)
+                    # tells us which field actually failed: route SL
+                    # failures to the SL-specific wording, otherwise
+                    # use the TP wording (Tomas 2026-05-15 msg 54706
+                    # CryptoPasta BTC Stop:8230 typo — the rejection
+                    # was correct but said "TP är fel angiva" for an
+                    # SL-side failure).
+                    detail = (result.detail or "").upper()
+                    sl_failure = (
+                        result.reason == "invalid"
+                        and "SL" in detail
+                        and "TP" not in detail
+                    )
                     try:
-                        await tg_notifier.signal_blocked_invalid_tps(
-                            symbol=result.symbol,
-                            direction=result.direction,
-                            channel_name=channel_name,
-                        )
+                        if sl_failure:
+                            await tg_notifier.signal_blocked_invalid_sl(
+                                symbol=result.symbol,
+                                direction=result.direction,
+                                channel_name=channel_name,
+                            )
+                        else:
+                            await tg_notifier.signal_blocked_invalid_tps(
+                                symbol=result.symbol,
+                                direction=result.direction,
+                                channel_name=channel_name,
+                            )
                     except Exception:
-                        log.exception("notify.signal_blocked_invalid_tps_failed")
+                        log.exception("notify.signal_blocked_invalid_failed")
                 return
 
             signal = result.signal

@@ -368,11 +368,33 @@ class TelegramNotifier:
         """Signal rejected because the take-profit targets are missing
         or inconsistent with direction (LONG with TP below entry, etc.).
 
-        Covers both the ``no_tps`` case (parser found symbol+direction+entry
-        but no TP prices) and validate_signal failures around TP direction.
+        Covers the ``no_tps`` case (parser found symbol+direction+entry
+        but no TP prices) and validate_signal failures around TP
+        direction. SL-side failures route to signal_blocked_invalid_sl.
         Per client request 2026-04-28."""
         text = (
             f"⚠️ Blokerad, TP är fel angiva ⚠️\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(channel_name)}\n"
+            f"📊 Symbol: {_sym(symbol)}\n"
+            f"📈 Riktning: {direction}"
+        )
+        return await self._send_notify(text)
+
+    async def signal_blocked_invalid_sl(
+        self,
+        symbol: str,
+        direction: str,
+        channel_name: str,
+    ) -> str:
+        """Signal rejected because the stop-loss is on the wrong side
+        of entry (SHORT with SL below entry, LONG with SL above) or
+        otherwise fails the SL sanity check. Tomas 2026-05-15 (msg
+        54706+54707, CryptoPasta BTC SHORT with Stop:8230 typo): the
+        previous wording said "TP är fel angiva" for SL-side failures,
+        which lied about which field broke."""
+        text = (
+            f"⚠️ Blokerad, SL är fel angiva ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(channel_name)}\n"
             f"📊 Symbol: {_sym(symbol)}\n"
