@@ -506,6 +506,50 @@ class TestTakeProfitTargets:
         assert len(signal.tps) == 4
         assert signal.tps == [66000.0, 67000.0, 68000.0, 70000.0]
 
+    def test_parse_opg_hyphen_separated_multiline_tps(self):
+        """OPG CoinAura format: TAKE-PROFITS header + blank line + a
+        single line of hyphen-separated bare prices (Tomas 2026-05-15
+        msg 54717+54718). Pattern 4 could not cross the blank line and
+        Pattern 2 needs explicit "1)" markers; Pattern 4b handles it."""
+        text = (
+            "LONG: $OPG/USDT🚀\n"
+            "LEVERAGE: 20x - 50x\n"
+            "\n"
+            "🥇ENTRY PRICE: 0.2780🥇\n"
+            "🎖 2nd ENTRY: 0.27🎖\n"
+            "———————\n"
+            "💰 TAKE-PROFITS 💰\n"
+            "\n"
+            "0.2860- 0.30- 0.33\n"
+            "———————\n"
+            "\n"
+            "❌ STOP LOSS: 0.25❌"
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [0.2860, 0.30, 0.33]
+        assert prices["sl"] == 0.25
+
+    def test_parse_bob_bare_per_line_still_falls_through(self):
+        """Regression guard for the BOB 2026-05-04 case: bare prices on
+        separate lines under a "Take Profit Target" header must NOT be
+        captured by the new Pattern 4b (it requires an explicit [-/,]
+        separator between two prices on the SAME line). Pattern 5
+        (positional fallback) is the right home for bare per-line lists.
+        The TP list must contain ALL four BOB prices, not just one."""
+        text = (
+            "#1000000BOBUSDT LONG\n"
+            "Entry: 0.0195\n"
+            "Take Profit Target\n"
+            "0.0180\n"
+            "0.0172\n"
+            "0.0156\n"
+            "0.0144\n"
+            "Stop Loss: 0.0220"
+        )
+        prices = extract_prices(text)
+        assert len(prices["tps"]) == 4
+        assert prices["tps"][0] == 0.0180
+
     def test_parse_no_fake_tp(self):
         """TP5=0 should be excluded from the list."""
         text = (

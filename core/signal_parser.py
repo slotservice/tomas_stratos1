@@ -900,6 +900,44 @@ def extract_prices(text: str) -> dict:
                 if price > 0:
                     collected_tps[i] = price
 
+    # Pattern 4b: multi-line header followed by a single-line list of
+    # prices joined by hyphens, slashes, or commas. CoinAura / American
+    # Crypto OPG format (Tomas 2026-05-15 msg 54717+54718):
+    #
+    #   💰 TAKE-PROFITS 💰
+    #
+    #   0.2860- 0.30- 0.33
+    #
+    # Pattern 4 (same-line list) can't reach across the blank line —
+    # its non-digit gap is [^\d\n] which doesn't cross newlines. Pattern
+    # 2 (numbered list under header) requires an explicit "1)"/"1:"/"1-"
+    # marker per item, which these prices don't have. The new pattern
+    # therefore:
+    #   - matches the header (TAKE-PROFITS / Targets / TPs etc.)
+    #   - allows 1-2 blank/emoji-only lines after the header
+    #   - captures a SINGLE-LINE price list that MUST contain at least
+    #     one explicit [-/,] separator between two prices
+    #
+    # The explicit-separator requirement keeps it from stealing the
+    # BOB 2026-05-04 case (bare prices on separate lines under "Take
+    # Profit Target") — that one still falls through to Pattern 5.
+    if not collected_tps:
+        pat = re.compile(
+            r"(?:take[\s_-]*profits?(?:\s+targets?)?|targets?|tps?)"
+            r"[^\d\n]*"
+            r"(?:\n[^\d\n]*){1,2}"
+            r"(\d+(?:\.\d+)?(?:\s*[-/,]\s*\d+(?:\.\d+)?){1,})",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if m:
+            raw_list = m.group(1)
+            parts = re.split(r"[/|,\-\s]+", raw_list.strip())
+            for i, part in enumerate(parts, start=1):
+                price = _parse_price(part.rstrip(".,"))
+                if price > 0:
+                    collected_tps[i] = price
+
     # Pattern 5: unlabeled TP list between Entry and Stop-Loss
     # (CoinAura format — price-only lines follow the Entry line,
     # no "TP:" / "Target:" labels). A TP line is a line whose only
