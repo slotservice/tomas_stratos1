@@ -483,6 +483,39 @@ class TestMissingFields:
         assert not ok
         assert "implausibly far" in reason
 
+    def test_stop_price_keyword(self):
+        """Tomas 2026-05-13: signals from #CoinRise (and similar) write
+        the SL as `🛑 Stop Price : X`. The previous _SL_PATTERNS only
+        accepted `sl` / `stop loss` / `stoploss` / `invalidation`, so
+        these signals fell back to auto-SL -3%. Greenlit ~1-line
+        regex, finally shipped 2026-05-15."""
+        text = (
+            "BTCUSDT LONG\n"
+            "Entry: 65000\n"
+            "TP1: 66000\n"
+            "🛑 Stop Price: 64000"
+        )
+        prices = extract_prices(text)
+        assert prices["sl"] == 64000.0
+
+    def test_stop_price_no_colon_variants(self):
+        """The new `stop[-\\s]*price` alternation matches "Stop Price",
+        "Stop-Price", and "Stopprice"."""
+        for sl_line in (
+            "Stop Price: 64000",
+            "Stop-Price: 64000",
+            "Stopprice: 64000",
+            "STOP PRICE = 64000",
+        ):
+            text = (
+                "BTCUSDT LONG\n"
+                "Entry: 65000\n"
+                "TP1: 66000\n"
+                f"{sl_line}"
+            )
+            prices = extract_prices(text)
+            assert prices["sl"] == 64000.0, f"failed on {sl_line!r}"
+
 
 # ===================================================================
 # Take-profit targets
@@ -620,6 +653,27 @@ class TestTakeProfitTargets:
         prices = extract_prices(text)
         assert prices["tps"] == [2000.0, 1900.0, 1800.0, 1700.0, 1600.0]
         assert prices["sl"] == 2300.0
+
+    def test_parse_zec_crown_crypto_takes_header(self):
+        """Crown Crypto Signal Free posts ZEC signals with `Takes:` as
+        the TP header (Tomas 2026-05-15 msg 54855+54856, log
+        2026-05-15T13:19:14Z). Without `takes` in the keyword
+        alternation the same-line list pattern bailed and
+        signal_parse_no_tps fired."""
+        text = (
+            "ZECUSDT long\n"
+            "\n"
+            "Entrance: by market\n"
+            "\n"
+            "Takes: 536.50, 543.79, 548.38, 556.74, 568.98, 582.04\n"
+            "\n"
+            "Sl🛑: 510.49\n"
+            "\n"
+            "Lev: 25x - 50x"
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [536.50, 543.79, 548.38, 556.74, 568.98, 582.04]
+        assert prices["sl"] == 510.49
 
     def test_parse_bob_bare_per_line_still_falls_through(self):
         """Regression guard for the BOB 2026-05-04 case: bare prices on

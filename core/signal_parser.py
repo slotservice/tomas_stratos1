@@ -540,7 +540,7 @@ _TP_PATTERNS = [
     #     "Targets 1.20" still match), but alphabetic chars between
     #     the header and the prices block the match.
     re.compile(
-        r"\b(?:targets?|tps?|take[\s_-]*profits?(?:\s+targets?)?)\b"
+        r"\b(?:targets?|tps?|takes|take[\s_-]*profits?(?:\s+targets?)?)\b"
         r"[^\S\n]*[:=]?[^\d\n\w]*"
         r"([\d.,/|\-•• ]+)",
         re.IGNORECASE,
@@ -568,7 +568,7 @@ _SL_PATTERNS = [
     # We accept only ABSOLUTE-price SLs; percentage specs lack a price
     # the bot can verify, so the signal is rejected upstream.
     re.compile(
-        r"(?:sl|stop[-\s]*loss|stoploss|invalidation)\s*[:=]?\s*"
+        r"(?:sl|stop[-\s]*loss|stoploss|stop[-\s]*price|invalidation)\s*[:=]?\s*"
         # 2026-05-14: optional "N)" list marker before the price.
         # CoinAura / American Crypto write the SL as a one-item
         # numbered list — "STOPLOSS\n1) ➡️ 0.04520" — and without
