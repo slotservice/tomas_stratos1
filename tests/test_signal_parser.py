@@ -590,6 +590,36 @@ class TestTakeProfitTargets:
         prices = extract_prices(text)
         assert prices["tps"] == [1.20, 1.27, 1.36]
 
+    def test_parse_bill_targets_after_sl_section(self):
+        """US Crypto Leaks BILL signal (Tomas 2026-05-15 msg 54792+54793):
+        sections are ordered ENTRY -> STOPLOSS -> TARGET (reversed from
+        the usual ENTRY -> TARGETS -> SL). Pattern 5's primary block
+        scan runs entry.end() -> sl.start(), so when TPs are AFTER the
+        SL line that block is empty and TPs are missed. Pattern 5b
+        catches this by doing a second pass from any TP header found
+        AFTER the SL line."""
+        text = (
+            "🌷🌷#BILL/USDT SHORT🌷🌷\n"
+            "\n"
+            "ENTRY 2100-2200\n"
+            "\n"
+            "STOPLOSS 2300\n"
+            "\n"
+            "TARGET\n"
+            "2000\n"
+            "1900\n"
+            "1800\n"
+            "1700\n"
+            "1600\n"
+            "\n"
+            "LEV/20X/50X\n"
+            "\n"
+            "@UScrypto1"
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [2000.0, 1900.0, 1800.0, 1700.0, 1600.0]
+        assert prices["sl"] == 2300.0
+
     def test_parse_bob_bare_per_line_still_falls_through(self):
         """Regression guard for the BOB 2026-05-04 case: bare prices on
         separate lines under a "Take Profit Target" header must NOT be

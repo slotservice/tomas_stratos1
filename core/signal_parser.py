@@ -1034,6 +1034,39 @@ def extract_prices(text: str) -> dict:
                     if idx >= 10:
                         break
 
+            # Pattern 5b — same positional logic, second pass for the
+            # reversed-section variant where TPs sit AFTER the SL line:
+            #
+            #   #BILL/USDT SHORT
+            #   ENTRY 2100-2200
+            #   STOPLOSS 2300
+            #   TARGET
+            #   2000
+            #   1900
+            #   ...
+            #
+            # US Crypto Leaks 2026-05-15 (Tomas msg 54792+54793). The
+            # block above runs from entry.end() to sl.start() — when
+            # the TPs are AFTER the SL line, that block is empty and
+            # the per-line scanner finds nothing. If a TARGET/TPs
+            # header appears AFTER the SL line, do a second pass from
+            # that header to end-of-text. tp_line_re already rejects
+            # boundary lines like "LEV/20X/50X" or "@UScrypto1" (not
+            # bare-price lines), so over-scan risk is low.
+            if not collected_tps and sm is not None:
+                post_sl_tpm = tp_header_re.search(text, sm.end())
+                if post_sl_tpm:
+                    post_block = text[post_sl_tpm.end():]
+                    post_block = re.sub(r"[•·]+", "\n", post_block)
+                    idx = 0
+                    for m in tp_line_re.finditer(post_block):
+                        price = _parse_price(m.group(1))
+                        if price > 0:
+                            idx += 1
+                            collected_tps[idx] = price
+                            if idx >= 10:
+                                break
+
     # Sort by index and store
     if collected_tps:
         result["tps"] = [collected_tps[k] for k in sorted(collected_tps)]
