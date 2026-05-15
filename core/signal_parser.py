@@ -411,6 +411,36 @@ _ENTRY_PATTERNS = [
         r"add\s+(?:long|short)\s*(?:at|around|@)\s*" + _PRICE_RE,
         re.IGNORECASE,
     ),
+    # Tomas 2026-05-16 confirmed "0.04228 is entry" for the format:
+    #   "📊LONG #AIGENSYN 0.04228"
+    #   "Long #IRYS 0.07403"
+    #   "🚀SHORT #BTC 65000"
+    # Direction word at line-start (optional emoji / non-word prefix),
+    # then #/$ symbol, then a price on the same line. ANCHORED to
+    # line-start so prose like "I went long in $BTC 1000 yesterday"
+    # cannot match. ANCHORED to require the symbol immediately after
+    # the direction so "LONG #LAB NOW" / "LONG: $OPG/USDT" (which use
+    # different separators after the direction word) cannot match.
+    # MUST be last in this list — only fires when no explicit
+    # "Entry:" keyword pattern matched above.
+    #
+    # Short-summary safeguard (downstream): some channels post a
+    # one-line "Long #IRYS 0.0695 / Tp 0.0720" summary BEFORE the
+    # full Trade Setup. Without a safeguard, this pattern would
+    # extract 0.0695 as entry and the bot would open a position from
+    # the summary AND a duplicate from the full message. The post-
+    # extract guard in parse_signal_detailed (below) discards H's
+    # entry when there is no entry keyword in the text AND no SL AND
+    # ≤1 TP — those three signals are the short-summary class.
+    # Full H signals (≥2 TPs OR SL) still trade.
+    re.compile(
+        r"(?m)^[^\w\n]*(?:long|short)\s+"
+        r"[#$][A-Za-z0-9]{2,15}"
+        r"[^\S\n]+\$?[^\S\n]*"
+        r"(\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?)"
+        r"[^\S\n]*$",
+        re.IGNORECASE,
+    ),
 ]
 
 # Market-entry instruction (Tomas 2026-05-15): some channels write the
@@ -471,9 +501,17 @@ _TP_PATTERNS = [
         # — so news/chatter picked up a fake TP, looked signal-shaped,
         # and fired a false "Blokerad, Entre saknas". \b makes "t"
         # match only at a word boundary ("T1:"), never mid-word.
+        # 2026-05-16: negative lookahead `(?!\.\d)` after the captured
+        # index prevents the "Tp 0.X" misparse — without it, "Tp 0.0720"
+        # captured index="0" and the `[^\d\n]{0,6}` gap ate the ".",
+        # then _PRICE_RE captured "0720" as 720.0 instead of the
+        # intended 0.0720. The lookahead skips Pattern 1 whenever the
+        # "index" would be immediately followed by `.\d` — that shape
+        # is the decimal price itself, not a real TP index. Falls
+        # through to Pattern 4 / 4b / 5 which handle the case.
         r"\b(?:tp|t|target|take[\s_-]*profit)[^\S\n]*"
         r"(?:\([^()\n]{0,8}\)[^\S\n]*)?"
-        r"(\d+)[^\d\n]{0,6}" + _PRICE_RE,
+        r"(\d+)(?!\.\d)[^\d\n]{0,6}" + _PRICE_RE,
         re.IGNORECASE,
     ),
     # Numbered list under a "Targets :" / "Take Profits :" / "Take
@@ -900,7 +938,26 @@ def extract_prices(text: str) -> dict:
 
     # Pattern 4: comma/slash/bullet-separated list on the header line
     # ("Targets: 3300/3400/3500" / "Targets: 0.0101• 0.0107• 0.0115").
-    if not collected_tps:
+    #
+    # 2026-05-16: skip Pattern 4 when there are MULTIPLE TP-keyword
+    # lines in the text. Pattern 4 uses .search() (first match only)
+    # — for a multi-line per-line format like
+    #   1️⃣Tp 0.04320
+    #   2️⃣Tp 0.04410
+    #   3️⃣Tp 0.04580
+    # (Tomas 2026-05-16 AIGENSYN), Pattern 4 would capture only the
+    # first "0.04320", leaving the remaining two TPs unparsed, and
+    # block Pattern 5 (positional per-line fallback) from running.
+    # Skipping when >=2 TP-keyword lines exist lets Pattern 5 handle
+    # the per-line format end-to-end. Single-TP signals like
+    # "TP: 1.6" (HIGH test) and same-line lists "Targets: a, b, c"
+    # (BANANAS31) keep working — they have only one TP-keyword line.
+    _tp_keyword_line_count = len(re.findall(
+        r"(?im)^[^\n]*\b(?:tp\d*|target\s*\d*|take[\s_-]*profit)\b"
+        r"[^\n]*$",
+        text,
+    ))
+    if not collected_tps and _tp_keyword_line_count <= 1:
         m = _TP_PATTERNS[2].search(text)
         if m:
             raw_list = m.group(1)
@@ -980,9 +1037,18 @@ def extract_prices(text: str) -> dict:
         # (CoinAura), "Entrys :" (CoinAura) or "LONG ZONE:" (Spot
         # Future Signals) as their entry-zone header also benefit from
         # the positional TP fallback.
+        # 2026-05-16: extended to also match the H entry-line form —
+        # "LONG #SYM PRICE" / "📊LONG #AIGENSYN 0.04228" — so the
+        # positional TP fallback can scan TP lines below an H-style
+        # entry line (Pattern 1 misparses "1️⃣Tp 0.04320" by grabbing
+        # the leading "0" as index and capturing "04320" as a 4320.0
+        # price; the per-line tp_line_re in Pattern 5 handles it
+        # correctly).
         entry_line_re = re.compile(
-            r"(?im)^.*\b(?:entry|entries|entrys|enter|buy[\s-]+(?:range|zone|area)"
+            r"^.*\b(?:entry|entries|entrys|enter|buy[\s-]+(?:range|zone|area)"
             r"|(?:long|short)[\s-]+zone)\b.*$"
+            r"|^[^\w\n]*(?:long|short)\s+[#$]\w{2,15}[^\S\n]+\d.*$",
+            re.IGNORECASE | re.MULTILINE,
         )
         sl_line_re = re.compile(
             r"(?im)^.*\b(?:sl|stop[-\s]*loss|stoploss|invalidation)\b.*$"
@@ -992,8 +1058,19 @@ def extract_prices(text: str) -> dict:
         # before it are entry-zone prices and must NOT be captured
         # (CRYPTO WORLD UPTADES ZKJ regression: entry value 0.02850
         # was being captured as TP[1]).
+        #
+        # 2026-05-16: require the header line to contain NO digits.
+        # A real "Take Profit Targets:" / "Targets:" header is just
+        # the keyword + colon — no price on the same line. The
+        # per-line "1️⃣Tp 0.04320" / "Tp 0.0720" TP-line shape was
+        # matching as a header, which caused block_start to skip past
+        # the line and miss the first TP (Tomas 2026-05-16 AIGENSYN
+        # incident — only TPs 2 and 3 were captured, TP1 was lost).
+        # The [^\d\n]* anchors keep the keyword between non-digit
+        # boundaries so per-line TP shapes can't masquerade as
+        # headers.
         tp_header_re = re.compile(
-            r"(?im)^.*\b(?:targets?|take[\s_-]*profits?|tps?)\b.*$"
+            r"(?im)^[^\d\n]*\b(?:targets?|take[\s_-]*profits?|tps?)\b[^\d\n]*$"
         )
         em = entry_line_re.search(text)
         if em:
@@ -1398,6 +1475,40 @@ def parse_signal_detailed(
     entry = prices["entry"]
     tps = prices["tps"]
     sl = prices["sl"]
+
+    # H short-summary guard (Tomas 2026-05-16). The bottom pattern in
+    # _ENTRY_PATTERNS recognises the format
+    #   "📊LONG #AIGENSYN 0.04228"
+    #   "Long #IRYS 0.07403"
+    # — direction word + #/$ symbol + price on the same line — so the
+    # bot can TRADE complete signals in that shape (entry on the
+    # direction line, TPs and SL below). Tomas explicitly confirmed:
+    # "0.04228 is entry" for AIGENSYN.
+    #
+    # But some channels post a ONE-LINE summary like "Long #IRYS
+    # 0.0695\nTp 0.0720" SECONDS BEFORE the full Trade Setup arrives
+    # — same H shape, but only one TP and no SL. Tomas (msg 54791):
+    # "maby just igone that on" — silence the summary; the full
+    # message that follows opens the trade. Drop H's entry when:
+    #   - no "Entry/Entries/Entrys/Enter/Buy range/zone/area/Long
+    #     zone/Short zone" keyword appears in the text
+    #   - no SL was parsed
+    #   - at most one TP was parsed
+    # That signature is exactly the short-summary case. Full H
+    # signals (≥2 TPs OR SL) still parse and trade because they
+    # fail this gate.
+    if entry > 0 and sl is None and len(tps) <= 1:
+        _entry_keyword_present = bool(re.search(
+            r"\b(?:entry|entries|entrys|enter|"
+            r"buy[\s-]+(?:range|zone|area)|"
+            r"(?:long|short)[\s-]+zone)\b",
+            clean,
+            re.IGNORECASE,
+        ))
+        if not _entry_keyword_present:
+            entry = 0.0
+            tps = []
+            sl = None
 
     # Market-entry signals carry the entry as a phrase ("Entry: now")
     # instead of a price. Tomas 2026-05-15: trade them — keep the

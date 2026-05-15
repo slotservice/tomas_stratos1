@@ -386,6 +386,113 @@ class TestEntryRange:
         assert prose.entry == 65000.0
         assert prose.entry_is_market is False
 
+    def test_parse_long_sym_price_same_line_entry_full_signal(self):
+        """Tomas 2026-05-16 confirmed "0.04228 is entry" for the
+        format that CoinAura / American Crypto use across multiple
+        symbols (AIGENSYN, IRYS, GMX, ...):
+
+          📊LONG #AIGENSYN 0.04228
+          📌 Leverage 40X
+          1️⃣Tp 0.04320
+          2️⃣Tp 0.04410
+          3️⃣Tp 0.04580
+          ❌Sl 0.03958
+
+        The H entry pattern at the end of _ENTRY_PATTERNS captures
+        the price after the symbol on the direction line as the
+        entry. The bot then trades the signal (entry + TPs + SL all
+        present)."""
+        text = (
+            "📊LONG #AIGENSYN 0.04228\n"
+            "\n"
+            "📌 Leverage 40X\n"
+            "\n"
+            "1️⃣Tp 0.04320\n"
+            "\n"
+            "2️⃣Tp 0.04410\n"
+            "\n"
+            "3️⃣Tp 0.04580\n"
+            "\n"
+            "❌Sl 0.03958"
+        )
+        signal = parse_signal(text, channel_name="CoinAura")
+        assert signal is not None
+        assert signal.symbol == "AIGENSYNUSDT"
+        assert signal.direction == "LONG"
+        assert signal.entry == 0.04228
+        assert signal.tps == [0.04320, 0.04410, 0.04580]
+        assert signal.sl == 0.03958
+
+    def test_parse_irys_short_summary_still_silenced(self):
+        """Regression guard for the H short-summary safeguard. Some
+        channels post a one-line summary "Long #IRYS 0.0695\\nTp
+        0.0720" SECONDS before the full Trade Setup. H's regex
+        captures 0.0695 as entry — but the post-extract guard in
+        parse_signal_detailed discards H's entry when there is no
+        explicit entry keyword AND no SL AND ≤1 TP. Result: parse
+        falls to no_entry chatter (silent). Tomas (msg 54791): "maby
+        just igone that on"."""
+        result = parse_signal_detailed(
+            text="Long #IRYS 0.0695\nTp 0.0720",
+            channel_id=-1003657180432,
+            channel_name="CoinAura",
+        )
+        assert result.signal is None
+        assert result.reason == "no_entry"
+        # The chatter classifier (J fix) clears tps/sl, so main.py's
+        # notification gate (result.tps or result.sl) drops the
+        # rejection notification too.
+        assert result.tps == []
+        assert result.sl is None
+
+    def test_parse_h_format_short_summary_with_sl_still_trades(self):
+        """If the same H format DOES carry an SL (or ≥2 TPs), it is
+        treated as a full signal, not a short summary. The post-
+        extract guard requires ALL of "no entry kw + no SL + ≤1 TP"
+        to trigger — any of these failing means the signal is full
+        enough to trade."""
+        # Has SL even though only 1 TP — gate fails on "no SL".
+        signal = parse_signal(
+            "Long #IRYS 0.0695\nTp 0.0720\nSl 0.0650",
+            channel_name="CoinAura",
+        )
+        assert signal is not None
+        assert signal.entry == 0.0695
+        assert signal.tps == [0.0720]
+        assert signal.sl == 0.0650
+
+        # Has 2 TPs even though no SL — gate fails on "≤1 TP".
+        signal2 = parse_signal(
+            "Long #IRYS 0.0695\nTp 0.0720\nTp 0.0745",
+            channel_name="CoinAura",
+        )
+        assert signal2 is not None
+        assert signal2.entry == 0.0695
+        assert signal2.tps == [0.0720, 0.0745]
+
+    def test_parse_long_sym_no_price_market_entry_unaffected(self):
+        """Negative case: "🟢 LONG #LAB NOW" — direction + symbol +
+        NOW (not a price). H pattern requires a digit after the
+        symbol so it must NOT match. The signal already has a market-
+        entry path that resolves NOW to the live Bybit price."""
+        from core.signal_parser import _MARKET_ENTRY_RE
+        text = "🟢 LONG #LAB NOW\n❌SL: 3.6\n✅TP: 6.4"
+        # Pure regex check: H must not capture from this text.
+        prices = extract_prices(text)
+        assert prices["entry"] == 0.0, (
+            f"H must not capture from a 'NOW' market-entry message, "
+            f"got entry={prices['entry']!r}"
+        )
+
+    def test_parse_long_sym_price_pattern_does_not_match_prose(self):
+        """Negative case: "i went long $BTC 1000 yesterday" in prose
+        must NOT match H. The ^[^\\w\\n]* anchor blocks the match
+        because "i" is a word char at line start, so the direction
+        cannot be reached."""
+        text = "Hi guys! i went long $BTC 1000 yesterday for fun"
+        prices = extract_prices(text)
+        assert prices["entry"] == 0.0
+
 
 # ===================================================================
 # Missing fields
