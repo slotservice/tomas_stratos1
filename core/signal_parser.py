@@ -1415,10 +1415,36 @@ def parse_signal_detailed(
         # news/updates as signals and sends error messages for them."
         #
         # A real signal missing ONLY its entry price still has SL
-        # and/or TP lines — it keeps the original signal_parse_no_entry
-        # event and still fires "Blokerad, Entre saknas" (Tomas
-        # 2026-05-12 spec: every signal-shaped rejection notifies).
-        has_price_structure = bool(tps) or bool(sl)
+        # and/or TP lines AND an explicit entry keyword (Entry: / entry
+        # zone / ENTER / buy range etc.) — it keeps the original
+        # signal_parse_no_entry event and still fires "Blokerad, Entre
+        # saknas" (Tomas 2026-05-12 spec: every signal-shaped rejection
+        # notifies).
+        #
+        # 2026-05-15: signal-shape requires SL present OR (TPs + an
+        # entry keyword somewhere in the text). CoinAura posts a short
+        # summary "Lab long 4.12 tp1 4.21" seconds before the full
+        # Trade Setup — the summary has tps from "tp1 4.21" but no SL
+        # and no entry keyword, so the old (tps OR sl) gate fired
+        # "Blokerad, Entre saknas" for the summary AND the bot opened
+        # the trade from the full message (Tomas msg 54791: "first
+        # message say 'missing entre' — maby just igone that on!").
+        # A real signal that has SL/TP lines but no parseable entry
+        # value still has an SL line (the existing
+        # test_real_signal_missing_entry_logs_as_no_entry test case
+        # — #BTCUSDT LONG / TP1 / TP2 / SL) and keeps firing the
+        # rejection. A real signal that has the entry keyword present
+        # but unparseable also still rejects.
+        _entry_keyword_present = bool(re.search(
+            r"\b(?:entry|entries|entrys|enter|"
+            r"buy[\s-]+(?:range|zone|area)|"
+            r"(?:long|short)[\s-]+zone)\b",
+            clean,
+            re.IGNORECASE,
+        ))
+        has_price_structure = bool(sl) or (
+            bool(tps) and _entry_keyword_present
+        )
         log.info(
             "signal_parse_no_entry" if has_price_structure
             else "signal_parse_no_entry_chatter",
