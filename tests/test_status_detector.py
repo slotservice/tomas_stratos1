@@ -72,6 +72,13 @@ STATUS_MESSAGES = [
     "$NAORIS\nTP4 ✅",
     "$AIN\nTP1 ✅",
     "#BTC/USDT Target 2 ✅",
+    # Crypto Master Vip writes target-hit pings with the numero sign
+    # between "Target" and the index: "Target №2 ✅" (Tomas 2026-05-15
+    # msg 54704). Before the pattern allowed "№", the message slipped
+    # through to the parser, which read the "Mark price" line as a TP
+    # and fired "Blokerad, Entre saknas".
+    "#STX/USDT\nTarget №2 - ✅\nMark price - 0.2589\nProfit - 125%+",
+    "#FOO/USDT\nTarget № 3 ✅\nProfit - 70%+",
 ]
 
 

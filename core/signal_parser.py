@@ -143,8 +143,13 @@ _STATUS_UPDATE_PATTERNS = [
     # The gap before the checkmark is [^\n\d] so it can never skip over
     # a price — "TP1: 0.045" does NOT match (the "0" blocks it), only
     # "TP1 ✅"-style hit pings do.
+    # The character class between "target"/"tp" and the digit allows the
+    # numero sign (U+2116, "№") in addition to whitespace — Crypto
+    # Master Vip writes target-hit pings as "Target №2 ✅" (Tomas
+    # 2026-05-15 msg 54704+54705). Without "№" allowed the message
+    # tripped signal_parse_no_entry and fired "Blokerad, Entre saknas".
     re.compile(
-        r"\b(?:tp|target)\s*\d+\b[^\n\d]{0,4}[✅✓☑]",
+        r"\b(?:tp|target)[\s№]*\d+\b[^\n\d]{0,4}[✅✓☑]",
         re.IGNORECASE,
     ),
     # "Stop Target Hit", "Stop Loss Hit", "SL Hit", "Stop Hit"
