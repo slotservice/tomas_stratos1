@@ -392,9 +392,11 @@ class TelegramNotifier:
         otherwise fails the SL sanity check. Tomas 2026-05-15 (msg
         54706+54707, CryptoPasta BTC SHORT with Stop:8230 typo): the
         previous wording said "TP är fel angiva" for SL-side failures,
-        which lied about which field broke."""
+        which lied about which field broke. Title revised 2026-05-15
+        (msg 54710): "SL på felsida LONG/SHORT" — Tomas's preferred
+        wording with the direction inline."""
         text = (
-            f"⚠️ Blokerad, SL är fel angiva ⚠️\n"
+            f"⚠️ Blokerad, SL på felsida {direction} ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(channel_name)}\n"
             f"📊 Symbol: {_sym(symbol)}\n"
