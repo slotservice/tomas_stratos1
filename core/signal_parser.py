@@ -244,6 +244,24 @@ _STATUS_UPDATE_PATTERNS = [
         r"\bişlem\w*\s+(?:dair|yönelik)\s+güncelleme\b",
         re.IGNORECASE,
     ),
+    # 2026-05-16 promo / paywall / news patterns Tomas explicitly
+    # asked the bot to silence after the 14:58-15:02 batch:
+    #
+    #   Benjamin Cowen $STBL "Long Setup / Entry: 0.033-0.035 /
+    #   SL: -10% / Retweet for targets. NFA" — "Retweet for targets"
+    #   is a paywall (TPs hidden until you RT). Tomas msg 54864-ish
+    #   reply: "quet, no message".
+    re.compile(r"\bretweet[^\n]{0,40}\btargets?\b", re.IGNORECASE),
+    #   CryptoBeast "LONG #AEVO now fast X10 - X20 / If you missed
+    #   it, you can buy #AEVO now / Entry: 0.0294" — promo call
+    #   without TPs. Tomas reply: "no message :D".
+    re.compile(r"\bnow\s+fast\s+x\d+\s*[-–]\s*x\d+\b", re.IGNORECASE),
+    re.compile(r"\bif\s+you\s+missed\s+it[\s,]+you\s+can\s+buy\b", re.IGNORECASE),
+    #   BTC Champ / Premium Vip Room "Ready For Mega PUMP?" /
+    #   "PUMPs SUPER GEM" promo headers (the AEVO TARGET-300 typo
+    #   forward chain went through these).
+    re.compile(r"\bready\s+for\s+mega\s+pump\b", re.IGNORECASE),
+    re.compile(r"\bpumps?\s+super\s+gem\b", re.IGNORECASE),
 ]
 
 

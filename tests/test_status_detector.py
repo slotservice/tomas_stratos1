@@ -79,6 +79,12 @@ STATUS_MESSAGES = [
     # and fired "Blokerad, Entre saknas".
     "#STX/USDT\nTarget №2 - ✅\nMark price - 0.2589\nProfit - 125%+",
     "#FOO/USDT\nTarget № 3 ✅\nProfit - 70%+",
+    # Tomas 2026-05-16 paywall / promo posts ("that one was correkt,
+    # quet, no message" / "no message :D"):
+    "$STBL | Long Setup\n\nEntry: 0.033-0.035\nSL: -10%\nRetweet for targets.\n\nNFA",
+    "LONG #AEVO now fast X10 - X20\nIf you missed it, you can buy #AEVO now\n\nEntry: 0.0294",
+    "Ready For Mega PUMP?\n\n#FOO/USDT LONG",
+    "✨ PUMPs SUPER GEM ✨\n\n#CGPT/USDT LONG",
 ]
 
 
