@@ -936,9 +936,23 @@ def extract_prices(text: str) -> dict:
         # \b boundaries — same hardening as Pattern 4 (the same-line
         # list). Without them "tps" inside "https://..." or "intake"
         # could match the keyword alternation. 2026-05-15.
+        #
+        # 2026-05-15 second hardening: the pre-newline gap was [^\d\n]*
+        # (any non-digit non-newline including alphabetic). Benjamin
+        # Cowen "📉$BTC SHORT UPDATE 🔥\n\n2R target achieved
+        # successfully! 🚀\nClose 70-80% position to lock profits, move
+        # SL to entry, and hold the rest." had "target" mid-sentence,
+        # the gap ate " achieved successfully! 🚀", the newline-gap ate
+        # "\nClose ", and "70-80" was captured as a hyphen-separated TP
+        # list (tps=[70.0, 80.0]). Tightened to [^\d\n\w]* so the gap
+        # before the newline cannot cross alphabetic chars — the
+        # header must be at the end of its visual line (only emoji /
+        # whitespace / punctuation between keyword and EOL). OPG's
+        # "TAKE-PROFITS 💰\n\n0.2860- 0.30- 0.33" still matches because
+        # "💰" is non-word. Tomas 2026-05-15 msg 54882+54883.
         pat = re.compile(
             r"\b(?:take[\s_-]*profits?(?:\s+targets?)?|targets?|tps?)\b"
-            r"[^\d\n]*"
+            r"[^\d\n\w]*"
             r"(?:\n[^\d\n]*){1,2}"
             r"(\d+(?:\.\d+)?(?:\s*[-/,]\s*\d+(?:\.\d+)?){1,})",
             re.IGNORECASE,

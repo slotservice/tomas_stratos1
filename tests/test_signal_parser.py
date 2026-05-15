@@ -654,6 +654,30 @@ class TestTakeProfitTargets:
         assert prices["tps"] == [2000.0, 1900.0, 1800.0, 1700.0, 1600.0]
         assert prices["sl"] == 2300.0
 
+    def test_parse_benjamin_cowen_btc_short_update_no_fake_tp(self):
+        """Benjamin Cowen "$BTC SHORT UPDATE" trade-status post (Tomas
+        2026-05-15 msg 54882+54883). Has "2R target achieved
+        successfully!" mid-prose plus "Close 70-80% position" later.
+        Pattern 4b's loose pre-newline gap used to ate
+        " achieved successfully! 🚀" then captured "70-80" from the
+        following line as a hyphen-separated TP list (tps=[70.0,
+        80.0]). The bot then logged signal_parse_no_entry and fired
+        "Blokerad, Entre saknas". Tightening Pattern 4b's gap to
+        [^\\d\\n\\w]* blocks the "target achieved successfully" match
+        because "achieved" starts with an alphabetic char."""
+        text = (
+            "📉$BTC SHORT UPDATE 🔥\n"
+            "\n"
+            "2R target achieved successfully! 🚀\n"
+            "Close 70-80% position to lock profits, move SL to entry, "
+            "and hold the rest."
+        )
+        prices = extract_prices(text)
+        assert prices["tps"] == [], (
+            f"prose '2R target achieved' + '70-80%' must not produce "
+            f"TPs, got {prices['tps']!r}"
+        )
+
     def test_parse_zec_crown_crypto_takes_header(self):
         """Crown Crypto Signal Free posts ZEC signals with `Takes:` as
         the TP header (Tomas 2026-05-15 msg 54855+54856, log
