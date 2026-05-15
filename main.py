@@ -900,8 +900,18 @@ async def main() -> None:
                 recently_closed = getattr(
                     position_mgr, "_recently_closed", {},
                 )
+                recently_opened = getattr(
+                    position_mgr, "_recently_opened", {},
+                )
                 _now_mono = time.monotonic()
                 _RECENT_CLOSE_COOLDOWN = 60.0
+                # Tomas 2026-05-15 INJ false-orphan fix: the bot stamps
+                # _recently_opened the moment process_signal commits to
+                # placing an order (before set_leverage). The window
+                # between that stamp and _active_trades[trade.id] =
+                # trade is ~5s in the typical path, but can stretch on
+                # slow Bybit responses. 30s is conservative.
+                _RECENT_OPEN_COOLDOWN = 30.0
                 for p in all_positions:
                     try:
                         size = float(p.get("size") or 0)
@@ -923,6 +933,17 @@ async def main() -> None:
                                 "reverse_reconcile.recently_closed_skip",
                                 symbol=sym, side=side,
                                 age_s=round(_now_mono - closed_at, 2),
+                            )
+                            continue
+                        opened_at = recently_opened.get((sym, side))
+                        if (
+                            opened_at is not None
+                            and (_now_mono - opened_at) < _RECENT_OPEN_COOLDOWN
+                        ):
+                            log.debug(
+                                "reverse_reconcile.recently_opened_skip",
+                                symbol=sym, side=side,
+                                age_s=round(_now_mono - opened_at, 2),
                             )
                             continue
                         unreal = float(p.get("unrealisedPnl") or 0)

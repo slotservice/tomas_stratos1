@@ -200,6 +200,21 @@ class PositionManager:
         # within the cooldown window.
         self._recently_closed: Dict[tuple, float] = {}
 
+        # Recently-opened (symbol, side) keys with monotonic open
+        # timestamp. Tomas 2026-05-15 INJUSDT incident ("IZZU!!!!
+        # This cant happend!"): signal_parsed at 12:50:39, order
+        # filled on Bybit immediately, but _active_trades registration
+        # at line ~1997 didn't happen until 12:50:44 — a ~5s window
+        # where Bybit has the position and the bot doesn't know it
+        # yet. reverse_reconcile ran during the window, saw the new
+        # INJ Sell × 37 as "untracked", fired a false "Obevakad" alarm
+        # 3 seconds before the bot's own trade.opened event. Mirror
+        # the _recently_closed pattern: stamp the (symbol, side) the
+        # moment we decide to place the order (before set_leverage)
+        # so reverse_reconcile can suppress the warning until the
+        # registration catches up.
+        self._recently_opened: Dict[tuple, float] = {}
+
         # TP-fill notification dedup: Bybit may re-send a Filled event,
         # we only fire the per-TP Telegram notification once per order.
         self._tp_notified: set[str] = set()
@@ -888,8 +903,30 @@ class PositionManager:
             log.exception("signal.sl_liq_check_error", symbol=symbol)
 
         # Also set the leverage on Bybit BEFORE placing the order.
+        # Tomas 2026-05-15 INJ orphan race: stamp the (symbol, side)
+        # in _recently_opened BEFORE any Bybit position-affecting call,
+        # so reverse_reconcile can suppress a false "Obevakad" warning
+        # during the window between order placement and the
+        # _active_trades[trade.id] = trade registration ~100 lines
+        # below. The stamp also covers set_leverage retries — if
+        # set_leverage races with the order fill, the position can
+        # appear on Bybit before we even enter the order-placement
+        # path. Best-effort GC piggybacks on the same 500-entry / 5
+        # min logic as _recently_closed.
+        side_tmp = "Buy" if direction == "LONG" else "Sell"
         try:
-            side_tmp = "Buy" if direction == "LONG" else "Sell"
+            self._recently_opened[(symbol, side_tmp)] = time.monotonic()
+            if len(self._recently_opened) > 500:
+                cutoff = time.monotonic() - 300
+                stale = [
+                    k for k, t in self._recently_opened.items() if t < cutoff
+                ]
+                for k in stale:
+                    self._recently_opened.pop(k, None)
+        except Exception:
+            pass
+
+        try:
             await self._bybit.set_leverage(symbol, leverage, side_tmp)
         except Exception as exc:
             log.exception("trade.set_leverage_failed",
