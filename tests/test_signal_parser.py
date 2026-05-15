@@ -692,8 +692,10 @@ class TestTakeProfitTargets:
         seconds before the full Trade Setup. The summary has tps from
         "tp1 4.21" but no entry keyword anywhere in the text — Tomas
         msg 54791: "maby just igone that on". The chatter classifier
-        must drop it silently (no_entry_chatter event) instead of
-        firing "Blokerad, Entre saknas"."""
+        must drop it silently — main.py's notification gate at
+        _on_signal_message uses (result.tps or result.sl) to decide
+        whether to fire "Blokerad, Entre saknas", so the chatter case
+        MUST clear tps/sl on the ParseResult."""
         result = parse_signal_detailed(
             text="Lab long 4.12 tp1 4.21\nLeverage 25x to 50x",
             channel_id=-1003657180432,
@@ -701,26 +703,37 @@ class TestTakeProfitTargets:
         )
         assert result.signal is None
         assert result.reason == "no_entry"
-        # The signal-shape gate must NOT trigger — the operator-channel
-        # rejection notify in main.py only fires when reason=="no_entry"
-        # AND result has both direction and (tps or sl). We can't see
-        # the log event directly, but the chatter classifier in the
-        # parser flips the log event between "signal_parse_no_entry"
-        # (notify) and "signal_parse_no_entry_chatter" (silent). The
-        # public contract: no entry keyword => result must have empty
-        # tps and sl from main.py's perspective, OR the gate must drop
-        # it. Easier to assert: text without an entry keyword keeps the
-        # tps in the result but main.py's signal-shape check requires
-        # entry keyword presence in the text. We re-check that here:
-        import re
-        entry_kw = re.search(
-            r"\b(?:entry|entries|entrys|enter|"
-            r"buy[\s-]+(?:range|zone|area)|"
-            r"(?:long|short)[\s-]+zone)\b",
-            "Lab long 4.12 tp1 4.21\nLeverage 25x to 50x",
-            re.IGNORECASE,
+        # The real contract: tps/sl must be empty so main.py's
+        # notification gate `(result.tps or result.sl)` is False and
+        # no "Blokerad, Entre saknas" fires. Without this assertion,
+        # caaed31 only renamed the log event and the user-visible
+        # notification still fired (Tomas msg 54858+54861 IRYS short).
+        assert result.tps == [], (
+            f"chatter must clear tps so notification gate drops it, "
+            f"got {result.tps!r}"
         )
-        assert entry_kw is None, "test premise: text has no entry keyword"
+        assert result.sl is None, (
+            f"chatter must clear sl so notification gate drops it, "
+            f"got {result.sl!r}"
+        )
+
+    def test_irys_short_long_sym_price_tp_is_chatter(self):
+        """The IRYS short variant CoinAura posts (Tomas 2026-05-15 msg
+        54858+54861, log 2026-05-15T13:19:18Z signal_id 7762547b):
+        "Long #IRYS 0.0695\nTp 0.0720" — no entry keyword, no SL, just
+        direction + symbol + bare price + one TP. The parser used to
+        leave tps=[0.0720] on the result, so main.py fired
+        "Blokerad, Entre saknas" even though the parser had flipped
+        the log event to signal_parse_no_entry_chatter (caaed31)."""
+        result = parse_signal_detailed(
+            text="Long #IRYS 0.0695\nTp 0.0720",
+            channel_id=-1003657180432,
+            channel_name="CoinAura",
+        )
+        assert result.signal is None
+        assert result.reason == "no_entry"
+        assert result.tps == []
+        assert result.sl is None
 
     def test_signal_with_entry_keyword_but_bad_value_still_rejects(self):
         """Regression guard: a real signal that HAS an entry keyword

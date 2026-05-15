@@ -1454,6 +1454,21 @@ def parse_signal_detailed(
             channel_name=channel_name,
             text_snippet=clean[:120],
         )
+        # When classified as chatter, also clear tps/sl on the result.
+        # main.py's notification gate at _on_signal_message reads
+        # (result.tps or result.sl) to decide whether to fire
+        # "Blokerad, Entre saknas". The caaed31 chatter classifier
+        # changed only the parser's LOG event between
+        # signal_parse_no_entry and signal_parse_no_entry_chatter —
+        # it did NOT change what was on the ParseResult, so the
+        # notification still fired for the LAB summary + the IRYS
+        # short "Long #IRYS 0.0695 / Tp 0.0720" variant (Tomas
+        # 2026-05-15 msg 54858+54861 — the same case caaed31 claimed
+        # to fix). Clearing tps/sl here makes the chatter
+        # classification actually drop the notification end-to-end.
+        if not has_price_structure:
+            tps = []
+            sl = None
         return ParseResult(reason="no_entry",
                            symbol=symbol,
                            direction=direction,
