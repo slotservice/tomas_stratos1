@@ -950,8 +950,15 @@ async def main() -> None:
                         # Untracked Bybit position — log a deduped
                         # warning and surface to the operator. Do NOT
                         # adopt, do NOT close. Operator decides.
-                        if position_mgr._should_send_reject_notify(
-                            "untracked_bybit_position", sym, side,
+                        # Tomas 2026-05-18: use the orphan-specific
+                        # 1-hour dedup, not the 0s signal-reject
+                        # dedup. Orphans accumulated 5926 alerts
+                        # over the weekend because every
+                        # reverse_reconcile pass re-fired the same
+                        # alert. One alert per (symbol, side) per
+                        # hour is the right operator cadence.
+                        if position_mgr._should_send_orphan_notify(
+                            sym, side,
                         ):
                             log.warning(
                                 "reverse_reconcile.untracked_position",

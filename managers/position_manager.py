@@ -219,6 +219,21 @@ class PositionManager:
         # we only fire the per-TP Telegram notification once per order.
         self._tp_notified: set[str] = set()
 
+        # Orphan-position notification dedup (Tomas 2026-05-18). The
+        # weekend log accumulated 5926 "Obevakad position på Bybit"
+        # alerts because reverse_reconcile runs every ~60s and the
+        # standard rejection-dedup window is 0s (per Tomas's
+        # 2026-05-12 "every event notifies" spec, which targets
+        # SIGNAL REJECTIONS, not status alerts). A single orphan
+        # generates 1440 alerts/day. Operator-channel signal: we
+        # want ONE alert per (symbol, side) per hour — enough to
+        # notice and act, not so much it floods the channel.
+        # Tracks monotonic timestamp keyed by f"{symbol}:{side}".
+        self._orphan_notify_last: Dict[str, float] = {}
+        # Window expressed as a class-level attribute so tests can
+        # override.
+        self._orphan_dedup_window_s: float = 3600.0
+
         # Last-price cache per symbol, fed from the ticker stream via
         # ``handle_price_update``. Client 2026-04-29: trailing-stop
         # activation must gate on Last price, not Mark — Bybit fires
@@ -359,6 +374,43 @@ class PositionManager:
             ]
             for k in stale:
                 self._reject_notify_last.pop(k, None)
+        return True
+
+    def _should_send_orphan_notify(self, symbol: str, side: str) -> bool:
+        """Return True if a "Obevakad position på Bybit" alert for
+        ``(symbol, side)`` should fire.
+
+        Separate from _should_send_reject_notify because the regular
+        rejection dedup window is 0s (Tomas 2026-05-12: signal-shape
+        rejections must never be silenced). Orphans are STATUS
+        alerts, not rejections — operator needs to know an orphan
+        exists, not be reminded every minute for the entire day.
+        Tomas 2026-05-18: 5926 orphan alerts over the weekend, all
+        re-firing the same handful of stuck positions. 1-hour
+        suppression per (symbol, side) — one reminder per hour is
+        enough.
+        """
+        key = f"{symbol}:{side}"
+        now = time.monotonic()
+        last = self._orphan_notify_last.get(key)
+        if last is not None and (now - last) < self._orphan_dedup_window_s:
+            log.debug(
+                "orphan_notify.deduped",
+                symbol=symbol, side=side,
+                window_s=self._orphan_dedup_window_s,
+                age_s=round(now - last, 1),
+            )
+            return False
+        self._orphan_notify_last[key] = now
+        # Best-effort GC.
+        if len(self._orphan_notify_last) > 500:
+            cutoff = now - 2 * self._orphan_dedup_window_s
+            stale = [
+                k for k, t in self._orphan_notify_last.items()
+                if t < cutoff
+            ]
+            for k in stale:
+                self._orphan_notify_last.pop(k, None)
         return True
 
     # ==================================================================
