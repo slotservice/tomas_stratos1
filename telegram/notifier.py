@@ -1657,9 +1657,26 @@ class TelegramNotifier:
             else:
                 locked_pct_price = (entry - effective_trigger) / entry * 100.0
         else:
-            # No Bybit-confirmed trigger and no tracked SL — use the
-            # theoretical floor as a last resort.
-            locked_pct_price = max(0.0, activation_pct - abs(distance_pct))
+            # Tomas 2026-05-18 msg 55703: "Never use theoretical
+            # formulas, estimated values, activation percentages, or
+            # internal assumptions for reporting. Only the actual
+            # trailing stop state from Bybit should be used." When
+            # neither the WS-confirmed trailing_stop_price nor the
+            # tracked trade.sl_price is available, we have no real
+            # number to report — suppress the activation message
+            # entirely. The next trailing_stop_updated event (which
+            # always carries a Bybit-confirmed stopLoss) will be the
+            # first message the operator sees, and it will be a real
+            # number.
+            log.info(
+                "trailing_stop_activated.suppressed_no_trigger_data",
+                trade_id=getattr(trade, "id", None),
+                symbol=getattr(signal, "symbol", None) if signal else None,
+                direction=direction,
+                trailing_stop_price=trailing_stop_price,
+                trade_sl_price=getattr(trade, "sl_price", None),
+            )
+            return ""
 
         # Trailing is supposed to LOCK profit. If the computed locked
         # value is <= 0, the activation supposedly fired but the

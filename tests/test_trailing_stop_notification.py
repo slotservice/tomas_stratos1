@@ -182,3 +182,31 @@ async def test_trailing_activated_falls_back_to_sl_price():
     assert result != ""
     text = n._send_notify.await_args.args[0]
     assert "+63.03% med hävstång" in text
+
+
+@pytest.mark.asyncio
+async def test_trailing_activated_suppressed_when_no_trigger_data():
+    """Tomas 2026-05-18 msg 55703 spec: "Never use theoretical
+    formulas, estimated values, activation percentages, or internal
+    assumptions for reporting." When neither the WS-confirmed
+    trailing_stop_price nor the tracked trade.sl_price is available,
+    the activation notification has no real number to show and must
+    be suppressed. The next trailing_stop_updated event will be the
+    first message the operator sees."""
+    n = _notifier()
+    trade = _Trade(signal=_Sig(symbol="FOOUSDT", direction="SHORT",
+                                entry=10.0),
+                   avg_entry=10.0, leverage=10.0, sl_price=None)
+    result = await n.trailing_stop_activated(
+        trade=trade,
+        activation_price=9.39,
+        trailing_distance=0.25,
+        activation_pct=6.10,
+        distance_pct=2.50,
+        trailing_stop_price=None,   # nothing from WS
+        mark_price=9.4,
+        quantity=100.0,
+        unrealised_pnl=0.0,
+    )
+    assert result == ""
+    n._send_notify.assert_not_called()
