@@ -906,6 +906,16 @@ class HealthChecker:
                 log.info("health.bybit_reconnected")
             except Exception:
                 log.exception("health.bybit_reconnect_failed")
+                # Tomas 2026-05-19: surface persistent Bybit
+                # connection loss to the operator channel.
+                # Reconnect attempts continue every 5 min, but the
+                # operator needs to know the channel is down right
+                # now so trades may queue or drop silently.
+                if self._tg_notifier:
+                    try:
+                        await self._tg_notifier.error_bybit_api()
+                    except Exception:
+                        log.exception("notify.error_bybit_api_failed")
 
         if not self._bybit.has_public_ws:
             log.warning("health.public_ws_down")
@@ -921,6 +931,16 @@ class HealthChecker:
                     log.info("health.telegram_reconnected")
                 except Exception:
                     log.exception("health.telegram_reconnect_failed")
+                    # Tomas 2026-05-19: surface persistent Telegram
+                    # connection loss. Sent via the *bot* token
+                    # client (different connection than the user
+                    # listener) so the operator still sees it even
+                    # while listener inbox is down.
+                    if self._tg_notifier:
+                        try:
+                            await self._tg_notifier.error_telegram_api()
+                        except Exception:
+                            log.exception("notify.error_telegram_api_failed")
         except Exception:
             log.exception("health.telegram_check_failed")
 

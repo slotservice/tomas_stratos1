@@ -556,11 +556,41 @@ async def main() -> None:
                 # is_trade_update_message True but no symbol — fall
                 # through; parse_signal_detailed will exit silently.
 
-            result = parse_signal_detailed_fn(
-                text=raw_text,
-                channel_id=channel_id,
-                channel_name=channel_name,
-            )
+            try:
+                result = parse_signal_detailed_fn(
+                    text=raw_text,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                )
+            except Exception as parse_exc:
+                # Tomas 2026-05-19: hard parser failure — distinct
+                # from a normal "no entry / no TPs" soft rejection
+                # (those are handled by the result.signal is None
+                # branch below). When the parser itself raises, we
+                # have no parsed signal object — best-effort extract
+                # a direction hint from the raw text so the operator
+                # at least sees long/short on the alert.
+                log.exception(
+                    "signal_parse.exception",
+                    channel_name=channel_name,
+                    text_preview=raw_text[:120],
+                )
+                hint_dir = ""
+                try:
+                    from core.signal_parser import extract_direction
+                    hint_dir = extract_direction(raw_text) or ""
+                except Exception:
+                    pass
+                try:
+                    await tg_notifier.error_parse_failure(
+                        symbol="",
+                        direction=hint_dir,
+                        channel_name=channel_name,
+                        error_detail=str(parse_exc)[:200],
+                    )
+                except Exception:
+                    log.exception("notify.error_parse_failure_failed")
+                return
 
             # On rejection AFTER symbol+direction were detected, notify
             # the operator. Tomas 2026-05-12 spec: "Nothing should happen
@@ -601,6 +631,8 @@ async def main() -> None:
                             symbol=result.symbol,
                             direction=result.direction,
                             channel_name=channel_name,
+                            tps=result.tps,
+                            sl=result.sl,
                         )
                     except Exception:
                         log.exception("notify.signal_blocked_no_entry_failed")
@@ -628,12 +660,20 @@ async def main() -> None:
                                 symbol=result.symbol,
                                 direction=result.direction,
                                 channel_name=channel_name,
+                                sl=result.sl,
+                                entry=result.entry,
+                                tps=result.tps,
+                                detail=result.detail,
                             )
                         else:
                             await tg_notifier.signal_blocked_invalid_tps(
                                 symbol=result.symbol,
                                 direction=result.direction,
                                 channel_name=channel_name,
+                                tps=result.tps,
+                                sl=result.sl,
+                                entry=result.entry,
+                                detail=result.detail,
                             )
                     except Exception:
                         log.exception("notify.signal_blocked_invalid_failed")
@@ -667,6 +707,16 @@ async def main() -> None:
                 channel_name=channel_name,
                 text_preview=raw_text[:120] if raw_text else "",
             )
+            # Tomas 2026-05-19: an exception that escapes the entire
+            # signal pipeline is a system-level failure — the message
+            # was received but the bot crashed somewhere between
+            # parse, dedup, and process_signal. Fire the dedicated
+            # SYSTEM FEL BOT error so the operator sees the silent
+            # crash instead of just seeing the message vanish.
+            try:
+                await tg_notifier.error_system()
+            except Exception:
+                log.exception("notify.error_system_failed")
 
     signal_callback_holder["fn"] = _on_signal_message
 

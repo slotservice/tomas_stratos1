@@ -1326,6 +1326,21 @@ class PositionManager:
                 trade_id=trade.id,
                 symbol=symbol,
             )
+            # Tomas 2026-05-19: dedicated "POSITION EJ ÖPPNAD" error.
+            # _abort_trade already sends a generic "Trade avbruten"
+            # notification, but the operator wants the explicit
+            # never-opened header so the failure mode is unambiguous.
+            try:
+                await self._notifier.error_position_not_opened(
+                    signal=signal,
+                    error_detail=(
+                        f"Entry-fill timeout efter "
+                        f"{self._settings.entry.entry_timeout_seconds}s "
+                        f"(order_id={order1_bybit_id})."
+                    )[:200],
+                )
+            except Exception:
+                log.exception("notify.error_position_not_opened_failed")
             await self._abort_trade(trade, "Entry 1 fylldes inte inom timeout.")
             return None
 
@@ -1677,11 +1692,24 @@ class PositionManager:
                 log.info("trade.sl_set",
                          trade_id=trade.id, symbol=symbol, sl=valid_sl)
                 sl_set_ok = True
-            except Exception:
+            except Exception as exc:
                 log.exception(
                     "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
                 protection_failures.append("SL")
+                # Tomas 2026-05-19: surface the SL-set failure to the
+                # operator channel via the dedicated error template.
+                # protection_failed (below) still fires the "Position
+                # oförsvarad" summary — this is the granular per-step
+                # signal Tomas wants ("In all message it must say
+                # something short what is wrong").
+                try:
+                    await self._notifier.error_sl_not_executed(
+                        signal=signal,
+                        error_detail=f"set_trading_stop: {exc}"[:200],
+                    )
+                except Exception:
+                    log.exception("notify.error_sl_not_executed_failed")
 
             # Tomas 2026-05-12 spec: "every value displayed in operator
             # templates must be Bybit-verified, not bot-trusted". Read
@@ -1818,7 +1846,7 @@ class PositionManager:
                         tp_index=i + 1, tp_price=tp_price,
                         qty=this_qty_rounded, order_id=oid,
                     )
-                except Exception:
+                except Exception as exc:
                     log.exception(
                         "trade.partial_tp_error",
                         trade_id=trade.id, symbol=symbol,
@@ -1826,6 +1854,16 @@ class PositionManager:
                     )
                     if "TP" not in protection_failures:
                         protection_failures.append("TP")
+                    # Tomas 2026-05-19: granular per-step error.
+                    try:
+                        await self._notifier.error_tp_not_executed(
+                            signal=signal,
+                            error_detail=(
+                                f"TP{i+1} @ {tp_price}: {exc}"
+                            )[:200],
+                        )
+                    except Exception:
+                        log.exception("notify.error_tp_not_executed_failed")
 
             trade.tp_order_ids = tp_order_ids
             # 2026-05-02 fix: persist tp_order_ids to DB so Phase 5b
@@ -1959,12 +1997,26 @@ class PositionManager:
                         )
                     ),
                 )
-        except Exception:
+        except Exception as exc:
             log.exception(
                 "trade.trailing_arm_failed",
                 trade_id=trade.id, symbol=symbol,
             )
             protection_failures.append("trailing")
+            # Tomas 2026-05-19: granular trailing-arm failure error.
+            # Routed through the API-error template since trailing
+            # arm == set_trading_stop and the failure surface is the
+            # Bybit API.
+            try:
+                await self._notifier.api_error(
+                    symbol=symbol,
+                    direction=direction,
+                    channel_name=getattr(signal, "channel_name", ""),
+                    kind="trailing_arm",
+                    reason=str(exc)[:200],
+                )
+            except Exception:
+                log.exception("notify.trailing_arm_api_error_failed")
 
         # ----------------------------------------------------------
         # 14c. PROTECTION GATE (Phase 1, client 2026-05-01 audit #18).
@@ -2009,6 +2061,21 @@ class PositionManager:
                         trade_id=trade.id, symbol=symbol,
                     )
                     close_action = "stängning MISSLYCKADES — manuell åtgärd"
+                    # Tomas 2026-05-19: when the force-close itself
+                    # fails on Bybit, the position is still open AND
+                    # unprotected. The protection_failed summary
+                    # below covers the high-level story; this
+                    # surfaces the API-level reason on its own line
+                    # via the dedicated EJ STÄNGD template.
+                    try:
+                        await self._notifier.error_position_not_closed(
+                            signal=signal,
+                            error_detail=f"force-close: {exc}"[:200],
+                        )
+                    except Exception:
+                        log.exception(
+                            "notify.error_position_not_closed_failed",
+                        )
             trade.transition(TradeState.PROTECTION_FAILED)
             await self._persist_trade_state(
                 trade,
@@ -2124,11 +2191,25 @@ class PositionManager:
         # backup path.
         try:
             await self._hedge_mgr.pre_arm_on_bybit(trade)
-        except Exception:
+        except Exception as exc:
             log.exception(
                 "trade.hedge_pre_arm_failed",
                 trade_id=trade.id, symbol=symbol,
             )
+            # Tomas 2026-05-19: hedge pre-arm failure is non-fatal
+            # (bot-side check_and_activate is the backup) but still
+            # needs to surface — the operator wants to know hedge
+            # autonomy is degraded for this trade.
+            try:
+                await self._notifier.api_error(
+                    symbol=symbol,
+                    direction=direction,
+                    channel_name=getattr(signal, "channel_name", ""),
+                    kind="hedge_pre_arm",
+                    reason=str(exc)[:200],
+                )
+            except Exception:
+                log.exception("notify.hedge_pre_arm_api_error_failed")
 
         # Phase 2 (client 2026-05-01) — original-trade emergency close
         # is a Bybit conditional, not a bot-poll decision. Place ONE
@@ -3150,12 +3231,28 @@ class PositionManager:
                 active_price=existing_active,
                 sl_trigger_by="LastPrice",
             )
-        except Exception:
+        except Exception as exc:
             log.exception(
                 "trade.sl_move_failed",
                 trade_id=trade.id, symbol=symbol,
                 new_sl=new_sl_price, reason=reason,
             )
+            # Tomas 2026-05-19: SL movement (BE / cascade / profit-
+            # lock) is itself a protection step. When it fails the
+            # operator must know — the trade is now running with
+            # stale SL placement and the bot's reported state will
+            # diverge from Bybit until the next move attempt.
+            try:
+                signal = trade.signal
+                if signal:
+                    await self._notifier.error_sl_not_executed(
+                        signal=signal,
+                        error_detail=(
+                            f"SL-flytt ({reason}) till {new_sl_price}: {exc}"
+                        )[:200],
+                    )
+            except Exception:
+                log.exception("notify.sl_move_error_failed")
             return False
 
         # Bybit ack received — update state.
@@ -5008,11 +5105,19 @@ class PositionManager:
             # Client 2026-04-30: dedupe by (symbol, direction) so 3
             # channels echoing the same signal don't fire 3 identical
             # ❌ TP/SL UPPDATERING MISSLYCKADES messages.
+            # Tomas 2026-05-19: pass the actual Bybit exception
+            # message — the previous "Kontrollera manuellt" fallback
+            # left the operator no clue about what failed.
             if self._should_send_reject_notify(
                 "tp_sl_update_failed", symbol, direction,
             ):
+                bybit_reason = str(exc)[:200] if exc else ""
+                if ret_code:
+                    bybit_reason = f"Bybit retCode={ret_code}: {bybit_reason}"
                 try:
-                    await self._notifier.tp_sl_update_failed(signal)
+                    await self._notifier.tp_sl_update_failed(
+                        signal, reason=bybit_reason,
+                    )
                 except Exception:
                     log.exception("notify.tp_sl_update_failed_notify_error")
             return

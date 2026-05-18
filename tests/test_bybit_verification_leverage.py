@@ -59,7 +59,7 @@ async def test_leverage_verified_annotates_template():
         signal=_trade().signal,
     )
     assert "Hävstång" in text
-    assert "x10.0 (Bybit verifierad)" in text
+    assert "x10.0 ◉ Verifierad" in text
     assert "EJ MATCH" not in text
 
 
@@ -70,7 +70,7 @@ async def test_leverage_mismatch_shows_bybit_value():
         trade=_trade(lev_verified=False, lev_bybit_value=20.0, leverage=10.0),
         signal=_trade().signal,
     )
-    assert "Bybit visar x20.0, EJ MATCH" in text
+    assert "⊘ Bybit: x20.0 (EJ MATCH)" in text
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_leverage_missing_on_bybit_shows_unset():
         trade=_trade(lev_verified=False, lev_bybit_value=None, leverage=10.0),
         signal=_trade().signal,
     )
-    assert "Bybit visar ingen hävstång, EJ MATCH" in text
+    assert "⊘ EJ MATCH" in text
 
 
 @pytest.mark.asyncio
@@ -93,5 +93,5 @@ async def test_leverage_verification_skipped_when_none_no_annotation():
     # Falls back to plain "Hävstång (...): x10.0" with no Bybit marker.
     assert "x10.0" in text
     # No annotation either way.
-    assert "Bybit verifierad" not in text
+    assert "Verifierad" not in text
     assert "EJ MATCH" not in text

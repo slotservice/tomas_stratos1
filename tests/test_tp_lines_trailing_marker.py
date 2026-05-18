@@ -21,7 +21,7 @@ from telegram.notifier import _tp_lines_pct
 
 def test_tp_above_trailing_activation_marked_trailing():
     """TP whose distance from entry is >= activation pct is merged
-    into trailing — render "— Trailing"."""
+    into trailing — render with the "⇡ Trailing" marker."""
     out = _tp_lines_pct(
         [103.0, 105.0, 110.0], entry=100.0, direction="LONG",
         trailing_activation_pct=6.1,
@@ -30,7 +30,7 @@ def test_tp_above_trailing_activation_marked_trailing():
     assert "Trailing" not in out.split("\n")[0]
     assert "TP2: 105.0 (+5.00%)" in out
     assert "Trailing" not in out.split("\n")[1]
-    assert "TP3: 110.0 (+10.00%) — Trailing" in out
+    assert "TP3: 110.0 (+10.00%) ⇡ Trailing" in out
 
 
 def test_tp_just_above_activation_is_trailing():
@@ -42,7 +42,7 @@ def test_tp_just_above_activation_is_trailing():
         [106.2], entry=100.0, direction="LONG",
         trailing_activation_pct=6.1,
     )
-    assert "TP1: 106.2 (+6.20%) — Trailing" in out
+    assert "TP1: 106.2 (+6.20%) ⇡ Trailing" in out
 
 
 def test_tp_just_below_activation_is_not_trailing():
@@ -53,7 +53,7 @@ def test_tp_just_below_activation_is_not_trailing():
         trailing_activation_pct=6.1,
         verified={"106.0": True},
     )
-    assert "TP1: 106.0 (+6.00%) (Bybit verifierad)" in out
+    assert "TP1: 106.0 (+6.00%) ◉ Verifierad" in out
     assert "Trailing" not in out
 
 
@@ -66,7 +66,7 @@ def test_short_direction_with_trailing_marker():
     )
     assert "TP1: 97.0 (+3.00%)" in out
     assert "TP2: 95.0 (+5.00%)" in out
-    assert "TP3: 93.5 (+6.50%) — Trailing" in out
+    assert "TP3: 93.5 (+6.50%) ⇡ Trailing" in out
 
 
 def test_no_activation_arg_falls_back_to_pre_fix_behaviour():
@@ -89,5 +89,5 @@ def test_blocked_under_2pct_still_wins_over_trailing():
         trailing_activation_pct=0.5,  # absurdly low threshold for the test
     )
     # +1% is below 2 — Blocked marker wins over Trailing.
-    assert "— Blocked <2%" in out
+    assert "⛔ <2%" in out
     assert "Trailing" not in out

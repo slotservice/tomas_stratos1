@@ -39,14 +39,30 @@ def _ts() -> str:
 
 
 def _sym(symbol: str) -> str:
-    """Ensure symbol has a # prefix for hashtag tracking."""
-    s = symbol.strip()
-    if not s.startswith("#"):
-        return f"#{s}"
-    return s
+    """Render symbol as one or two hashtags for Telegram history filtering.
+
+    Tomas 2026-05-19: emit BOTH the bare base ticker AND the full
+    pair when a quote suffix is present, e.g. IMXUSDT -> "#IMX
+    #IMXUSDT". The bare hashtag lets the operator scroll back across
+    every signal for that token regardless of quote currency, while
+    the full pair stays unambiguous about which Bybit market the bot
+    actually traded. Strips USDT/USDC suffixes only — leaves
+    1000-prefixed names (SHIB1000USDT -> "#SHIB1000 #SHIB1000USDT")
+    intact since Bybit treats those as distinct instruments.
+    """
+    s = symbol.strip().lstrip("#")
+    if not s:
+        return "#Unknown"
+    full = f"#{s}"
+    upper = s.upper()
+    for quote in ("USDT", "USDC"):
+        if upper.endswith(quote) and len(upper) > len(quote):
+            base = s[: -len(quote)]
+            return f"#{base} {full}"
+    return full
 
 
-def _chan(name: str) -> str:
+def _chan(name) -> str:
     """Format channel name with # prefix for hashtag tracking.
 
     Converts e.g. "AiphaMint Signals" to "#AiphaMintSignals" so Telegram
@@ -58,8 +74,20 @@ def _chan(name: str) -> str:
     the receiving channel hashtag — the forward source clutters
     notifications with bracketed text, emoji, etc. that the
     receiving-channel hashtag doesn't need.
+
+    Tomas 2026-05-19 ("NAME OF CHANEL NOT NR every message"): if a
+    caller accidentally passes a raw chat ID (or a string that is
+    only digits/minus signs — i.e. what a Telegram chat ID looks
+    like once stripped of non-alphanumerics), fall back to "#Unknown"
+    instead of rendering "#1003287883842". Group-map resolution in
+    the listener should always supply a name; this guard is a
+    defence-in-depth so an unmapped or numerically-named path can
+    never reach the operator as a bare ID.
     """
-    if not name:
+    if name is None or name == "":
+        return "#Unknown"
+    # Accept ints (raw chat IDs) too — guard immediately.
+    if not isinstance(name, str):
         return "#Unknown"
     if " (fwd: " in name and name.rstrip().endswith(")"):
         recv, _, _fwd_part = name.partition(" (fwd: ")
@@ -70,7 +98,11 @@ def _chan(name: str) -> str:
     import re as _re
     hashtag = _re.sub(r"[^A-Za-z0-9_]", "", clean)
     if not hashtag:
-        hashtag = "Unknown"
+        return "#Unknown"
+    # Defence: a hashtag that is all-digits looks like a chat ID, not
+    # a channel name. Refuse to render it.
+    if hashtag.isdigit():
+        return "#Unknown"
     return f"#{hashtag}"
 
 
@@ -92,16 +124,20 @@ def _tp_lines_pct(
 ) -> str:
     """Build TP lines with percentages, only real TPs (no zeros).
 
-    Markers applied per TP (priority order, first match wins):
-      - " — Blocked <2%" if pct < 2.0 (mirrors the position_manager
-        partial-TP-placement filter; Tomas 2026-05-12).
-      - " — Trailing" if pct >= trailing_activation_pct (Tomas 2026-05-13:
-        explain why these TPs have no Bybit-verifierad marker — they
-        merged into the trailing stop and have no individual order to
-        verify).
-      - " (Bybit verifierad)" if verified[str(tp)] is True.
-      - " (EJ på Bybit)" if verified[str(tp)] is False.
-      - no extra marker otherwise.
+    Markers applied per TP (priority order, first match wins). Tomas
+    2026-05-19 shortened the marker strings to single-glyph indicators
+    so the per-TP line stays scannable on mobile:
+
+      - " ⛔ <2%"        if pct < 2.0 (was "— Blocked <2%"; mirrors
+        the position_manager partial-TP-placement filter).
+      - " ⇡ Trailing"   if pct >= trailing_activation_pct (was
+        "— Trailing"; trailing-merged TPs have no individual Bybit
+        order to verify, so the verify markers below cannot apply).
+      - " ◉ Verifierad" if verified[str(tp)] is True (was
+        "(Bybit verifierad)").
+      - " ⊘ EJ Bybit"   if verified[str(tp)] is False (was
+        "(EJ på Bybit)").
+      - no marker otherwise.
     """
     verified = verified or {}
     lines: list[str] = []
@@ -112,22 +148,60 @@ def _tp_lines_pct(
             else:
                 pct = (entry - tp) / entry * 100
             if pct < 2.0:
-                marker = " — Blocked <2%"
+                marker = " ⛔ <2%"
             elif (
                 trailing_activation_pct is not None
                 and pct >= trailing_activation_pct
             ):
-                marker = " — Trailing"
+                marker = " ⇡ Trailing"
             else:
                 v = verified.get(str(tp))
                 if v is True:
-                    marker = " (Bybit verifierad)"
+                    marker = " ◉ Verifierad"
                 elif v is False:
-                    marker = " (EJ på Bybit)"
+                    marker = " ⊘ EJ Bybit"
                 else:
                     marker = ""
             lines.append(f"🎯 TP{i}: {tp} ({pct:+.2f}%){marker}")
     return "\n".join(lines)
+
+
+def _format_tp_sl_block(
+    tps: Optional[list],
+    sl: Optional[float],
+    entry: Optional[float] = None,
+    label_missing_tps: str = "",
+    label_missing_sl: str = "",
+) -> str:
+    """Render an Entry / TP-list / SL block for rejection notifications.
+
+    Tomas 2026-05-19: rejection messages need to show what the parser
+    DID find so the operator can judge the rejection on its merits.
+    The block is appended to existing one-line rejections, so it
+    always starts with "\\n".
+
+    - Drops zero / None TPs from the list.
+    - When no TP at all, emits ``label_missing_tps`` if provided.
+    - When no SL, emits ``label_missing_sl`` if provided.
+    - Includes Entry when known so the operator can sanity-check
+      direction-vs-price on TP / SL at a glance.
+    """
+    lines: list[str] = []
+    if entry and entry > 0:
+        lines.append(f"💥 Entry: {entry}")
+    real_tps = [t for t in (tps or []) if t and t > 0]
+    if real_tps:
+        for i, t in enumerate(real_tps, start=1):
+            lines.append(f"🎯 TP{i}: {t}")
+    elif label_missing_tps:
+        lines.append(f"🎯 {label_missing_tps}")
+    if sl and sl > 0:
+        lines.append(f"🚩 SL: {sl}")
+    elif label_missing_sl:
+        lines.append(f"🚩 {label_missing_sl}")
+    if not lines:
+        return ""
+    return "\n" + "\n".join(lines)
 
 
 def _sl_line_pct(sl: float, entry: float, direction: str) -> str:
@@ -340,6 +414,8 @@ class TelegramNotifier:
         symbol: str,
         direction: str,
         channel_name: str,
+        tps: Optional[list] = None,
+        sl: Optional[float] = None,
     ) -> str:
         """Signal rejected because the parser could not find an entry price.
 
@@ -349,13 +425,20 @@ class TelegramNotifier:
         they know the message reached the bot and was deliberately
         skipped — not silently lost. Wording follows the exact template
         the client provided (lowercase "Blokerad", comma + reason).
+
+        Tomas 2026-05-19 ("in some case, tp and sl is missing"): show
+        whatever TP/SL the parser DID find so the operator can see the
+        partial data and judge whether the rejection is correct
+        without having to scroll up to the source channel.
         """
+        extras = _format_tp_sl_block(tps, sl)
         text = (
             f"⚠️ Blokerad, Entre saknas ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(channel_name)}\n"
             f"📊 Symbol: {_sym(symbol)}\n"
             f"📈 Riktning: {direction}"
+            f"{extras}"
         )
         return await self._send_notify(text)
 
@@ -364,6 +447,10 @@ class TelegramNotifier:
         symbol: str,
         direction: str,
         channel_name: str,
+        tps: Optional[list] = None,
+        sl: Optional[float] = None,
+        entry: Optional[float] = None,
+        detail: str = "",
     ) -> str:
         """Signal rejected because the take-profit targets are missing
         or inconsistent with direction (LONG with TP below entry, etc.).
@@ -371,13 +458,22 @@ class TelegramNotifier:
         Covers the ``no_tps`` case (parser found symbol+direction+entry
         but no TP prices) and validate_signal failures around TP
         direction. SL-side failures route to signal_blocked_invalid_sl.
-        Per client request 2026-04-28."""
+        Per client request 2026-04-28.
+
+        Tomas 2026-05-19: show the actual TP values the parser pulled
+        (or "saknas" when none were found) so the operator can see
+        what failed validation without checking the source channel.
+        """
+        extras = _format_tp_sl_block(tps, sl, entry=entry, label_missing_tps="TP: saknas")
+        detail_line = f"\n📍 Detalj: {detail}" if detail else ""
         text = (
             f"⚠️ Blokerad, TP är fel angiva ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(channel_name)}\n"
             f"📊 Symbol: {_sym(symbol)}\n"
             f"📈 Riktning: {direction}"
+            f"{extras}"
+            f"{detail_line}"
         )
         return await self._send_notify(text)
 
@@ -386,6 +482,10 @@ class TelegramNotifier:
         symbol: str,
         direction: str,
         channel_name: str,
+        sl: Optional[float] = None,
+        entry: Optional[float] = None,
+        tps: Optional[list] = None,
+        detail: str = "",
     ) -> str:
         """Signal rejected because the stop-loss is on the wrong side
         of entry (SHORT with SL below entry, LONG with SL above) or
@@ -394,13 +494,22 @@ class TelegramNotifier:
         previous wording said "TP är fel angiva" for SL-side failures,
         which lied about which field broke. Title revised 2026-05-15
         (msg 54710): "SL på felsida LONG/SHORT" — Tomas's preferred
-        wording with the direction inline."""
+        wording with the direction inline.
+
+        Tomas 2026-05-19: show the SL value the parser found + the
+        entry so the operator can see WHY it was on the wrong side
+        without re-reading the source post.
+        """
+        extras = _format_tp_sl_block(tps, sl, entry=entry, label_missing_sl="SL: saknas")
+        detail_line = f"\n📍 Detalj: {detail}" if detail else ""
         text = (
             f"⚠️ Blokerad, SL på felsida {direction} ⚠️\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(channel_name)}\n"
             f"📊 Symbol: {_sym(symbol)}\n"
             f"📈 Riktning: {direction}"
+            f"{extras}"
+            f"{detail_line}"
         )
         return await self._send_notify(text)
 
@@ -431,28 +540,75 @@ class TelegramNotifier:
         return await self._send_notify(text)
 
     async def tp_sl_update_failed(self, signal, reason: str = "") -> str:
-        """TP/SL could not be updated on an existing trade (>5% signal)."""
+        """TP/SL could not be updated on an existing trade (>5% signal).
+
+        Tomas 2026-05-19 (OPENUSDT screenshot showing "Fel: Kontrollera
+        manuellt" with no detail): always render the attempted TP/SL
+        values + the Bybit error so the operator can see exactly what
+        was being pushed and why Bybit rejected it.
+        """
+        extras = _format_tp_sl_block(
+            getattr(signal, "tps", None),
+            getattr(signal, "sl", None),
+            entry=getattr(signal, "entry", None),
+        )
         text = (
             f"❌ TP/SL uppdatering misslyckades ❌\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
-            f"📈 Riktning: {signal.direction}\n"
+            f"📈 Riktning: {signal.direction}"
+            f"{extras}\n"
             f"📍 Fel: {reason or 'Kontrollera manuellt'}"
         )
         return await self._send_notify(text)
 
     async def order_place_failed(self, signal, order_label: str = "entry1",
                                  reason: str = "") -> str:
-        """Entry order could not be placed on Bybit."""
+        """Entry order could not be placed on Bybit.
+
+        Tomas 2026-05-19: header capitalized to "ORDER MISSLYCKADES"
+        to match the spec batch — the operator scans for ALL-CAPS
+        error headers to triage issues quickly.
+        """
         text = (
-            f"❌ Order misslyckades ❌\n"
+            f"❌ ORDER MISSLYCKADES ❌\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
             f"📍 Fel: {order_label} kunde inte placeras. "
             f"{reason or 'Kontrollera manuellt.'}"
+        )
+        return await self._send_notify(text)
+
+    async def error_parse_failure(
+        self,
+        symbol: str,
+        direction: str,
+        channel_name: str,
+        error_detail: str,
+    ) -> str:
+        """Signal was symbol-shaped but the parser raised an exception
+        or returned unusable output — the bot could not even attempt
+        to place an order on Bybit.
+
+        Tomas 2026-05-19 ("Parsing problems, error to put singal in
+        bybit"). Distinct from the soft "Blokerad, Entre saknas"
+        warning: a hard parser failure is an ERROR (the parser broke
+        on a signal it should have handled), while "Entre saknas" is
+        a WARNING (the parser worked correctly but the signal was
+        incomplete). Operator action differs: a hard failure means
+        someone (probably me) needs to fix the parser; a soft
+        rejection means the channel posted an incomplete message.
+        """
+        text = (
+            f"❌ ORDER MISSLYCKADES — Parsing problem ❌\n"
+            f"🕒 Tid: {_ts()}\n"
+            f"📢 Från kanal: {_chan(channel_name)}\n"
+            f"📊 Symbol: {_sym(symbol) if symbol else '#Unknown'}\n"
+            f"📈 Riktning: {direction or '?'}\n"
+            f"📍 Fel: {error_detail or 'Parser misslyckades — granska källtext.'}"
         )
         return await self._send_notify(text)
 
@@ -611,7 +767,7 @@ class TelegramNotifier:
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
-            f"📍 Status: Bybit-bekräftad, väntar fill (verifierad data i Position öppnad)\n"
+            f"📍 Status: ◔ Väntar fill\n"
             f"\n"
             f"{entry_lines}\n"
             f"\n"
@@ -796,34 +952,35 @@ class TelegramNotifier:
             trailing_activation_pct=trailing_activation_pct,
         )
         sl_line = _sl_line_pct(trade.sl_price or signal.sl, entry, direction)
-        # Tomas 2026-05-12: SL is now Bybit-verified post-set. Surface
-        # the verification result so the operator can trust the value
-        # at a glance.
+        # Tomas 2026-05-12: SL is Bybit-verified post-set. Surface the
+        # verification result so the operator can trust the value at a
+        # glance. Tomas 2026-05-19: shortened to single-glyph markers
+        # ("◉ Verifierad" / "⊘ Bybit: X (EJ MATCH)" / "⊘ EJ SATT") to
+        # match the per-TP line style.
         sl_verified = getattr(trade, "sl_bybit_verified", None)
         sl_bybit_value = getattr(trade, "sl_bybit_value", None)
         if sl_verified is True:
-            sl_line = sl_line + " (Bybit verifierad)"
+            sl_line = sl_line + " ◉ Verifierad"
         elif sl_verified is False:
             sl_line = sl_line + (
-                f" (Bybit visar {sl_bybit_value}, EJ MATCH)"
+                f" ⊘ Bybit: {sl_bybit_value} (EJ MATCH)"
                 if sl_bybit_value is not None
-                else " (Bybit visar inget SL, EJ SATT)"
+                else " ⊘ EJ SATT"
             )
         lev_type = signal.signal_type
         bybit_ids = ', '.join(trade.bybit_order_ids) if trade.bybit_order_ids else 'N/A'
 
         # Tomas 2026-05-12 spec (9c): leverage shown must be Bybit-
-        # verified, not bot-computed. Annotation mirrors the SL
-        # treatment in 9a.
+        # verified, not bot-computed. Tomas 2026-05-19: short markers.
         lev_verified = getattr(trade, "leverage_bybit_verified", None)
         lev_bybit_value = getattr(trade, "leverage_bybit_value", None)
         if lev_verified is True:
-            lev_annot = " (Bybit verifierad)"
+            lev_annot = " ◉ Verifierad"
         elif lev_verified is False:
             lev_annot = (
-                f" (Bybit visar x{lev_bybit_value}, EJ MATCH)"
+                f" ⊘ Bybit: x{lev_bybit_value} (EJ MATCH)"
                 if lev_bybit_value is not None
-                else " (Bybit visar ingen hävstång, EJ MATCH)"
+                else " ⊘ EJ MATCH"
             )
         else:
             lev_annot = ""
@@ -838,6 +995,30 @@ class TelegramNotifier:
         else:
             entry_lines = f"💥 Entry1: {e1}\n💥 Entry2: {e2}"
 
+        # Tomas 2026-05-19 ("few message say trlingstop o tp some
+        # dont say tralingstop"): always emit an explicit Trailing-
+        # aktivering line so the trailing-stop terms are visible on
+        # every Position öppnad, not just when at least one TP
+        # merged into the trailing slice. Without this line a 3-TP
+        # signal whose TPs all sit below 6.1% silently produced an
+        # output that looked like there was no trailing — even
+        # though Bybit was already armed.
+        trailing_line = ""
+        ta_pct = getattr(trade, "trailing_activation_pct", None)
+        td_pct = getattr(trade, "trailing_distance_pct", None)
+        ta_price = getattr(trade, "trailing_activation_price", None)
+        if ta_pct and td_pct:
+            if ta_price:
+                trailing_line = (
+                    f"🔄 Trailing: aktiv vid {ta_price} "
+                    f"(+{ta_pct:.2f}%), avstånd {td_pct:.2f}%\n"
+                )
+            else:
+                trailing_line = (
+                    f"🔄 Trailing: aktivering +{ta_pct:.2f}%, "
+                    f"avstånd {td_pct:.2f}%\n"
+                )
+
         text = (
             f"✅ Position öppnad ({lev_type})\n"
             f"🕒 Tid: {_ts()}\n"
@@ -845,14 +1026,16 @@ class TelegramNotifier:
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
             f"📍 Typ: {lev_type}\n"
+            f"📍 Status: ● Fylld\n"
             f"\n"
             f"{entry_lines}\n"
             f"\n"
             f"{tp_block}\n"
             f"{sl_line}\n"
+            f"{trailing_line}"
             f"\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{trade.leverage}{lev_annot}\n"
-            f"💰 IM: {trade.margin:.2f} USDT (Bybit confirmed)\n"
+            f"💰 IM: {trade.margin:.2f} USDT ◉ Bybit confirmed\n"
             f"🔑 Order-ID BOT: {trade.id}\n"
             f"🔑 Order-ID Bybit: {bybit_ids}"
         )

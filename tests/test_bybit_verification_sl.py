@@ -67,8 +67,9 @@ async def test_sl_verified_annotates_template():
         ),
         signal=_trade_for_position_opened().signal,
     )
-    # SL line should carry "Bybit verifierad" marker.
-    assert "Bybit verifierad" in text
+    # SL line should carry the "◉ Verifierad" marker (short form,
+    # Tomas 2026-05-19).
+    assert "◉ Verifierad" in text
     assert "EJ MATCH" not in text
 
 
@@ -109,7 +110,7 @@ async def test_sl_verification_skipped_when_none_does_not_annotate():
         ),
         signal=_trade_for_position_opened().signal,
     )
-    assert "Bybit verifierad" not in text
+    assert "Verifierad" not in text
     assert "EJ MATCH" not in text
     assert "EJ SATT" not in text
 
