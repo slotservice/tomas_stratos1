@@ -276,15 +276,30 @@ def render_snapshot_text(s: SnapshotData) -> str:
         " · ".join(health_flags) if health_flags else "✅ allt rent"
     )
 
+    # Tomas 2026-05-18 msg 55688 P3 + msg 55704: the "Senaste 10
+    # affärer" report was incorrect because:
+    #   1. win_rate was win_count / bot_window_n (the WINDOW SIZE,
+    #      always 10) — so 1 win out of 3 counted trades rendered
+    #      as "10%" instead of the correct 33%.
+    #   2. The header always said "Senaste 10 affärer" even when
+    #      fewer than 10 trades actually had PnL data (e.g. right
+    #      after a clean restart). The "1/2/0" breakdown then
+    #      didn't add up to 10 and operators read it as a counting
+    #      bug. (See live reports msg 55649, 55650, 55651, 55064,
+    #      55563, 55572, 55588, 55599, 55631 — all show counts
+    #      below 10.)
+    # Fix: divide by the actual count of trades that contributed
+    # PnL data, and label the header with that same count.
+    total_counted = s.win_count + s.loss_count + s.zero_count
     win_rate_pct = (
-        s.win_count / s.bot_window_n * 100.0
-        if s.bot_window_n > 0 else 0.0
+        s.win_count / total_counted * 100.0
+        if total_counted > 0 else 0.0
     )
 
     return (
         f"📊 <b>BOT-AUDIT (var {s.bot_window_n} stängda affärer)</b>\n"
         f"\n"
-        f"<b>Senaste {s.bot_window_n} affärer:</b>\n"
+        f"<b>Senaste {total_counted} affärer:</b>\n"
         f"   Vinst/Förlust/0: {s.win_count}/{s.loss_count}/{s.zero_count} "
         f"(win-rate {win_rate_pct:.0f}%)\n"
         f"   Total PnL: {s.total_pnl:+.2f} USDT\n"
