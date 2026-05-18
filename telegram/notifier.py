@@ -1627,32 +1627,69 @@ class TelegramNotifier:
             else f"💵 Skyddad kvantitet: hela positionen"
         )
 
-        # Locked-profit math (Tomas 2026-05-03):
-        # Trailing armed at activation_pct above entry, trailing distance
-        # behind the highest mark since activation. Worst-case lock
-        # (price reverses immediately after activation) =
-        #   activation_pct - distance_pct
-        # Example: 6.1% activation - 2.5% distance = 3.6% locked.
-        # Operator wants to see this number explicitly so they know the
-        # minimum profit floor the trailing stop guarantees.
-        min_locked_pct = max(0.0, activation_pct - abs(distance_pct))
-        locked_line = (
-            f"🔒 Min låst vinst: {min_locked_pct:+.2f}% "
-            f"(aktivering +{activation_pct:.2f}% − trailing {abs(distance_pct):.2f}%)"
+        # Locked-profit math — unified 2026-05-18 with
+        # trailing_stop_updated. The previous version showed the
+        # THEORETICAL min `activation_pct - distance_pct` here while
+        # the very-next "Trailing Stop uppdaterad" template used the
+        # ACTUAL trailing-trigger-vs-entry math. For trades whose SL
+        # had already been moved up by the TP cascade / profit lock
+        # before trailing activated, the two messages disagreed
+        # (e.g. BCH 07:21 — Tomas msg 55675/55676: activation showed
+        # +90% locked, uppdaterad seconds later showed +63%). Both
+        # templates now compute from the SAME actual trailing-trigger
+        # price so locked profit can only ever go UP across messages.
+        #
+        # Order of preference for the source of the trigger price:
+        #   1. Bybit-confirmed trailing_stop_price from the activation
+        #      WS event (passed in by the caller).
+        #   2. trade.sl_price — the bot's last-known SL, which the
+        #      cascade / profit-lock paths keep current.
+        #   3. Theoretical `activation_pct - distance_pct` — only used
+        #      when neither of the above is available.
+        effective_trigger = (
+            trailing_stop_price
+            if trailing_stop_price and trailing_stop_price > 0
+            else (trade.sl_price if getattr(trade, "sl_price", None) else None)
         )
+        if entry and entry > 0 and effective_trigger:
+            if direction == "LONG":
+                locked_pct_price = (effective_trigger - entry) / entry * 100.0
+            else:
+                locked_pct_price = (entry - effective_trigger) / entry * 100.0
+        else:
+            # No Bybit-confirmed trigger and no tracked SL — use the
+            # theoretical floor as a last resort.
+            locked_pct_price = max(0.0, activation_pct - abs(distance_pct))
 
-        # Tomas 2026-05-07: the bottom two lines used to be the CURRENT
-        # unrealised PnL (`📊 Resultat: ...% / ...USDT`), but the
-        # last-price activation path passes unrealised_pnl=0.0 as a
-        # placeholder, so the operator saw "+0.00 USDT" right at
-        # activation. Replace with the GUARANTEED locked profit
-        # (leveraged % + USDT) computed from min_locked_pct + qty +
-        # entry — values we always have at activation time, regardless
-        # of which path fires the notify.
-        locked_pct_lev = min_locked_pct * leverage
+        # Trailing is supposed to LOCK profit. If the computed locked
+        # value is <= 0, the activation supposedly fired but the
+        # effective trigger is at or beyond entry on the LOSING side
+        # — the notification would lie about a "locked loss". Skip
+        # silently (with a warning in the log) so the operator never
+        # sees Låst vinst: -X%. Tomas msg 55595 (TAC -80%) + msg
+        # 55634 (XTZ -53%).
+        if locked_pct_price <= 0:
+            log.warning(
+                "trailing_stop_activated.negative_lock_suppressed",
+                trade_id=getattr(trade, "id", None),
+                symbol=getattr(signal, "symbol", None) if signal else None,
+                direction=direction,
+                entry=entry,
+                trailing_stop_price=trailing_stop_price,
+                effective_trigger=effective_trigger,
+                activation_pct=activation_pct,
+                distance_pct=distance_pct,
+                locked_pct_price=locked_pct_price,
+            )
+            return ""
+
+        # The "Min låst vinst (aktivering − trailing)" line is dropped
+        # in favour of the single concrete number computed above.
+        locked_line = ""
+        locked_pct_lev = locked_pct_price * leverage
         locked_qty = quantity if quantity and quantity > 0 else (trade.quantity or 0.0)
         locked_usdt = (
-            locked_qty * entry * (min_locked_pct / 100.0)
+            locked_qty * entry * (locked_pct_price / 100.0)
             if entry and entry > 0 and locked_qty > 0
             else 0.0
         )
@@ -1670,7 +1707,6 @@ class TelegramNotifier:
             f"\n"
             f"{ts_line}\n"
             f"📍 Avstånd: {distance_pct:+.2f}% bakom pris ({trailing_distance})\n"
-            f"{locked_line}\n"
             f"\n"
             f"{qty_line}\n"
             f"\n"
@@ -1730,20 +1766,38 @@ class TelegramNotifier:
         # event's stopLoss field per the 2026-04-28 Bybit-verified
         # rule) — never recompute locally.
         if entry and entry > 0 and trailing_stop_price:
-            locked_pct_price = abs(trailing_stop_price - entry) / entry * 100.0
-            # Sign: profitable lock for both directions
             if direction == "LONG":
                 locked_pct_price = (trailing_stop_price - entry) / entry * 100.0
             else:
                 locked_pct_price = (entry - trailing_stop_price) / entry * 100.0
         else:
             locked_pct_price = 0.0
+
+        # Trailing locks profit. If the computed lock is <= 0, the
+        # reported trailing_stop_price is at or beyond entry on the
+        # losing side — the notification would lie about a "locked
+        # loss". Skip silently with a warning. Tomas 2026-05-17 msg
+        # 55595 (TAC -80%), 55634 (XTZ -53%): the bot was reporting
+        # negative locks whenever Bybit's stopLoss field had not
+        # actually moved past entry (cascade/static SL still in
+        # place). Unified 2026-05-18 with trailing_stop_activated.
+        if locked_pct_price <= 0:
+            log.warning(
+                "trailing_stop_updated.negative_lock_suppressed",
+                trade_id=getattr(trade, "id", None),
+                symbol=getattr(signal, "symbol", None) if signal else None,
+                direction=direction,
+                entry=entry,
+                trailing_stop_price=trailing_stop_price,
+                locked_pct_price=locked_pct_price,
+            )
+            return ""
+
         locked_pct_lev = locked_pct_price * leverage
         locked_qty = quantity if quantity and quantity > 0 else (trade.quantity or 0.0)
         locked_usdt = (
-            locked_qty * abs(trailing_stop_price - entry)
-            * (1 if locked_pct_price >= 0 else -1)
-            if entry and entry > 0 and trailing_stop_price and locked_qty > 0
+            locked_qty * entry * (locked_pct_price / 100.0)
+            if entry and entry > 0 and locked_qty > 0
             else 0.0
         )
 
