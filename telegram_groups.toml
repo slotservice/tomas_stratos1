@@ -407,3 +407,14 @@ name = "Cornix Trading"
 [[groups]]
 id = -1002444199983
 name = "CRYPTO FUTURES®"
+
+# Tomas 2026-05-20: original "DeFi Million | Free Signal" (13,911
+# subscribers, forwards from "Premium signals"). Was previously the
+# resolved -1001731265095, but on 2026-05-07 (commit a429c81) the
+# config entry under that ID was renamed and re-pointed to a different
+# chat (-1003287883842, "DeFi Milion"). The original 13.9k-sub channel
+# is a distinct entity and stayed unmonitored — Tomas flagged 2 missed
+# COMP / PLAY signals from it.
+[[groups]]
+id = -1001731265095
+name = "DeFi Million Free Signal"
