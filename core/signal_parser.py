@@ -1625,8 +1625,18 @@ def parse_signal_detailed(
             clean,
             re.IGNORECASE,
         ))
+        # Tomas 2026-05-20 (evening): the BSB signal from Crypto
+        # Futures 100x / Whales of Investment posts "$BSB/USDT 20X
+        # LONG / Take Profit ✓ / 1️⃣ 1.2250 / 2️⃣ 1.2300 / ..." —
+        # 2+ keycap-numbered TPs, no SL, no entry keyword. Was
+        # classified as chatter and silently dropped. Tomas wants
+        # at least the Telegram rejection so he knows the bot
+        # saw it. Treat 2+ structured TPs as signal-shape — chatter
+        # rarely lists multiple distinct TP price targets.
         has_price_structure = bool(sl) or (
             bool(tps) and _entry_keyword_present
+        ) or (
+            len(tps) >= 2
         )
         log.info(
             "signal_parse_no_entry" if has_price_structure
