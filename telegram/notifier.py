@@ -224,8 +224,14 @@ def _lev_class(signal_type: str) -> str:
         dynamic -> normal SL
     The leverage display label must match signal_type so the two lines
     of the notification tell a consistent story.
+
+    Tomas 2026-05-20: lowercase always. Some upstream paths
+    (re-entry, trade-update copy) were producing "Dynamic" /
+    "Swing" with leading capital so the "Typ:" line on those
+    messages came out capitalized while the header stayed
+    lowercase — visual inconsistency. Canonicalise here.
     """
-    return signal_type or "dynamic"
+    return (signal_type or "dynamic").lower()
 
 
 def _pnl_sign(value: float) -> str:
@@ -373,7 +379,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"{tp_block}\n"
@@ -708,7 +714,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"{tp_block}\n"
@@ -761,12 +767,12 @@ class TelegramNotifier:
             )
 
         text = (
-            f"✅ Order placerad ({lev_type})\n"
+            f"✅ Order placerad ({_lev_class(lev_type)})\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"📍 Status: ◔ Väntar fill\n"
             f"\n"
             f"{entry_lines}\n"
@@ -1024,22 +1030,22 @@ class TelegramNotifier:
         if ta_pct and td_pct:
             if ta_price:
                 trailing_line = (
-                    f"🔄 Trailing: aktiv vid {ta_price} "
+                    f"↗️ Trailing: aktiv vid {ta_price} "
                     f"(+{ta_pct:.2f}%), avstånd {td_pct:.2f}%\n"
                 )
             else:
                 trailing_line = (
-                    f"🔄 Trailing: aktivering +{ta_pct:.2f}%, "
+                    f"↗️ Trailing: aktivering +{ta_pct:.2f}%, "
                     f"avstånd {td_pct:.2f}%\n"
                 )
 
         text = (
-            f"✅ Position öppnad ({lev_type})\n"
+            f"✅ Position öppnad ({_lev_class(lev_type)})\n"
             f"🕒 Tid: {_ts()}\n"
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"📍 Status: ● Fylld\n"
             f"\n"
             f"{entry_lines}\n"
@@ -1094,7 +1100,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 {entry_label}: {fill_price}\n"
             f"💵 Kvantitet: {qty}\n"
@@ -1127,7 +1133,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry2: {trade.entry2_fill_price}\n"
             f"💵 Kvantitet: {qty}\n"
@@ -1160,7 +1166,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"📌 Entry 1\n"
             f"💥 Entry: {entry1}\n"
@@ -1378,7 +1384,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {old_side}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"📍 SL (hedge): {hedge_sl}\n"
             f"📍 TP (hedge): {hedge_tp}\n"
@@ -1414,7 +1420,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)})\n"
             f"📈 Stängd position: {old_side}\n"
@@ -1442,7 +1448,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"📍 Skäl: {reason}"
         )
@@ -1462,7 +1468,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"📍 Skäl: {reason}"
         )
@@ -1524,7 +1530,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
         )
@@ -1560,7 +1566,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Exit: {exit}\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
@@ -1588,7 +1594,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"📌 Väntar på ny extern signal"
         )
@@ -1644,7 +1650,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💵 Stängd kvantitet: {qty} (100%)\n"
             f"📚 Underlag ink. alla delsteg (BOT/Bybit): {trade.id} / {bybit_ids}\n"
@@ -1741,7 +1747,7 @@ class TelegramNotifier:
             f"📢 Från kanal: {_chan(signal.channel_name)}\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {signal.direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"⚙️ Hävstång ({_lev_class(lev_type)}): x{leverage}\n"
@@ -1915,7 +1921,7 @@ class TelegramNotifier:
             f"\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"\n"
@@ -2022,7 +2028,7 @@ class TelegramNotifier:
             f"\n"
             f"📊 Symbol: {_sym(signal.symbol)}\n"
             f"📈 Riktning: {direction}\n"
-            f"📍 Typ: {lev_type}\n"
+            f"📍 Typ: {_lev_class(lev_type)}\n"
             f"\n"
             f"💥 Entry: {entry}\n"
             f"\n"

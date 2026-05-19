@@ -777,6 +777,7 @@ class PositionManager:
                                 f"📢 Från kanal: {chan}\n"
                                 f"📊 Symbol: #{symbol}\n"
                                 f"📈 Riktning: {direction}\n"
+                                f"\n"
                                 f"💥 Signal entry: {entry_price}\n"
                                 f"📍 Marknadspris: {current}\n"
                                 f"📍 Diff: {price_diff_pct:.2f}% (max {max_slippage}%)\n"
@@ -2575,22 +2576,30 @@ class PositionManager:
             lev_type = parent.signal.signal_type or "dynamic"
             leverage_val = parent.leverage or 0.0
             margin_val = parent.margin or 0.0
+            # Tomas 2026-05-20: append ◉ Verifierad markers on
+            # every Bybit-confirmed field so the hedge message uses
+            # the same visual vocabulary as Position öppnad. The
+            # hedge SL + trailing are set in one set_trading_stop
+            # call right before this notification fires, so by the
+            # time we render the message Bybit has already
+            # acknowledged both. Also lowercase the type label.
+            type_label = lev_type.lower() if lev_type else "dynamic"
             await self._safe_notify(
                 f"🛡️ Hedge aktiverad (Bybit-conditional)\n"
                 f"🕒 Tid: {_ts()}\n"
                 f"📢 Från kanal: {chan}\n"
                 f"📊 Symbol: {_sym(symbol)}\n"
                 f"📈 Riktning: {hedge_dir} (motrikt mot {parent_dir})\n"
-                f"📍 Typ: {lev_type}\n"
+                f"📍 Typ: {type_label}\n"
                 f"\n"
-                f"💥 Entry (hedge): {avg_price}\n"
+                f"💥 Entry (hedge): {avg_price} ◉ Verifierad\n"
                 f"🚩 Hard SL: {hedge_sl} "
-                f"(-{hedge_settings.hard_sl_pct}% från hedge-entry, BACKUP)\n"
-                f"🔄 Trailing: {hedge_settings.trailing_pct}% "
-                f"(Last price, primär exit, ingen fast TP)\n"
+                f"(-{hedge_settings.hard_sl_pct}% från hedge-entry, BACKUP) ◉ Verifierad\n"
+                f"↗️ Trailing: {hedge_settings.trailing_pct}% "
+                f"(Last price, primär exit, ingen fast TP) ◉ Verifierad\n"
                 f"\n"
-                f"⚙️ Hävstång ({lev_type}): x{leverage_val}\n"
-                f"💰 IM: {margin_val:.2f} USDT (Bybit confirmed)\n"
+                f"⚙️ Hävstång ({type_label}): x{leverage_val} ◉ Verifierad\n"
+                f"💰 IM: {margin_val:.2f} USDT ◉ Bybit confirmed\n"
                 f"🔑 Order-ID BOT: {parent.id}\n"
                 f"🔑 Order-ID Bybit: {parent.hedge_trade_id or 'N/A'}"
             )
@@ -2970,24 +2979,34 @@ class PositionManager:
                 f"med x{hedge_leverage:g} hävstång"
                 if hedge_leverage else "med hävstång"
             )
-            await self._safe_notify(
-                f"🛡️ Hedge stängd\n"
-                f"🕒 Tid: {_ts()}\n"
-                f"📢 Från kanal: {chan}\n"
-                f"📊 Symbol: {_sym(symbol)}\n"
-                f"📈 Riktning (hedge): {hedge_dir} (motrikt mot {parent_dir})\n"
-                f"\n"
-                f"💥 Hedge entry: {hedge_entry}\n"
-                f"💥 Exit: {exit_price}\n"
-                f"💵 Stängd kvantitet: {hedge_qty}\n"
-                f"📊 Resultat (pris): {pnl_str}\n"
-                f"📊 Resultat ({lev_label}): {pnl_lev_str}\n"
-                f"💰 Resultat: {pnl_usdt_str}\n"
-                f"\n"
-                f"📍 Skäl: {reason_label}\n"
-                f"🔑 Order-ID BOT (parent): {parent.id}\n"
-                f"🔑 Order-ID BOT (hedge): {hedge_child_id or 'N/A'}"
-            )
+            # Tomas 2026-05-20: when the hedge close was initiated
+            # by the hedge-timeout path (which sends its own combined
+            # "hela cykeln stängd" message), skip this per-leg
+            # notification. DB updates + order sweep above still run.
+            if getattr(parent, "suppress_hedge_close_notify", False):
+                log.info(
+                    "hedge.close.notify_suppressed_for_cycle_close",
+                    parent_trade_id=parent.id, symbol=symbol,
+                )
+            else:
+                await self._safe_notify(
+                    f"🛡️ Hedge stängd\n"
+                    f"🕒 Tid: {_ts()}\n"
+                    f"📢 Från kanal: {chan}\n"
+                    f"📊 Symbol: {_sym(symbol)}\n"
+                    f"📈 Riktning (hedge): {hedge_dir} (motrikt mot {parent_dir})\n"
+                    f"\n"
+                    f"💥 Hedge entry: {hedge_entry}\n"
+                    f"💥 Exit: {exit_price}\n"
+                    f"💵 Stängd kvantitet: {hedge_qty}\n"
+                    f"📊 Resultat (pris): {pnl_str}\n"
+                    f"📊 Resultat ({lev_label}): {pnl_lev_str}\n"
+                    f"💰 Resultat: {pnl_usdt_str}\n"
+                    f"\n"
+                    f"📍 Skäl: {reason_label}\n"
+                    f"🔑 Order-ID BOT (parent): {parent.id}\n"
+                    f"🔑 Order-ID BOT (hedge): {hedge_child_id or 'N/A'}"
+                )
         except Exception:
             log.exception(
                 "hedge.close.notify_failed",
@@ -3209,6 +3228,34 @@ class PositionManager:
                 trade_id=trade.id, symbol=symbol,
                 new_sl=new_sl_price, reason=reason,
             )
+            # Tomas 2026-05-20: same zero-position recovery as the
+            # tp_sl_update path. When the cascade / profit-lock SL
+            # move hits "can not set tp/sl/ts for zero position",
+            # the position was already closed by Bybit (SL, trailing,
+            # manual) but our DB row hasn't caught up yet. Silently
+            # reconcile instead of firing an error alert — the
+            # next signal for this symbol will start a fresh trade.
+            ret_code = getattr(exc, "ret_code", None)
+            zero_position_error = (
+                ret_code == 10001
+                and "zero position" in str(exc).lower()
+            )
+            if zero_position_error:
+                log.info(
+                    "trade.sl_move_zero_position_reconciled",
+                    trade_id=trade.id, symbol=symbol,
+                    bybit_msg=str(exc)[:120],
+                )
+                try:
+                    await self._reconcile_zero_position_trade(
+                        trade_id=trade.id, symbol=symbol,
+                    )
+                except Exception:
+                    log.exception(
+                        "trade.sl_move_zero_position_reconcile_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
+                return False
             # Tomas 2026-05-19: SL movement (BE / cascade / profit-
             # lock) is itself a protection step. When it fails the
             # operator must know — the trade is now running with
@@ -4043,6 +4090,15 @@ class PositionManager:
         # Latch so we don't keep firing — Bybit's fill event will
         # mark the hedge closed and reset hedge_trade_id elsewhere.
         trade.hedge_filled_at = None
+        # Tomas 2026-05-20: when the hedge-timeout path closes both
+        # legs, suppress the per-leg notifications (`Hedge stängd`
+        # + `Position stängd av extern stängning`) that fire from
+        # the on_order_update path when Bybit acks the closes. The
+        # combined `Hedge timeout — hela cykeln stängd` message
+        # below is the single message for this cycle. Flags are
+        # checked in _close_hedge_child and close_trade.
+        trade.suppress_hedge_close_notify = True
+        trade.suppress_main_close_notify = True
         try:
             await self._bybit.place_market_order(
                 symbol=symbol,
@@ -4303,20 +4359,30 @@ class PositionManager:
         #   POSITION CLOSED - TP3
         #   POSITION CLOSED - liquidation
         #   POSITION CLOSED - external close
-        try:
-            qty_for_msg = trade.quantity or 0
-            await self._notifier.position_closed(
-                trade=trade,
-                exit_price=exit_price,
-                qty=qty_for_msg,
-                result_pct_total=pnl_pct if pnl_pct is not None else 0.0,
-                result_usdt_total=pnl_usdt if pnl_usdt is not None else 0.0,
-                close_source=_format_close_source(reason, trade=trade),
+        # Tomas 2026-05-20: when the close was initiated by the
+        # hedge-timeout path (which already sent its combined
+        # "hela cykeln stängd" message covering both legs), skip
+        # this per-leg notification. DB updates above still run.
+        if getattr(trade, "suppress_main_close_notify", False):
+            log.info(
+                "close_trade.notify_suppressed_for_cycle_close",
+                trade_id=trade_id, reason=reason,
             )
-        except Exception:
-            log.exception(
-                "close_trade.template_failed", trade_id=trade_id, reason=reason,
-            )
+        else:
+            try:
+                qty_for_msg = trade.quantity or 0
+                await self._notifier.position_closed(
+                    trade=trade,
+                    exit_price=exit_price,
+                    qty=qty_for_msg,
+                    result_pct_total=pnl_pct if pnl_pct is not None else 0.0,
+                    result_usdt_total=pnl_usdt if pnl_usdt is not None else 0.0,
+                    close_source=_format_close_source(reason, trade=trade),
+                )
+            except Exception:
+                log.exception(
+                    "close_trade.template_failed", trade_id=trade_id, reason=reason,
+                )
 
         log.info(
             "trade.closed",
