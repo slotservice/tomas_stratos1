@@ -901,6 +901,7 @@ class TelegramNotifier:
         signal,
         failed_steps: list,
         action: str = "force-closed",
+        errors_by_step: Optional[dict] = None,
     ) -> str:
         """Sent INSTEAD of position_opened when SL/TP/trailing setup
         could not be verified on Bybit (client 2026-05-01 audit point #18:
@@ -908,8 +909,20 @@ class TelegramNotifier:
         as INCOMPLETE, send an error, do not send a normal Telegram
         notification."). The bot must NOT emit position_opened in this
         path — Tomas's "no false success" rule.
+
+        Tomas 2026-05-19 (afternoon — "one path, one solution"): this
+        is now the SINGLE message emitted on a trade-open protection
+        failure. The per-step API error is rendered as one line per
+        failed step under "Felorsak" so the operator gets the granular
+        reason without a second alert.
         """
         steps_str = ", ".join(failed_steps) if failed_steps else "okänd"
+        errors_by_step = errors_by_step or {}
+        error_lines = ""
+        for step in failed_steps:
+            err = errors_by_step.get(step)
+            if err:
+                error_lines += f"\n   Felorsak ({step}): {err}"
         text = (
             f"<b>❌ Position oförsvarad (protection failed)</b>\n"
             f"\n"
@@ -918,7 +931,8 @@ class TelegramNotifier:
             f"   Symbol: {_sym(signal.symbol)}\n"
             f"   Riktning: {signal.direction}\n"
             f"\n"
-            f"   Misslyckade skydd: {steps_str}\n"
+            f"   Misslyckade skydd: {steps_str}"
+            f"{error_lines}\n"
             f"   Åtgärd: positionen {action} (Market reduce-only).\n"
             f"\n"
             f"   Ingen 'Position öppnad' skickas — boten rapporterar "

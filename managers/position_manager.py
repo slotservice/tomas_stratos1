@@ -1664,7 +1664,13 @@ class PositionManager:
         # list is non-empty, the trade is marked PROTECTION_FAILED, the
         # position is force-closed via Market reduce-only, and the
         # normal "POSITION ÖPPNAD" notification is SUPPRESSED.
+        # Tomas 2026-05-19 (afternoon): parallel dict keyed by the
+        # same step name carries the per-step error reason into the
+        # one protection_failed message — replaces the now-removed
+        # standalone error_sl_not_executed / error_tp_not_executed /
+        # api_error(trailing_arm) alerts that fired alongside.
         protection_failures: list[str] = []
+        protection_errors: dict[str, str] = {}
 
         # ---------- Place the SL via set_trading_stop ----------
         # SL must always use the position-wide trading-stop (not a
@@ -1697,19 +1703,13 @@ class PositionManager:
                     "trade.sl_error", trade_id=trade.id, symbol=symbol,
                 )
                 protection_failures.append("SL")
-                # Tomas 2026-05-19: surface the SL-set failure to the
-                # operator channel via the dedicated error template.
-                # protection_failed (below) still fires the "Position
-                # oförsvarad" summary — this is the granular per-step
-                # signal Tomas wants ("In all message it must say
-                # something short what is wrong").
-                try:
-                    await self._notifier.error_sl_not_executed(
-                        signal=signal,
-                        error_detail=f"set_trading_stop: {exc}"[:200],
-                    )
-                except Exception:
-                    log.exception("notify.error_sl_not_executed_failed")
+                # Tomas 2026-05-19 (afternoon): the per-step error is
+                # carried into the ONE protection_failed message
+                # below, not a separate notification. Single-message
+                # rule — "alternative paths, multiple solutions"
+                # produced 2-3 alerts per failure which Tomas
+                # explicitly rejected.
+                protection_errors["SL"] = f"set_trading_stop: {exc}"[:200]
 
             # Tomas 2026-05-12 spec: "every value displayed in operator
             # templates must be Bybit-verified, not bot-trusted". Read
@@ -1854,16 +1854,15 @@ class PositionManager:
                     )
                     if "TP" not in protection_failures:
                         protection_failures.append("TP")
-                    # Tomas 2026-05-19: granular per-step error.
-                    try:
-                        await self._notifier.error_tp_not_executed(
-                            signal=signal,
-                            error_detail=(
-                                f"TP{i+1} @ {tp_price}: {exc}"
-                            )[:200],
-                        )
-                    except Exception:
-                        log.exception("notify.error_tp_not_executed_failed")
+                    # Tomas 2026-05-19 (afternoon): per-step error
+                    # carried into protection_failed; no separate
+                    # alert. First-failure wins for the reason
+                    # string so a multi-TP signal where the same
+                    # cause breaks every TP only shows one line.
+                    if "TP" not in protection_errors:
+                        protection_errors["TP"] = (
+                            f"TP{i+1} @ {tp_price}: {exc}"
+                        )[:200]
 
             trade.tp_order_ids = tp_order_ids
             # 2026-05-02 fix: persist tp_order_ids to DB so Phase 5b
@@ -2003,20 +2002,10 @@ class PositionManager:
                 trade_id=trade.id, symbol=symbol,
             )
             protection_failures.append("trailing")
-            # Tomas 2026-05-19: granular trailing-arm failure error.
-            # Routed through the API-error template since trailing
-            # arm == set_trading_stop and the failure surface is the
-            # Bybit API.
-            try:
-                await self._notifier.api_error(
-                    symbol=symbol,
-                    direction=direction,
-                    channel_name=getattr(signal, "channel_name", ""),
-                    kind="trailing_arm",
-                    reason=str(exc)[:200],
-                )
-            except Exception:
-                log.exception("notify.trailing_arm_api_error_failed")
+            # Tomas 2026-05-19 (afternoon): single-message rule. The
+            # trailing-arm failure detail is carried in the one
+            # protection_failed alert, not a separate api_error.
+            protection_errors["trailing"] = f"set_trading_stop: {exc}"[:200]
 
         # ----------------------------------------------------------
         # 14c. PROTECTION GATE (Phase 1, client 2026-05-01 audit #18).
@@ -2060,22 +2049,14 @@ class PositionManager:
                         "trade.protection_failed.force_close_failed",
                         trade_id=trade.id, symbol=symbol,
                     )
-                    close_action = "stängning MISSLYCKADES — manuell åtgärd"
-                    # Tomas 2026-05-19: when the force-close itself
-                    # fails on Bybit, the position is still open AND
-                    # unprotected. The protection_failed summary
-                    # below covers the high-level story; this
-                    # surfaces the API-level reason on its own line
-                    # via the dedicated EJ STÄNGD template.
-                    try:
-                        await self._notifier.error_position_not_closed(
-                            signal=signal,
-                            error_detail=f"force-close: {exc}"[:200],
-                        )
-                    except Exception:
-                        log.exception(
-                            "notify.error_position_not_closed_failed",
-                        )
+                    close_action = (
+                        f"stängning MISSLYCKADES — manuell åtgärd ({exc})"
+                    )[:300]
+                    # Tomas 2026-05-19 (afternoon): single-message
+                    # rule. The API-level force-close error is now
+                    # appended to close_action so the one
+                    # protection_failed message carries the why —
+                    # no separate error_position_not_closed alert.
             trade.transition(TradeState.PROTECTION_FAILED)
             await self._persist_trade_state(
                 trade,
@@ -2103,6 +2084,7 @@ class PositionManager:
                         signal=signal,
                         failed_steps=protection_failures,
                         action=close_action,
+                        errors_by_step=protection_errors,
                     )
                 except Exception:
                     log.exception(
@@ -2191,25 +2173,15 @@ class PositionManager:
         # backup path.
         try:
             await self._hedge_mgr.pre_arm_on_bybit(trade)
-        except Exception as exc:
+        except Exception:
             log.exception(
                 "trade.hedge_pre_arm_failed",
                 trade_id=trade.id, symbol=symbol,
             )
-            # Tomas 2026-05-19: hedge pre-arm failure is non-fatal
-            # (bot-side check_and_activate is the backup) but still
-            # needs to surface — the operator wants to know hedge
-            # autonomy is degraded for this trade.
-            try:
-                await self._notifier.api_error(
-                    symbol=symbol,
-                    direction=direction,
-                    channel_name=getattr(signal, "channel_name", ""),
-                    kind="hedge_pre_arm",
-                    reason=str(exc)[:200],
-                )
-            except Exception:
-                log.exception("notify.hedge_pre_arm_api_error_failed")
+            # Tomas 2026-05-19 (afternoon): hedge pre-arm is
+            # non-fatal — the bot-side check_and_activate is the
+            # backup, and the operator doesn't need a Telegram alert
+            # for every pre-arm hiccup. Stays in the file log only.
 
         # Phase 2 (client 2026-05-01) — original-trade emergency close
         # is a Bybit conditional, not a bot-poll decision. Place ONE
@@ -4079,10 +4051,51 @@ class PositionManager:
                 position_idx=hedge_position_idx,
                 reduce_only=True,
             )
+            # Tomas 2026-05-19 (afternoon): "When the hedge times
+            # out, the original trade should also be closed, because
+            # the hedge is part of the same trade cycle. If the
+            # hedge ends without meaningful movement, the setup is
+            # no longer valid." Close the parent leg via Market
+            # reduce-only on its own position_idx. The normal
+            # on_order_update -> close_trade flow handles bookkeeping
+            # for both legs once Bybit acks the fills.
+            main_position_idx = 1 if parent_dir == "LONG" else 2
+            main_close_side = "Sell" if parent_dir == "LONG" else "Buy"
+            main_closed_ok = False
+            main_close_err = ""
+            try:
+                if trade.quantity and trade.quantity > 0:
+                    await self._bybit.place_market_order(
+                        symbol=symbol,
+                        side=main_close_side,
+                        qty=trade.quantity,
+                        position_idx=main_position_idx,
+                        reduce_only=True,
+                    )
+                    main_closed_ok = True
+            except Exception as exc:
+                main_close_err = str(exc)[:120]
+                ret_code = getattr(exc, "ret_code", None)
+                if ret_code == 110017:
+                    # Position already zero — close already happened
+                    # via another path (SL hit, trailing, manual).
+                    # Not an error, just nothing left to close.
+                    main_closed_ok = True
+                    main_close_err = ""
+                else:
+                    log.exception(
+                        "hedge.timeout_close_main_failed",
+                        trade_id=trade.id, symbol=symbol,
+                    )
             try:
                 from telegram.notifier import _chan, _ts, _sym
+                main_line = (
+                    "📍 Huvudposition: stängd (Market reduce-only)"
+                    if main_closed_ok
+                    else f"📍 Huvudposition: stängning MISSLYCKADES ({main_close_err}) — manuell åtgärd"
+                )
                 await self._notifier._send_notify(
-                    f"⏰ Hedge timeout — stängd\n"
+                    f"⏰ Hedge timeout — hela cykeln stängd\n"
                     f"🕒 Tid: {_ts()}\n"
                     f"📢 Från kanal: {_chan(trade.signal.channel_name)}\n"
                     f"📊 Symbol: {_sym(symbol)}\n"
@@ -4094,8 +4107,11 @@ class PositionManager:
                     f"📍 Tid sedan fill: {elapsed:.1f} min "
                     f"(>{timeout_minutes} min)\n"
                     f"\n"
-                    f"📍 Skäl: ingen meningsfull rörelse — "
-                    f"capital control."
+                    f"📍 Hedge: stängd (Market reduce-only)\n"
+                    f"{main_line}\n"
+                    f"\n"
+                    f"📍 Skäl: ingen meningsfull rörelse — setup är "
+                    f"inte längre giltig, hela cykeln avslutas."
                 )
             except Exception:
                 log.exception(
@@ -4734,6 +4750,58 @@ class PositionManager:
         except Exception:
             log.exception("trade.persist_error", trade_id=trade.id)
 
+    async def _reconcile_zero_position_trade(
+        self, trade_id: str, symbol: str,
+    ) -> None:
+        """Mark a phantom DB trade CLOSED after Bybit reports zero
+        position for it.
+
+        Tomas 2026-05-19 (afternoon): the EDEN/MBOX storm came from
+        DB rows that still showed OPEN while Bybit had already
+        closed the position via SL/trailing/manual. Each new signal
+        from each channel hit the update path, called
+        set_trading_stop, got "can not set tp/sl/ts for zero
+        position", and notified the operator. The single recovery
+        path: when we see that specific error, drop the trade from
+        the active map, mark the DB row CLOSED with reason
+        auto_reconciled_zero_position, and exit silently. The next
+        signal for this symbol falls through to the new-trade path.
+        No operator notification — this is reconciliation noise the
+        operator doesn't need to see.
+        """
+        trade = self._active_trades.get(trade_id)
+        # Remove from active map first so subsequent signals don't
+        # re-enter the same broken update path while we wait for the
+        # DB write.
+        if trade is not None:
+            try:
+                trade.transition(TradeState.CLOSED)
+            except Exception:
+                trade.state = TradeState.CLOSED
+            trade.close_reason = "auto_reconciled_zero_position"
+            trade.closed_at = datetime.now(timezone.utc)
+        self._active_trades.pop(trade_id, None)
+        try:
+            await self._db.update_trade(
+                int(trade_id),
+                state=TradeState.CLOSED.value,
+                close_reason="auto_reconciled_zero_position",
+                closed_at=datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception:
+            log.exception(
+                "trade.zero_position_db_update_failed",
+                trade_id=trade_id, symbol=symbol,
+            )
+        try:
+            await self._db.log_event(
+                trade_id=int(trade_id),
+                event_type="auto_reconciled_zero_position",
+                details={"symbol": symbol},
+            )
+        except Exception:
+            pass
+
     def _is_stale(self, signal: Any, max_age_seconds: int) -> bool:
         """Return True if the signal is older than *max_age_seconds*."""
         # Check parsed_at (unix timestamp from signal_parser).
@@ -5097,6 +5165,38 @@ class PositionManager:
                 except Exception:
                     log.exception("notify.update_skipped_not_modified_failed")
                 return
+            # Tomas 2026-05-19 (afternoon): Bybit retCode 10001 with
+            # message "can not set tp/sl/ts for zero position" means
+            # the DB row is stale — the position was already closed
+            # on Bybit (SL hit, trailing fire, manual close, etc.)
+            # but our DB still shows it open. Storming this with new
+            # signals from 5 different channels each trying to
+            # "update" produced 5+ EJ MATCH alerts per phantom trade
+            # (EDEN/MBOX screenshots). Single recovery path: mark
+            # the DB trade CLOSED with reason auto_reconciled and
+            # exit silently. Next signal for that symbol falls into
+            # the new-trade path.
+            zero_position_error = (
+                ret_code == 10001
+                and "zero position" in str(exc).lower()
+            )
+            if zero_position_error:
+                log.info(
+                    "trade.auto_reconciled_zero_position",
+                    trade_id=trade_id, symbol=symbol,
+                    bybit_msg=str(exc)[:120],
+                )
+                try:
+                    await self._reconcile_zero_position_trade(
+                        trade_id=trade_id, symbol=symbol,
+                    )
+                except Exception:
+                    log.exception(
+                        "trade.zero_position_reconcile_failed",
+                        trade_id=trade_id, symbol=symbol,
+                    )
+                return
+
             log.exception(
                 "trade.tp_sl_update_failed",
                 trade_id=trade_id,

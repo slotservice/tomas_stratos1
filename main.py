@@ -601,6 +601,45 @@ async def main() -> None:
             # and notifying them would mirror every chat message into
             # the operator channel.
             if result.signal is None:
+                # Tomas 2026-05-19 (afternoon): tight 15s cross-channel
+                # dedupe on parse-failure rejections. The same upstream
+                # signal echoed across 3-5 channels was firing 3-5
+                # identical "Blokerad, Entre saknas" / "TP är fel
+                # angiva" alerts within ~1 min (HYPE/EDEN/SAND in the
+                # 2026-05-19 batch). 15s suppresses near-simultaneous
+                # echoes without resurrecting the 5-min throttle Tomas
+                # explicitly removed on 2026-05-13 (commit 5e53585) —
+                # a signal that genuinely reappears later still fires.
+                _REJECT_DEDUP_WINDOW_S = 15.0
+                _reject_dedup = (
+                    _on_signal_message.__dict__.setdefault(
+                        "_reject_dedup", {}
+                    )
+                )
+                _dedup_key = (
+                    f"{result.reason}:"
+                    f"{(result.symbol or '?').upper()}:"
+                    f"{(result.direction or '?').upper()}"
+                )
+                _now = time.monotonic()
+                _last_seen = _reject_dedup.get(_dedup_key)
+                if _last_seen and (_now - _last_seen) < _REJECT_DEDUP_WINDOW_S:
+                    log.info(
+                        "signal_rejection.deduped",
+                        reason=result.reason,
+                        symbol=result.symbol,
+                        direction=result.direction,
+                        channel_name=channel_name,
+                        window_s=_REJECT_DEDUP_WINDOW_S,
+                    )
+                    return
+                _reject_dedup[_dedup_key] = _now
+                # Best-effort GC: prune entries older than 2x window.
+                if len(_reject_dedup) > 200:
+                    _cutoff = _now - 2 * _REJECT_DEDUP_WINDOW_S
+                    for _k in [k for k, t in _reject_dedup.items() if t < _cutoff]:
+                        _reject_dedup.pop(_k, None)
+
                 # skipped_by_override (symbol_overrides.toml said
                 # skip = true) is intentionally NOT notified. Tomas
                 # 2026-05-15: a per-skip message just duplicates the

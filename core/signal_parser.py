@@ -1236,6 +1236,27 @@ def validate_signal(signal: ParsedSignal) -> tuple[bool, str]:
     if not signal.tps:
         return False, "No take-profit targets found"
 
+    # Tomas 2026-05-19 (afternoon): drop any TP that sits implausibly
+    # far from entry (>50%) before the direction-consistency check.
+    # CoinAura CHIP/LIT/DASH signals on 2026-05-19 had a stray "7" /
+    # "7.0" captured as TP7 on a 0.05/0.98/43 entry → 13766%/610%/-83%
+    # distance. Without this filter, those junk values either pollute
+    # the placement loop or trigger a misleading "no TP above entry"
+    # rejection that names the junk value in the rejection text.
+    # Mirrors the existing 50% sanity guard on SL below; same reason.
+    if signal.entry > 0 and not signal.entry_is_market:
+        clean_tps = []
+        for tp in signal.tps:
+            if tp is None or tp <= 0:
+                continue
+            tp_distance_pct = abs(signal.entry - tp) / signal.entry * 100
+            if tp_distance_pct > 50.0:
+                continue
+            clean_tps.append(tp)
+        signal.tps = clean_tps
+        if not signal.tps:
+            return False, "All TPs filtered as implausibly far (>50% from entry)"
+
     # Direction consistency checks — need a concrete entry price, so
     # they are skipped for entry_is_market signals.
     if not signal.entry_is_market:
