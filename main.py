@@ -601,16 +601,17 @@ async def main() -> None:
             # and notifying them would mirror every chat message into
             # the operator channel.
             if result.signal is None:
-                # Tomas 2026-05-19 (afternoon): tight 15s cross-channel
-                # dedupe on parse-failure rejections. The same upstream
-                # signal echoed across 3-5 channels was firing 3-5
-                # identical "Blokerad, Entre saknas" / "TP är fel
-                # angiva" alerts within ~1 min (HYPE/EDEN/SAND in the
-                # 2026-05-19 batch). 15s suppresses near-simultaneous
-                # echoes without resurrecting the 5-min throttle Tomas
-                # explicitly removed on 2026-05-13 (commit 5e53585) —
-                # a signal that genuinely reappears later still fires.
-                _REJECT_DEDUP_WINDOW_S = 15.0
+                # Tomas 2026-05-19 (afternoon, second round): the 15s
+                # window I picked first time missed RONIN echoes 3
+                # min apart across CoinAura + AmericanCrypto. Bumped
+                # to 300s (5 min). Still keyed on
+                # (reason, symbol, direction) — a different reason
+                # or a different symbol fires immediately, so this
+                # is NOT the broad 5-min throttle Tomas removed on
+                # 2026-05-13 (commit 5e53585 silenced ALL rejections
+                # in a window regardless of why). Only same-cause
+                # echoes of the same symbol-direction get suppressed.
+                _REJECT_DEDUP_WINDOW_S = 300.0
                 _reject_dedup = (
                     _on_signal_message.__dict__.setdefault(
                         "_reject_dedup", {}
@@ -688,6 +689,23 @@ async def main() -> None:
                     # was correct but said "TP är fel angiva" for an
                     # SL-side failure).
                     detail = (result.detail or "").upper()
+                    # Tomas 2026-05-19 (afternoon, second round):
+                    # the AXL "Targets: 50 RT" case captured "50"
+                    # as a TP on a 0.06 entry → all-TPs-filtered.
+                    # When EVERY TP was tossed as junk it's almost
+                    # always chatter / a non-standard post the
+                    # parser shouldn't have entered the TP-extract
+                    # path on. Silence the operator alert (still
+                    # logs to file for audit).
+                    if "ALL TPS FILTERED" in detail:
+                        log.info(
+                            "signal_rejection.all_tps_junk_silenced",
+                            symbol=result.symbol,
+                            direction=result.direction,
+                            channel_name=channel_name,
+                            detail=result.detail,
+                        )
+                        return
                     sl_failure = (
                         result.reason == "invalid"
                         and "SL" in detail

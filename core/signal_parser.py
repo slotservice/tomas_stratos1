@@ -1515,6 +1515,25 @@ def parse_signal_detailed(
     tps = prices["tps"]
     sl = prices["sl"]
 
+    # Tomas 2026-05-19 (afternoon, "pleace move enry donw"): when
+    # the source channel gives an entry RANGE like "0.05950-0.06050",
+    # pick the favorable end for the direction instead of the
+    # midpoint that extract_prices defaults to:
+    #   LONG  -> use the LOWER bound (better fill, more room to TP)
+    #   SHORT -> use the UPPER bound (same reasoning, inverted)
+    # The original midpoint hid this from the operator (entry showed
+    # ~0.06 when the channel actually offered 0.0595 as the floor).
+    # entry_low / entry_high stay on the ParsedSignal for audit.
+    entry_low = prices.get("entry_low")
+    entry_high = prices.get("entry_high")
+    if (
+        entry_low and entry_low > 0
+        and entry_high and entry_high > 0
+        and entry_low != entry_high
+        and direction in ("LONG", "SHORT")
+    ):
+        entry = entry_low if direction == "LONG" else entry_high
+
     # H short-summary guard (Tomas 2026-05-16). The bottom pattern in
     # _ENTRY_PATTERNS recognises the format
     #   "📊LONG #AIGENSYN 0.04228"
