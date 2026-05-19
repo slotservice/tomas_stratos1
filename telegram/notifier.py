@@ -39,27 +39,17 @@ def _ts() -> str:
 
 
 def _sym(symbol: str) -> str:
-    """Render symbol as one or two hashtags for Telegram history filtering.
+    """Render symbol as a single full-pair hashtag.
 
-    Tomas 2026-05-19: emit BOTH the bare base ticker AND the full
-    pair when a quote suffix is present, e.g. IMXUSDT -> "#IMX
-    #IMXUSDT". The bare hashtag lets the operator scroll back across
-    every signal for that token regardless of quote currency, while
-    the full pair stays unambiguous about which Bybit market the bot
-    actually traded. Strips USDT/USDC suffixes only — leaves
-    1000-prefixed names (SHIB1000USDT -> "#SHIB1000 #SHIB1000USDT")
-    intact since Bybit treats those as distinct instruments.
+    Tomas 2026-05-20 (evening): reverted the dual-hashtag form
+    ("#IMX #IMXUSDT") added on 2026-05-19. The operator wants the
+    full pair only — "#IMXUSDT" — for visual cleanliness. Symbol
+    field across every template is now a single hashtag.
     """
     s = symbol.strip().lstrip("#")
     if not s:
         return "#Unknown"
-    full = f"#{s}"
-    upper = s.upper()
-    for quote in ("USDT", "USDC"):
-        if upper.endswith(quote) and len(upper) > len(quote):
-            base = s[: -len(quote)]
-            return f"#{base} {full}"
-    return full
+    return f"#{s}"
 
 
 def _chan(name) -> str:
@@ -222,16 +212,16 @@ def _lev_class(signal_type: str) -> str:
         fixed   -> SL was missing (auto-SL + x10 leverage)
         swing   -> wide SL (>4% distance)
         dynamic -> normal SL
-    The leverage display label must match signal_type so the two lines
-    of the notification tell a consistent story.
 
-    Tomas 2026-05-20: lowercase always. Some upstream paths
-    (re-entry, trade-update copy) were producing "Dynamic" /
-    "Swing" with leading capital so the "Typ:" line on those
-    messages came out capitalized while the header stayed
-    lowercase — visual inconsistency. Canonicalise here.
+    Tomas 2026-05-20 (evening): reversed the morning's lowercase
+    change. Now Capitalize — "Swing" / "Dynamic" / "Fixed". Applies
+    to every template that uses this helper for the Typ line and
+    the header "(...)" parenthesis. Whatever case the source
+    signal_type arrives in (raw signal-parser output is lowercase;
+    some re-entry / trade-update copies may have been ucfirst'd),
+    canonicalise to first-letter-capital here.
     """
-    return (signal_type or "dynamic").lower()
+    return (signal_type or "dynamic").capitalize()
 
 
 def _pnl_sign(value: float) -> str:

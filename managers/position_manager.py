@@ -2582,8 +2582,9 @@ class PositionManager:
             # hedge SL + trailing are set in one set_trading_stop
             # call right before this notification fires, so by the
             # time we render the message Bybit has already
-            # acknowledged both. Also lowercase the type label.
-            type_label = lev_type.lower() if lev_type else "dynamic"
+            # acknowledged both. Tomas 2026-05-20 (evening) reversal:
+            # Capitalize the type label to match the rest of the bot.
+            type_label = (lev_type or "dynamic").capitalize()
             await self._safe_notify(
                 f"🛡️ Hedge aktiverad (Bybit-conditional)\n"
                 f"🕒 Tid: {_ts()}\n"
@@ -3150,6 +3151,19 @@ class PositionManager:
         """
         if trade.signal is None or trade.is_terminal:
             return False
+        # Tomas 2026-05-20 (evening): if a prior cascade tick already
+        # auto-reconciled this trade as zero-position, subsequent
+        # cascade levels (e.g. profit_lock_2 after profit_lock_1) must
+        # not re-attempt the SL move. Without this guard the BSB
+        # phantom trade saw 8 alternating profit_lock_1/2 attempts
+        # in 12 minutes, each one re-firing the Bybit zero-position
+        # error before reconcile could pop the trade.
+        if getattr(trade, "close_reason", None) == "auto_reconciled_zero_position":
+            log.debug(
+                "trade.sl_move_skipped_auto_reconciled",
+                trade_id=trade.id,
+            )
+            return False
         symbol = trade.signal.symbol
         direction = (trade.signal.direction or "").upper()
         position_idx = 1 if direction == "LONG" else 2
@@ -3228,17 +3242,22 @@ class PositionManager:
                 trade_id=trade.id, symbol=symbol,
                 new_sl=new_sl_price, reason=reason,
             )
-            # Tomas 2026-05-20: same zero-position recovery as the
-            # tp_sl_update path. When the cascade / profit-lock SL
-            # move hits "can not set tp/sl/ts for zero position",
-            # the position was already closed by Bybit (SL, trailing,
-            # manual) but our DB row hasn't caught up yet. Silently
-            # reconcile instead of firing an error alert — the
-            # next signal for this symbol will start a fresh trade.
-            ret_code = getattr(exc, "ret_code", None)
+            # Tomas 2026-05-20 (evening): the BSB 8-alert storm —
+            # zero-position recovery wasn't catching the error
+            # because depending on the call path the BybitAdapterError
+            # may arrive without ret_code populated (the retry-
+            # exhaustion wrapper at bybit_adapter.py:405 raises a
+            # generic BybitAdapterError without ret_code). Match by
+            # string instead so detection works regardless of how
+            # the error was wrapped. The "can not set tp/sl/ts for
+            # zero position" phrase is unique to this Bybit response.
+            err_str_lower = str(exc).lower()
             zero_position_error = (
-                ret_code == 10001
-                and "zero position" in str(exc).lower()
+                "zero position" in err_str_lower
+                or (
+                    getattr(exc, "ret_code", None) == 10001
+                    and "tp/sl/ts" in err_str_lower
+                )
             )
             if zero_position_error:
                 log.info(
@@ -5242,9 +5261,16 @@ class PositionManager:
             # the DB trade CLOSED with reason auto_reconciled and
             # exit silently. Next signal for that symbol falls into
             # the new-trade path.
+            # 2026-05-20 (evening): same robustness fix as the SL-
+            # move path — match by string so detection works even
+            # when the BybitAdapterError arrives without ret_code.
+            err_str_lower = str(exc).lower()
             zero_position_error = (
-                ret_code == 10001
-                and "zero position" in str(exc).lower()
+                "zero position" in err_str_lower
+                or (
+                    ret_code == 10001
+                    and "tp/sl/ts" in err_str_lower
+                )
             )
             if zero_position_error:
                 log.info(
